@@ -58,7 +58,7 @@ const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 
 interface WxmlNode { tagName?: string; sid?: string; children?: WxmlNode[] }
 
-interface AppHandle { app: ElectronApplication; win: PwPage }
+interface AppHandle { app: ElectronApplication; workbench: PwPage }
 
 /**
  * Launch a fresh, isolated native-host devtools instance with the fixture open,
@@ -81,8 +81,8 @@ async function bootApp(slot: string): Promise<AppHandle> {
     env: { ...process.env, NODE_ENV: 'test', DIMINA_NATIVE_HOST: '1', DIMINA_E2E_USER_DATA_DIR: userDataDir },
   })
 
-  const win = await findMainWindow(app)
-  await win.waitForLoadState('domcontentloaded')
+  const mainWin = await findMainWindow(app)
+  await mainWin.waitForLoadState('domcontentloaded')
 
   await app.evaluate(async ({ BrowserWindow }) => {
     const w = BrowserWindow.getAllWindows()[0]
@@ -99,31 +99,31 @@ async function bootApp(slot: string): Promise<AppHandle> {
   })
 
   await pollUntil(
-    () => ipcInvoke<number | null>(win, AutomationChannel.GetPort),
+    () => ipcInvoke<number | null>(mainWin, AutomationChannel.GetPort),
     (val) => typeof val === 'number' && val > 0,
     10000,
     100,
   )
 
-  await openProjectInUI(win, FIXTURE_DIR, { waitMs: 20000 })
+  const workbench = await openProjectInUI(app, FIXTURE_DIR, { waitMs: 20000 })
   await waitForSimulatorWebview(app)
 
   // The WXML snapshot is the readiness signal the panel itself uses; it injects
   // the inspector IIFE via executeJavaScript and does NOT touch CDP/Overlay, so
   // the guest's Overlay domain stays cold until the first Inspect.
   await pollUntil(
-    () => ipcInvoke<WxmlNode | null>(win, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
+    () => ipcInvoke<WxmlNode | null>(workbench, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
     (t) => !!t && typeof t.tagName === 'string',
     30000,
     400,
   )
 
-  return { app, win }
+  return { app, workbench }
 }
 
 async function shutdownApp(handle: AppHandle | undefined): Promise<void> {
   if (!handle) return
-  await closeProject(handle.win).catch(() => {})
+  await closeProject(handle.app).catch(() => {})
   await handle.app.close().catch(() => {})
 }
 
@@ -197,9 +197,9 @@ async function captureGuestStats(app: ElectronApplication, baselineB64: string |
 }
 
 /** Walk the WXML tree (once it's up) and return its sids in tree order. */
-async function getGuestSids(win: PwPage): Promise<string[]> {
+async function getGuestSids(workbench: PwPage): Promise<string[]> {
   const tree = await pollUntil(
-    () => ipcInvoke<WxmlNode | null>(win, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
+    () => ipcInvoke<WxmlNode | null>(workbench, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
     (t) => !!t && typeof t.tagName === 'string',
     30000,
     400,
@@ -219,14 +219,14 @@ async function hoverUntilPainted(
   sids: string[],
   baseline: { b64: string; bluish: number },
 ): Promise<{ sid: string; changed: number; bluishDelta: number } | null> {
-  const { app, win } = handle
+  const { app, workbench } = handle
   for (const sid of sids.slice(0, 30)) {
     const r = await ipcInvoke<{ rect?: { width?: number } } | null>(
-      win, SimulatorElementChannel.Inspect, sid,
+      workbench, SimulatorElementChannel.Inspect, sid,
     ).catch(() => null)
     if (!r || !r.rect) continue
     // Let the compositor paint the overlay before capturing.
-    await win.waitForTimeout(300)
+    await workbench.waitForTimeout(300)
     const after = await captureGuestStats(app, baseline.b64)
     if (!after) continue
     const bluishDelta = after.bluish - baseline.bluish
@@ -236,8 +236,8 @@ async function hoverUntilPainted(
     if (after.changed > 4000 && bluishDelta > 1500) {
       return { sid, changed: after.changed, bluishDelta }
     }
-    await ipcInvoke(win, SimulatorElementChannel.Clear).catch(() => {})
-    await win.waitForTimeout(150)
+    await ipcInvoke(workbench, SimulatorElementChannel.Clear).catch(() => {})
+    await workbench.waitForTimeout(150)
   }
   return null
 }
@@ -262,7 +262,7 @@ test.describe('native-host WXML highlight via CDP Overlay (not a div)', () => {
     // the tag and separates the component from its internals with a synthetic
     // #shadow-root. A bare `<page>` root means the container bundle lost the
     // name=path injection (e.g. built from a stale dimina checkout).
-    const tree = await ipcInvoke<WxmlNode | null>(handle.win, SimulatorWxmlChannel.GetSnapshot)
+    const tree = await ipcInvoke<WxmlNode | null>(handle.workbench, SimulatorWxmlChannel.GetSnapshot)
     expect(tree, 'WXML snapshot should exist').toBeTruthy()
     // The snapshot root may be a synthetic #fragment (multi-root wrapper the
     // panel renders transparently); the page node is its first child then.
@@ -278,7 +278,7 @@ test.describe('native-host WXML highlight via CDP Overlay (not a div)', () => {
     // Reading the WXML tree injects the IIFE; afterwards the guest must expose
     // __diminaRenderInspect, proving highlight resolves sids against the
     // render-host registry, not the dimina-fe iframe's __simulatorData.
-    await ipcInvoke(handle.win, SimulatorWxmlChannel.GetSnapshot).catch(() => null)
+    await ipcInvoke(handle.workbench, SimulatorWxmlChannel.GetSnapshot).catch(() => null)
     const hasApi = await pollUntil(
       () => evalInGuest<boolean>(handle.app, '!!(window.__diminaRenderInspect && typeof window.__diminaRenderInspect.elementFor === "function")'),
       (ok) => ok === true,
@@ -292,7 +292,7 @@ test.describe('native-host WXML highlight via CDP Overlay (not a div)', () => {
     // Single live guest so the capture targets the SAME page the Inspect hovers.
     expect(await guestCount(handle.app), 'fixture should have exactly one live render guest').toBe(1)
 
-    const sids = await getGuestSids(handle.win)
+    const sids = await getGuestSids(handle.workbench)
     expect(sids.length, 'WXML tree should expose sids to hover').toBeGreaterThan(0)
 
     // Pre-hover baseline of the guest pixels + the div-absent invariant.
@@ -315,7 +315,7 @@ test.describe('native-host WXML highlight via CDP Overlay (not a div)', () => {
       'render guest must NOT contain #__simulator-highlight (the old injected-div overlay path)',
     ).toBe(false)
 
-    await ipcInvoke(handle.win, SimulatorElementChannel.Clear).catch(() => {})
+    await ipcInvoke(handle.workbench, SimulatorElementChannel.Clear).catch(() => {})
   })
 })
 
@@ -344,7 +344,7 @@ test.describe('native-host WXML highlight without opening the Elements panel', (
     // paint happens, not which path enabled it.
     expect(await guestCount(handle.app), 'fixture should have exactly one live render guest').toBe(1)
 
-    const sids = await getGuestSids(handle.win)
+    const sids = await getGuestSids(handle.workbench)
     expect(sids.length, 'WXML tree should expose sids').toBeGreaterThan(0)
 
     const before = await captureGuestStats(handle.app, null)
@@ -361,6 +361,6 @@ test.describe('native-host WXML highlight without opening the Elements panel', (
     )
     expect(divInGuest, 'hover must not fall back to a guest div overlay').toBe(false)
 
-    await ipcInvoke(handle.win, SimulatorElementChannel.Clear).catch(() => {})
+    await ipcInvoke(handle.workbench, SimulatorElementChannel.Clear).catch(() => {})
   })
 })

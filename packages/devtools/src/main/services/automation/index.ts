@@ -10,14 +10,16 @@
  * (simulator webContents, IPC handlers, etc.) without modifying dimina upstream.
  */
 
-import type { WebContents } from 'electron'
 import type { AddressInfo } from 'net'
 import { WebSocketServer, type WebSocket } from 'ws'
-import { AutomationChannel, SimulatorChannel } from '../../../shared/ipc-channels.js'
+import { AutomationChannel } from '../../../shared/ipc-channels.js'
 import { IpcRegistry } from '../../utils/ipc-registry.js'
+import { toIpcContextSource, type IpcInput } from '../../utils/ipc-context-source.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../workbench-context.js'
 import type { Handler, RpcEvent, RpcRequest, RpcResponse } from './shared.js'
+import { createConnectionTarget } from './connection-target.js'
+import { createConsoleBridge, type ConsoleBridge } from './console-bridge.js'
 import { getSimulator } from './exec.js'
 import { toolHandlers } from './handlers/tool.js'
 import { appHandlers } from './handlers/app.js'
@@ -46,8 +48,19 @@ export function getAutomationPort(): number | null {
   return currentPort
 }
 
+/**
+ * `getCtx` rather than a context: the server binds its port at boot, before any
+ * project window exists, so there is nothing to capture yet. Each connection
+ * then pins the first project window it reaches and keeps driving that one —
+ * `getCtx` is how it finds that window, not a per-message lookup.
+ *
+ * `senders` covers every live window instead, because the port channel is asked
+ * by renderers `getCtx` never names: the project list and background project
+ * windows all start automation clients of their own.
+ */
 export async function startAutomationServer(
-  ctx: WorkbenchContext,
+  getCtx: () => WorkbenchContext,
+  senders: IpcInput<WorkbenchContext>,
   port: number = 0,
 ): Promise<AutomationServer> {
   const wss = new WebSocketServer({ port })
@@ -63,127 +76,36 @@ export async function startAutomationServer(
   const resolvedPort = typeof addr === 'object' && addr ? (addr as AddressInfo).port : port
   currentPort = resolvedPort
 
-  // Gate AutomationChannel.GetPort with the workbench sender policy (only
-  // the main renderer + workbench settings/popover overlays are allowed to
-  // read the port — see createWorkbenchSenderPolicy; the simulator webview
-  // is intentionally NOT trusted for IPC invokes).
-  const portIpc = new IpcRegistry(ctx.senderPolicy)
+  // Gated per OWNING window: each window trusts its own renderer plus its
+  // settings/popover overlays (see createWorkbenchSenderPolicy), and the
+  // simulator webview is trusted by none of them. Gating on the active
+  // window's policy instead would reject every window that does not currently
+  // have focus, starting with the project list.
+  const portIpc = new IpcRegistry(toIpcContextSource(senders))
   portIpc.handle(AutomationChannel.GetPort, () => {
     return currentPort
   })
 
-  function broadcast(event: RpcEvent): void {
-    const msg = JSON.stringify(event)
-    for (const ws of clients) {
-      if (ws.readyState === ws.OPEN) ws.send(msg)
-    }
-  }
-
-  // Native-host console forwarding: under native-host the page/service console
-  // doesn't flow through the simulator guest's `ipc-message-host` channel (there
-  // is no Worker/MiniApp in the guest). Instead the render-host / service-host
-  // preloads post each console entry to main, bridge-router routes it to the
-  // always-on ConsoleForwarder, and we SUBSCRIBE to rebroadcast every entry
-  // (both layers) as an `App.logAdded` event — same shape the default-arch path
-  // emits below in `setupConsoleForwarding`. We no longer set `ctx.guestConsole`
-  // ourselves (the forwarder owns it); subscribing means render + service both
-  // reach automation while the forwarder also mirrors render into the service
-  // host's console for the embedded DevTools. Unsubscribed on close().
-  const consoleSub = ctx.consoleForwarder?.subscribe((entry) => {
-    const e = (entry ?? {}) as { level?: string; args?: unknown[] }
-    broadcast({
-      method: 'App.logAdded',
-      params: { type: e.level || 'log', args: e.args || [] },
-    })
-  })
-
-  // Forward simulator console logs as App.logAdded events.
-  // Track the polling interval + stop timer + currently-attached sim and
-  // the named handler so we can fully detach on close() or sim destruction.
-  // Without this the listener accumulates across create/dispose cycles and
-  // across simulator rebuilds.
-  let consoleForwardingSetup = false
-  let pollInterval: ReturnType<typeof setInterval> | null = null
-  let pollStopTimer: ReturnType<typeof setTimeout> | null = null
-  let attachedSim: WebContents | null = null
-  let ipcMessageHostHandler: ((event: unknown, channel: string, data: unknown) => void) | null = null
-  // Handle for the destroyed-teardown owned by the sim's connection (replaces a
-  // bespoke `sim.once('destroyed')` + manual removeListener). Disposing it on
-  // graceful close()/detach releases the disposer from the connection segment so
-  // it can't accumulate across automation create/dispose cycles on the same sim.
-  let simDestroyedDisposer: { dispose: () => void | Promise<void> } | null = null
-
-  function detachConsoleForwarding(): void {
-    if (attachedSim) {
-      if (ipcMessageHostHandler) {
-        try {
-          if (!attachedSim.isDestroyed()) {
-            ;(attachedSim as NodeJS.EventEmitter).removeListener('ipc-message-host', ipcMessageHostHandler)
-          }
-        } catch { /* noop */ }
-      }
-    }
-    // Release the connection-owned destroyed disposer (idempotent; safe even if
-    // the sim is already destroyed — the disposer body only nulls local refs).
-    try { simDestroyedDisposer?.dispose() } catch { /* noop */ }
-    attachedSim = null
-    ipcMessageHostHandler = null
-    simDestroyedDisposer = null
-  }
-
-  function setupConsoleForwarding(): void {
-    if (consoleForwardingSetup) return
-    consoleForwardingSetup = true
-
-    pollInterval = setInterval(() => {
-      const sim = getSimulator(ctx)
-      if (!sim) return
-      if (pollInterval) {
-        clearInterval(pollInterval)
-        pollInterval = null
-      }
-
-      const onIpcMessageHost = (_event: unknown, channel: string, data: unknown): void => {
-        if (channel === SimulatorChannel.Console) {
-          const logData = data as { level?: string; args?: unknown[] }
-          broadcast({
-            method: 'App.logAdded',
-            params: { type: logData.level || 'log', args: logData.args || [] },
-          })
-        }
-      }
-      const onSimDestroyed = (): void => {
-        // Sim webContents is dead — drop refs (removeListener on a destroyed
-        // sender would throw) and allow re-attach to a new simulator.
-        attachedSim = null
-        ipcMessageHostHandler = null
-        simDestroyedDisposer = null
-        consoleForwardingSetup = false
-      }
-
-      attachedSim = sim
-      ipcMessageHostHandler = onIpcMessageHost
-      ;(sim as NodeJS.EventEmitter).on('ipc-message-host', onIpcMessageHost)
-      // Route the destroyed-teardown through the per-webContents connection
-      // registry: the connection arms a single `wc.once('destroyed')` and runs
-      // owned disposers on hard-destroy (or soft reset for pool reuse), so we no
-      // longer manage a bespoke 'destroyed' listener here.
-      simDestroyedDisposer = ctx.connections.acquire(sim).own(onSimDestroyed)
-    }, 1000)
-
-    // Stop polling after 30s
-    pollStopTimer = setTimeout(() => {
-      if (pollInterval) {
-        clearInterval(pollInterval)
-        pollInterval = null
-      }
-      pollStopTimer = null
-    }, 30000)
-  }
+  // Every connection owns its console bridge, because every connection has its
+  // own target window: a single server-wide broadcast would hand one client the
+  // logs of a project another client is driving.
+  const bridges = new Set<ConsoleBridge>()
 
   wss.on('connection', (ws) => {
     clients.add(ws)
-    setupConsoleForwarding()
+
+    const send = (msg: RpcEvent | RpcResponse): void => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg))
+    }
+    // Pinned, not resolved per message: the window a script drives is settled by
+    // the first project window this connection reaches, so a user clicking
+    // another project's window can't redirect it (see `createConnectionTarget`).
+    const target = createConnectionTarget(getCtx)
+    const consoleBridge = createConsoleBridge(() => target.peek(), getSimulator, send)
+    bridges.add(consoleBridge)
+    // Before any message: a client that only listens for `App.logAdded` never
+    // sends one, and still has to receive its target window's console.
+    consoleBridge.sync()
 
     ws.on('message', async (raw) => {
       let req: RpcRequest
@@ -199,6 +121,9 @@ export async function startAutomationServer(
         response = { id, error: { message: `Unknown method: ${method}` } }
       } else {
         try {
+          // Same target for the command and for the logs it produces.
+          const ctx = target.resolve()
+          consoleBridge.sync()
           const result = await handler(ctx, params)
           response = { id, result }
         } catch (err) {
@@ -206,28 +131,24 @@ export async function startAutomationServer(
         }
       }
 
-      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(response))
+      send(response)
     })
 
-    ws.on('close', () => clients.delete(ws))
+    ws.on('close', () => {
+      clients.delete(ws)
+      bridges.delete(consoleBridge)
+      consoleBridge.dispose()
+    })
   })
 
   return {
     close: () => {
-      if (pollInterval) {
-        clearInterval(pollInterval)
-        pollInterval = null
-      }
-      if (pollStopTimer) {
-        clearTimeout(pollStopTimer)
-        pollStopTimer = null
-      }
-      detachConsoleForwarding()
-      // Unsubscribe from the always-on ConsoleForwarder so a late guest console
-      // entry can't broadcast against a torn-down server. The forwarder keeps
-      // owning `ctx.guestConsole` (render→service mirroring continues without an
-      // automation client). No-op if the forwarder was absent.
-      consoleSub?.dispose()
+      // Detaches every connection's simulator listener and unsubscribes it from
+      // its window's ConsoleForwarder, so a late guest console entry can't fire
+      // against a torn-down server. The forwarder keeps owning `ctx.guestConsole`
+      // (render→service mirroring continues without an automation client).
+      for (const bridge of bridges) bridge.dispose()
+      bridges.clear()
       for (const ws of clients) {
         try { ws.close() } catch { /* noop */ }
       }

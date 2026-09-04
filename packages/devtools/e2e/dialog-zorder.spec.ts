@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { DEMO_APP_DIR, openProjectInUI, pollUntil, findMainWindow } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, pollUntil } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const TOOLBAR_FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
@@ -24,7 +24,30 @@ test.describe('Dialog overlay z-order (real Electron): update dialog stays above
   test.describe.configure({ mode: 'serial' })
 
   let electronApp: ElectronApplication
-  let mainWindow: Page
+  let workbench: Page
+
+  /**
+   * `instance.context` (dialog-zorder-entry.js's `onSetup`) is the
+   * PROJECT-LIST window's own context — the simulator/host-toolbar this spec
+   * checks z-order against only exist on an OPEN project's own window (the
+   * list window never runs a mini-app), so every check below reaches the
+   * workbench window's context through `instance.projectWindows()`, not
+   * `instance.context`.
+   */
+  interface DialogZorderInstance {
+    projectWindows(): Array<{
+      context: {
+        views: {
+          hostToolbar: { loadFile(p: string): Promise<void> }
+          getSimulatorWebContentsId(): number | null
+          getHostToolbarWebContentsId(): number | null
+          showUpdateDialog(info: { version: string; downloadUrl: string }): void
+          getUpdateDialogWebContentsId(): number | null
+          markOverlayReady(id: number): void
+        }
+      }
+    }>
+  }
 
   test.beforeAll(async () => {
     const entryPath = path.resolve(__dirname, 'dialog-zorder-entry.js')
@@ -32,25 +55,19 @@ test.describe('Dialog overlay z-order (real Electron): update dialog stays above
       args: [entryPath],
       env: { ...process.env, NODE_ENV: 'test' },
     })
-    mainWindow = await findMainWindow(electronApp)
-    await mainWindow.waitForLoadState('domcontentloaded')
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20_000 })
+    workbench = await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 20_000 })
 
     // Give the host-toolbar a live, sized strip so it actually attaches to
     // the window's contentView — the occlusion bug required an ACTUAL native
     // view mounted above the main window's renderer, not just a placeholder
     // waiting for content.
     await electronApp.evaluate((_electronMods, file) => {
-      const g = globalThis as unknown as {
-        __e2eDialogZorderInstance: {
-          context: { views: { hostToolbar: { loadFile(p: string): Promise<void> } } }
-        }
-      }
-      return g.__e2eDialogZorderInstance.context.views.hostToolbar.loadFile(file)
+      const g = globalThis as unknown as { __e2eDialogZorderInstance: DialogZorderInstance }
+      return g.__e2eDialogZorderInstance.projectWindows()[0].context.views.hostToolbar.loadFile(file)
     }, path.join(TOOLBAR_FIXTURES, 'toolbar-64.html'))
 
     await pollUntil(
-      () => mainWindow.evaluate(() => {
+      () => workbench.evaluate(() => {
         const el = document.querySelector('[data-area="host-toolbar"]')
         return el ? Math.round(el.getBoundingClientRect().height) : -1
       }),
@@ -69,34 +86,20 @@ test.describe('Dialog overlay z-order (real Electron): update dialog stays above
 
   test('showUpdateDialog attaches its WCV above the live simulator and host-toolbar WCVs', async () => {
     const simulatorWcId = await electronApp.evaluate(() => {
-      const g = globalThis as unknown as {
-        __e2eDialogZorderInstance: { context: { views: { getSimulatorWebContentsId(): number | null } } }
-      }
-      return g.__e2eDialogZorderInstance.context.views.getSimulatorWebContentsId()
+      const g = globalThis as unknown as { __e2eDialogZorderInstance: DialogZorderInstance }
+      return g.__e2eDialogZorderInstance.projectWindows()[0].context.views.getSimulatorWebContentsId()
     })
     expect(simulatorWcId, 'simulator WCV must be live before the z-order check is meaningful').not.toBeNull()
 
     const toolbarWcId = await electronApp.evaluate(() => {
-      const g = globalThis as unknown as {
-        __e2eDialogZorderInstance: { context: { views: { getHostToolbarWebContentsId(): number | null } } }
-      }
-      return g.__e2eDialogZorderInstance.context.views.getHostToolbarWebContentsId()
+      const g = globalThis as unknown as { __e2eDialogZorderInstance: DialogZorderInstance }
+      return g.__e2eDialogZorderInstance.projectWindows()[0].context.views.getHostToolbarWebContentsId()
     })
     expect(toolbarWcId, 'host-toolbar WCV must be live before the z-order check is meaningful').not.toBeNull()
 
     const dialogWcId = await electronApp.evaluate(() => {
-      const g = globalThis as unknown as {
-        __e2eDialogZorderInstance: {
-          context: {
-            views: {
-              showUpdateDialog(info: { version: string; downloadUrl: string }): void
-              getUpdateDialogWebContentsId(): number | null
-              markOverlayReady(id: number): void
-            }
-          }
-        }
-      }
-      const views = g.__e2eDialogZorderInstance.context.views
+      const g = globalThis as unknown as { __e2eDialogZorderInstance: DialogZorderInstance }
+      const views = g.__e2eDialogZorderInstance.projectWindows()[0].context.views
       views.showUpdateDialog({ version: '2.0.0', downloadUrl: 'https://example.com/2.0.0.dmg' })
       const id = views.getUpdateDialogWebContentsId()
       if (id !== null) views.markOverlayReady(id)

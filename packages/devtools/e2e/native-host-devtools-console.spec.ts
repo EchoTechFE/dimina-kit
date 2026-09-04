@@ -213,7 +213,7 @@ test.describe('native-host DevTools Console attaches to the service host (logic 
       100,
     ) as number
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
 
     // DeviceShell mounts only after SimulatorMiniApp.spawn() resolves; wait for it
@@ -231,7 +231,7 @@ test.describe('native-host DevTools Console attaches to the service host (logic 
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 

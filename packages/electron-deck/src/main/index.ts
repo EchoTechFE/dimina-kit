@@ -41,6 +41,14 @@ export {
   type IpcSenderPolicy,
 } from './ipc-sender.js'
 export {
+  addMuxedInvokeHandler,
+  addMuxedSyncListener,
+  type InvokeMuxEntry,
+  type MuxEntry,
+  type SyncMuxEntry,
+} from './ipc-mux.js'
+export { windowHostsWebContents } from './window-hosts.js'
+export {
   createDebugTap,
   type DebugTap,
   type DebugTapEntry,

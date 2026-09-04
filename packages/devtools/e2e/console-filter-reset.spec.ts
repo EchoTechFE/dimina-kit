@@ -52,9 +52,9 @@ test.describe('Console filter box is cleared on fresh project open', () => {
 
   useSharedProject(test, DEMO_APP_DIR)
 
-  test('stale console.textFilter is removed and the box is emptied', async ({ mainWindow, electronApp }) => {
+  test('stale console.textFilter is removed and the box is emptied', async ({ workbench, electronApp }) => {
     // Open the Console panel so the embedded Chrome DevTools front-end is mounted.
-    const consoleTab = mainWindow.getByRole('tab', { name: 'Console' })
+    const consoleTab = workbench.getByRole('tab', { name: 'Console' })
     await consoleTab.click()
     await expect(consoleTab).toHaveAttribute('data-active', 'true')
 

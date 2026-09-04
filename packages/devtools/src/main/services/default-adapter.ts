@@ -8,7 +8,7 @@ export const defaultAdapter: CompilationAdapter = {
   async openProject(opts) {
     const diminaKit = await import('@dimina-kit/devkit')
     const openProjectOpts: OpenProjectOptions = {
-      outputDir: path.join(app.getPath('userData'), 'dimina-fe-output'),
+      outputRoot: path.join(app.getPath('userData'), 'dimina-fe-output'),
       ...opts,
       simulatorDir,
     }

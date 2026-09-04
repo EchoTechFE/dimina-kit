@@ -11,10 +11,7 @@ import type {
 } from '../projects/project-repository.js'
 import type { ProjectPatch, ProjectsProvider } from '../projects/types.js'
 import { DEFAULT_COMPILE_CONFIG } from '../projects/types.js'
-import {
-  clearSimulatorServicewechatReferer,
-  setSimulatorServicewechatReferer,
-} from '../simulator/referer.js'
+import { applyRefererForSession, clearRefererForSession } from './workspace-referer.js'
 import { loadWorkbenchSettings } from '../settings/index.js'
 import { createOpLock } from './op-lock.js'
 // Thumbnail FS helpers are now consumed via LocalProjectsProvider; the
@@ -165,7 +162,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     const release = await opLock.acquire()
     try {
       if (!opLock.isOwner(mySeq)) return true
-      clearSimulatorServicewechatReferer()
+      clearRefererForSession(currentSession, currentProjectPath)
       // Switching projects tears down the embedded workbench editor (mirrors one
       // project's disk; saves would else hit the wrong project) AND the native
       // simulator (its 'destroyed' hook owns the bridge session). Back-to-list
@@ -236,18 +233,9 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       })
       return { session }
     } catch (err) {
-      clearSimulatorServicewechatReferer()
+      // No appId resolved for this attempt; the outgoing project's own entry
+      // was already cleared by runOpenTeardown, so there is nothing to clear.
       return { error: String(err) }
-    }
-  }
-
-  function applyRefererFromSession(session: ProjectSession): void {
-    const appInfo = session.appInfo as { appId?: string; version?: string }
-    if (appInfo && typeof appInfo.appId === 'string' && appInfo.appId.length > 0) {
-      setSimulatorServicewechatReferer(
-        appInfo.appId,
-        typeof appInfo.version === 'string' ? appInfo.version : undefined,
-      )
     }
   }
 
@@ -367,7 +355,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         if (provider.updateLastOpened) provider.updateLastOpened(projectPath)
       })
       bestEffort('sendStatus', () => sendStatus('ready', '编译完成'))
-      bestEffort('applyReferer', () => applyRefererFromSession(session))
+      bestEffort('applyReferer', () => applyRefererForSession(session, projectPath))
 
       return {
         success: true,
@@ -402,7 +390,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         // Invalidate the active session's onLog BEFORE teardown starts — lines
         // flushed by the dying compile worker must not reach the panel.
         logGeneration++
-        clearSimulatorServicewechatReferer()
+        clearRefererForSession(currentSession, currentProjectPath)
         await disposeSession()
         // Record the root being torn down BEFORE clearing it, so a teardown/
         // debounced write already in flight can still be accepted against it.

@@ -30,16 +30,17 @@ function inIframe(expression: string): string {
 
 export class Page {
   readonly electronApp: ElectronApplication
-  readonly mainWindow: PwPage
+  /** The project's own workbench window (each open project gets one). */
+  readonly workbench: PwPage
   readonly path: string
 
   constructor(
     electronApp: ElectronApplication,
-    mainWindow: PwPage,
+    workbench: PwPage,
     path: string,
   ) {
     this.electronApp = electronApp
-    this.mainWindow = mainWindow
+    this.workbench = workbench
     this.path = path
   }
 
@@ -56,7 +57,7 @@ export class Page {
       inIframe(`return _doc.querySelector('${escaped}') !== null`),
     )
     if (!exists) return null
-    return new Element(this.electronApp, this.mainWindow, selector, 0)
+    return new Element(this.electronApp, this.workbench, selector, 0)
   }
 
   /**
@@ -70,7 +71,7 @@ export class Page {
     )
     const elements: Element[] = []
     for (let i = 0; i < count; i++) {
-      elements.push(new Element(this.electronApp, this.mainWindow, selector, i))
+      elements.push(new Element(this.electronApp, this.workbench, selector, i))
     }
     return elements
   }
@@ -129,7 +130,7 @@ export class Page {
   async waitFor(predicate: () => Promise<boolean>): Promise<void>
   async waitFor(arg: number | string | (() => Promise<boolean>)): Promise<void> {
     if (typeof arg === 'number') {
-      await this.mainWindow.waitForTimeout(arg)
+      await this.workbench.waitForTimeout(arg)
     } else if (typeof arg === 'string') {
       await this.waitForSelector(arg)
     } else {
@@ -149,7 +150,7 @@ export class Page {
       timeout,
       300,
     )
-    return new Element(this.electronApp, this.mainWindow, selector, 0)
+    return new Element(this.electronApp, this.workbench, selector, 0)
   }
 
   // ── Evaluate in iframe ──────────────────────────────────────────────

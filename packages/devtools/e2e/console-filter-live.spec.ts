@@ -243,7 +243,10 @@ test.describe('Right-panel Console [service] de-noise filter (live)', () => {
       10000, 100,
     )
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    // No workbench Page is kept: every project-scoped assertion below reaches
+    // the right-panel front-end / service host through electronApp.evaluate
+    // by webContents URL, never through a Playwright Page.
+    await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
     await pollUntil(
       () => evalInSimulator<boolean>(electronApp, `(() => !!document.querySelector('.device-shell-root'))()`).catch(() => false),
@@ -279,7 +282,7 @@ test.describe('Right-panel Console [service] de-noise filter (live)', () => {
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 

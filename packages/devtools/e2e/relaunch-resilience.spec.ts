@@ -34,8 +34,8 @@ import {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-async function getStatus(mainWindow: import('@playwright/test').Page) {
-  return mainWindow.evaluate(
+async function getStatus(workbench: import('@playwright/test').Page) {
+  return workbench.evaluate(
     () => document.querySelector('[class*="truncate"]')?.textContent || '',
   )
 }
@@ -127,28 +127,28 @@ async function getNativePageState(
 }
 
 async function waitForStatus(
-  mainWindow: import('@playwright/test').Page,
+  workbench: import('@playwright/test').Page,
   targets: string[],
   timeout = 15000,
 ) {
   return pollUntil(
-    () => getStatus(mainWindow),
+    () => getStatus(workbench),
     (s) => targets.some((t) => s.includes(t)),
     timeout,
     500,
   )
 }
 
-async function clickRelaunchButton(mainWindow: import('@playwright/test').Page) {
-  await mainWindow.getByRole('button', { name: '重新编译' }).click()
+async function clickRelaunchButton(workbench: import('@playwright/test').Page) {
+  await workbench.getByRole('button', { name: '重新编译' }).click()
 }
 
 async function relaunchViaPopover(
-  mainWindow: import('@playwright/test').Page,
+  workbench: import('@playwright/test').Page,
   electronApp: import('@playwright/test').ElectronApplication,
   targetPage: string,
 ) {
-  await mainWindow.getByRole('button', { name: /普通编译/ }).click()
+  await workbench.getByRole('button', { name: /普通编译/ }).click()
   // The popover WCV is created asynchronously after the click; poll for it
   // instead of a fixed sleep (a slow tick leaves the one-shot lookup empty).
   const popoverWcId = await pollUntil(
@@ -210,17 +210,17 @@ async function relaunchViaPopover(
 test.describe('Relaunch & compile resilience', () => {
   test.setTimeout(120_000)
 
-  test.beforeEach(async ({ mainWindow }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 10000 })
+  test.beforeEach(async ({ electronApp }) => {
+    await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 10000 })
   })
 
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow)
+  test.afterEach(async ({ electronApp }) => {
+    await closeProject(electronApp)
   })
 
-  test('↺ button reloads same page successfully', async ({ mainWindow, electronApp }) => {
-    await clickRelaunchButton(mainWindow)
-    const status = await waitForStatus(mainWindow, ['刷新完成', '编译完成'])
+  test('↺ button reloads same page successfully', async ({ workbench, electronApp }) => {
+    await clickRelaunchButton(workbench)
+    const status = await waitForStatus(workbench, ['刷新完成', '编译完成'])
     expect(status).toContain('完成')
 
     // After the reload the DeviceShell must remount with a live render-host page
@@ -232,9 +232,9 @@ test.describe('Relaunch & compile resilience', () => {
     ).toBeGreaterThanOrEqual(1)
   })
 
-  test('popover page switch navigates correctly', async ({ mainWindow, electronApp }) => {
-    await relaunchViaPopover(mainWindow, electronApp, 'storage-test')
-    const status = await waitForStatus(mainWindow, ['刷新完成', '编译完成'])
+  test('popover page switch navigates correctly', async ({ workbench, electronApp }) => {
+    await relaunchViaPopover(workbench, electronApp, 'storage-test')
+    const status = await waitForStatus(workbench, ['刷新完成', '编译完成'])
     expect(status).toContain('完成')
 
     // A respawn at storage-test must produce a render-host page guest whose
@@ -255,10 +255,10 @@ test.describe('Relaunch & compile resilience', () => {
     expect(await getDeviceShellWebviewCount(electronApp)).toBeGreaterThanOrEqual(1)
   })
 
-  test('multiple sequential page switches all succeed', async ({ mainWindow, electronApp }) => {
+  test('multiple sequential page switches all succeed', async ({ workbench, electronApp }) => {
     for (const page of ['console-test', 'storage-test', 'index']) {
-      await relaunchViaPopover(mainWindow, electronApp, page)
-      const status = await waitForStatus(mainWindow, ['刷新完成', '编译完成'])
+      await relaunchViaPopover(workbench, electronApp, page)
+      const status = await waitForStatus(workbench, ['刷新完成', '编译完成'])
       expect(status).toContain('完成')
 
       // Each respawn must land a render-host page guest on the chosen entry page.
@@ -278,12 +278,12 @@ test.describe('Relaunch & compile resilience', () => {
     }
   })
 
-  test('rapid double-click ↺ does not break state', async ({ mainWindow, electronApp }) => {
-    await clickRelaunchButton(mainWindow)
-    await mainWindow.waitForTimeout(50)
-    await clickRelaunchButton(mainWindow)
+  test('rapid double-click ↺ does not break state', async ({ workbench, electronApp }) => {
+    await clickRelaunchButton(workbench)
+    await workbench.waitForTimeout(50)
+    await clickRelaunchButton(workbench)
 
-    const status = await waitForStatus(mainWindow, ['完成', '失败', '超时'])
+    const status = await waitForStatus(workbench, ['完成', '失败', '超时'])
     expect(status).toContain('完成')
 
     // A double-fire must still leave the DeviceShell mounted with a live page
@@ -297,7 +297,7 @@ test.describe('Relaunch & compile resilience', () => {
     expect(state.anyCrashed, 'no guest or shell should be crashed after a double ↺').toBe(false)
   })
 
-  test('rapid file changes do not crash webview', async ({ mainWindow, electronApp }) => {
+  test('rapid file changes do not crash webview', async ({ workbench, electronApp }) => {
     const files = ['index.js', 'index.wxml', 'index.wxss'].map((f) =>
       path.join(DEMO_APP_DIR, 'pages', 'index', f),
     )
@@ -312,11 +312,11 @@ test.describe('Relaunch & compile resilience', () => {
       // Rapid-fire touch 3 files in 300ms
       for (const f of Object.keys(originals)) {
         fs.writeFileSync(f, originals[f] + `\n// e2e-${Date.now()}`)
-        await mainWindow.waitForTimeout(100)
+        await workbench.waitForTimeout(100)
       }
 
       // Wait for rebuild to settle
-      await mainWindow.waitForTimeout(15000)
+      await workbench.waitForTimeout(15000)
 
       // The render-host guests must survive the rapid-fire rebuild churn: the
       // DeviceShell still has a live page webview and nothing crashed.
@@ -334,7 +334,7 @@ test.describe('Relaunch & compile resilience', () => {
     }
   })
 
-  test('UI stays usable after build error and recovers', async ({ mainWindow, electronApp }) => {
+  test('UI stays usable after build error and recovers', async ({ workbench, electronApp }) => {
     const jsFile = path.join(DEMO_APP_DIR, 'pages', 'index', 'index.js')
     const original = fs.readFileSync(jsFile, 'utf8')
 
@@ -346,22 +346,22 @@ test.describe('Relaunch & compile resilience', () => {
     try {
       // Introduce syntax error
       fs.writeFileSync(jsFile, 'const x = {{{BROKEN')
-      await mainWindow.waitForTimeout(15000)
+      await workbench.waitForTimeout(15000)
 
       // Toolbar must remain visible (not white/black screen)
-      const hasToolbar = await mainWindow.evaluate(() =>
+      const hasToolbar = await workbench.evaluate(() =>
         document.body.innerText.includes('普通编译'),
       )
       expect(hasToolbar).toBe(true)
 
       // Restore and verify recovery
       fs.writeFileSync(jsFile, original)
-      await mainWindow.waitForTimeout(15000)
+      await workbench.waitForTimeout(15000)
 
       // Should be able to relaunch after recovery: the DeviceShell remounts with a
       // live render-host page webview once the good build compiles.
-      await clickRelaunchButton(mainWindow)
-      await waitForStatus(mainWindow, ['完成', '失败', '超时'])
+      await clickRelaunchButton(workbench)
+      await waitForStatus(workbench, ['完成', '失败', '超时'])
       const webviews = await waitForDeviceShellReady(electronApp)
       expect(
         webviews,

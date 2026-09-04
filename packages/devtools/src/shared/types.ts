@@ -1,6 +1,9 @@
 import type { OpenProjectOptions } from '@dimina-kit/devkit'
 import type { SimulatorApiHandler } from '../main/services/simulator/custom-apis.js'
 import type { MiniappSessionAppInfo } from '../main/runtime/miniapp-runtime.js'
+import type { ClosingProjectWindow, ProjectWindowConfig, ProjectWindowRef } from './project-window-types.js'
+
+export type { ClosingProjectWindow, ProjectWindowConfig, ProjectWindowRef }
 
 /**
  * The HAND-WRITTEN narrow contract handed to a host `menuBuilder` — the
@@ -30,7 +33,7 @@ export interface MenuContext {
   notify: {
     /** Broadcast compile-status transitions to the main renderer. */
     projectStatus: (payload: { status: string; message: string; hotReload?: boolean }) => void
-    /** Ask the main renderer to navigate back to its landing screen (打开项目). */
+    /** Bring the project-list window forward and refresh it (打开项目). */
     windowNavigateBack: () => void
   }
 }
@@ -58,7 +61,7 @@ export interface ProjectSession {
 }
 
 export interface CompilationAdapter {
-  openProject(opts: Omit<OpenProjectOptions, 'containerDir' | 'outputDir'>): Promise<ProjectSession>
+  openProject(opts: Omit<OpenProjectOptions, 'containerDir' | 'outputDir' | 'outputRoot'>): Promise<ProjectSession>
 }
 
 export type BuiltinPanelId = 'wxml' | 'console' | 'appdata' | 'storage'
@@ -200,10 +203,11 @@ export interface WorkbenchHostInstance {
   ): import('@dimina-kit/electron-deck/main').Disposable
 
   /**
-   * Registers a simulator custom API into THIS context's registry, callable
-   * from mini-program code as `wx.<name>(params)`. The registration joins
-   * `context.registry`, so it is released when the context is disposed.
-   * The returned Disposable removes only the registration it created.
+   * Registers a simulator custom API, callable from mini-program code as
+   * `wx.<name>(params)`. The registry is app-level: one registration serves
+   * every project window, including windows opened afterwards, and no window
+   * closing revokes it. It lives until the app is disposed or the returned
+   * Disposable revokes it — which removes only the registration it created.
    */
   registerSimulatorApi(
     name: string,
@@ -297,16 +301,44 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
   rendererDir?: string
   /** Enable or disable built-in IPC module groups. Defaults to all enabled. */
   modules?: Partial<Record<BuiltinModuleId, boolean>>
-  /** Window sizing overrides for the main devtools window. */
+  /** Window sizing overrides for the project-list window. */
   window?: WorkbenchWindowConfig
+  /** Overrides for the windows opened projects get. */
+  projectWindow?: ProjectWindowConfig
   /** Absolute path to a window/taskbar icon (png or ico). macOS uses the app bundle icon. */
   icon?: string
   /** Custom menu builder. Should call Menu.setApplicationMenu(). If omitted, the default dimina-devtools menu is installed. */
   menuBuilder?: (mainWindow: import('electron').BrowserWindow, menuContext: MenuContext) => void
   /** Called after window and context are created but before start() resolves. Use to register custom IPC handlers. */
   onSetup?: (instance: WorkbenchHostInstance) => void | Promise<void>
-  /** Called before window close when a session is active. Session disposal happens automatically after this hook. */
-  onBeforeClose?: (instance: WorkbenchHostInstance) => void | Promise<void>
+  /**
+   * Called once per project window, after the framework has wired that window
+   * up and before the open resolves. `opened.context` is THAT window's own
+   * context, which is why per-project registration belongs here: `onSetup`
+   * only ever sees `instance.context`, the project list's, so a registration
+   * made there reaches no project window.
+   *
+   * Awaited, and unlike `onBeforeClose` it can fail the open: a rejection
+   * tears the half-built window down and reaches whoever asked for it.
+   */
+  setupProjectWindow?: (
+    instance: WorkbenchHostInstance,
+    opened: ProjectWindowRef,
+  ) => void | Promise<void>
+  /**
+   * Called when a project window is closing, before the framework disposes it.
+   * `closing` says WHICH project is going away and carries that window's own
+   * context — `instance.context` is always the project list's, which owns no
+   * session, so with several windows open it cannot tell them apart. A hook
+   * that only declares `instance` still type-checks.
+   *
+   * Awaited, but not a veto: a rejection is logged and the window is disposed
+   * regardless.
+   */
+  onBeforeClose?: (
+    instance: WorkbenchHostInstance,
+    closing: ClosingProjectWindow,
+  ) => void | Promise<void>
   /**
    * Called before a project is opened, BEFORE any side effect (session
    * teardown, compile, dev-server). Use to gate the open on login/permission

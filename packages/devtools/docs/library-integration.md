@@ -66,10 +66,12 @@ launch({
 | --- | --- |
 | `rendererDir` | 覆盖内置 renderer 目录 |
 | `modules` | 按 `projects`、`session`、`simulator`、`popover`、`settings` 开关内置 IPC 模块组 |
-| `window` | 主窗口尺寸和 `autoShow` 设置 |
+| `window` | 项目列表窗口的尺寸和 `autoShow` 设置 |
+| `projectWindow` | 项目窗口的 `autoShow` 设置，默认 `true`，与 `window` 互不影响 |
 | `icon` | 窗口或任务栏图标 |
 | `menuBuilder` | 安装宿主菜单；参数是主窗口和窄化后的 `MenuContext` |
-| `onSetup` | 窗口与 context 建好后注册宿主扩展，可返回 Promise |
+| `onSetup` | 项目列表窗口与 context 建好后注册应用级宿主扩展，可返回 Promise |
+| `setupProjectWindow` | 每打开一个项目窗口调用一次，拿到这个窗口自己的 context 做项目级注册；抛错等于本次打开失败 |
 | `onBeforeClose` | 有活动会话时，在自动关闭会话前运行宿主清理，可返回 Promise |
 | `onBeforeOpenProject` | 任何打开项目副作用发生前执行；抛错会拒绝本次打开并保留当前会话 |
 | `editorViewConfig` | 覆盖 VS Code 工作台 bundle，或提供 web extensions 目录 |
@@ -156,6 +158,26 @@ onSetup(instance) {
 ```
 
 这些注册都归当前 context 所有，并在 context 销毁时清理。`registerTrustedWindow()` 返回的对象也可以提前 `dispose()`。
+
+### 项目级注册用 `setupProjectWindow`
+
+`onSetup(instance)` 里的 `instance.context` 永远是项目列表窗口的 context，它不持有任何会话和视图。要给具体某个项目窗口注册东西（面板、host toolbar、按 context 分的 IPC 状态），用 `setupProjectWindow`：
+
+```ts
+launch({
+  onSetup(instance) {
+    // 应用级：整个进程注册一次就够
+    instance.registerSimulatorApi('share', params => share(params))
+  },
+  async setupProjectWindow(instance, opened) {
+    // 项目级：opened.context 是这个项目窗口自己的 context
+    await opened.context.views.hostToolbar.loadFile(toolbarHtml)
+    console.log('打开了', opened.path, opened.name)
+  },
+})
+```
+
+`opened` 的形状是 `ProjectWindowRef`（`path`、`name?`、`window`、`context`），和 `onBeforeClose` 收到的 `closing` 一致。hook 会被 await，抛错等于这次打开失败：框架拆掉这个半成品窗口，原样把错误抛给发起打开的一方。`onSetup` 尚未完成时到达的打开请求会先等它，不会拿到一个宿主还没扩展完的窗口。
 
 ### Simulator 自定义 API
 

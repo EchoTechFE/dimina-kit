@@ -9,14 +9,14 @@ test.describe('Simulator Panel', () => {
 
   useSharedProject(test, DEMO_APP_DIR)
 
-  test('toolbar has compile and simulator toggle buttons', async ({ mainWindow }) => {
-    expect(await findButtonByText(mainWindow, '普通编译')).toBe(true)
-    await expect(mainWindow.getByRole('group', { name: '面板可见性' })).toBeVisible()
-    await expect(mainWindow.getByTestId('layout-toolbar-toggle-simulator')).toBeVisible()
+  test('toolbar has compile and simulator toggle buttons', async ({ workbench }) => {
+    expect(await findButtonByText(workbench, '普通编译')).toBe(true)
+    await expect(workbench.getByRole('group', { name: '面板可见性' })).toBeVisible()
+    await expect(workbench.getByTestId('layout-toolbar-toggle-simulator')).toBeVisible()
   })
 
-  test('toolbar has built-in right panel tabs', async ({ mainWindow }) => {
-    const tabLabels = await mainWindow.evaluate(() => {
+  test('toolbar has built-in right panel tabs', async ({ workbench }) => {
+    const tabLabels = await workbench.evaluate(() => {
       const buttons = document.querySelectorAll('button')
       const labels: string[] = []
       buttons.forEach((btn) => {
@@ -31,22 +31,22 @@ test.describe('Simulator Panel', () => {
     expect(tabLabels).toEqual(expect.arrayContaining(['WXML', 'AppData', 'Storage']))
   })
 
-  test('can toggle simulator panel visibility', async ({ mainWindow }) => {
+  test('can toggle simulator panel visibility', async ({ workbench }) => {
     // Under native-host (now the default runtime) the simulator is a
     // main-process WebContentsView, NOT a renderer `<webview>` — SimulatorPanel
     // deliberately skips the `<webview>` (Electron forbids nesting webviews, so
     // DeviceShell's per-page render-host webviews can only attach to a top-level
-    // WCV). So `mainWindow.locator('webview')` is 0 in BOTH states and can't
+    // WCV). So `workbench.locator('webview')` is 0 in BOTH states and can't
     // gate visibility.
     //
-    // The observable visibility signal in the main-window DOM is the
+    // The observable visibility signal in the workbench DOM is the
     // SimulatorPanel itself: its device-picker `<select>` (the only `<select>`
     // carrying the device options, e.g. `iPhone SE`) mounts when the simulator
     // cell is in the compiled layout and unmounts when the cell is pruned. The
     // toolbar toggle flips `layoutStore.simulatorVisible`, which the layout
     // compile pass turns into the cell being present/absent (collapseInvisibleCells).
-    const deviceSelect = mainWindow.locator('select:has(option[value="iPhone SE"])')
-    const toggle = mainWindow.getByTestId('layout-toolbar-toggle-simulator')
+    const deviceSelect = workbench.locator('select:has(option[value="iPhone SE"])')
+    const toggle = workbench.getByTestId('layout-toolbar-toggle-simulator')
 
     await expect(deviceSelect).toHaveCount(1)
 
@@ -57,8 +57,8 @@ test.describe('Simulator Panel', () => {
     await expect(deviceSelect).toHaveCount(1)
   })
 
-  test('right panel tabs are rendered in the main window', async ({ mainWindow }) => {
-    const tabLabels = await mainWindow.evaluate(() => {
+  test('right panel tabs are rendered in the workbench window', async ({ workbench }) => {
+    const tabLabels = await workbench.evaluate(() => {
       const buttons = document.querySelectorAll('button')
       const labels: string[] = []
       buttons.forEach((btn) => {

@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { registerContextTools } from './context-tools.js'
 import {
   getTargetState,
-  setNativeHost,
-  setNativeOverviewProvider,
+  registerMcpWindow,
+  setActiveMcpWindowResolver,
+  type McpWindowRegistration,
   type NativeOverview,
 } from '../target-manager.js'
 
@@ -13,8 +14,8 @@ import {
  * Under native-host the mini-app is split across processes; the in-target CDP
  * probe that `simulator_get_overview` runs is blind to page-stack / route /
  * storage / appdata state, so it returns zeros & empties even when pages are
- * open and storage is written. The fix exposes a module-level
- * `setNativeOverviewProvider` whose values the overview must merge in.
+ * open and storage is written. The fix lets each project window publish a
+ * native overview provider whose values the overview must merge in.
  *
  * This test pins the OUTPUT contract only: with native-host on, a connected
  * simulator target whose CDP probe is blind (pageStackDepth:0, route:null,
@@ -67,10 +68,13 @@ const BLIND_PROBE = {
   simulatorDataPresent: false,
 }
 
-// A connected fake CDP client whose Runtime.evaluate returns the blind probe.
+// A connected fake CDP client whose Runtime.evaluate returns the blind probe,
+// recorded on the window MCP is driving — a connection bound to any other
+// window is refused by getClient.
 function injectConnectedBlindSimulator() {
   const state = getTargetState('simulator')
   state.connected = true
+  state.owner = activeWindow
   state.client = {
     Runtime: {
       evaluate: async () => ({ result: { value: JSON.stringify(BLIND_PROBE) } }),
@@ -86,6 +90,7 @@ function resetSimulatorState() {
   const state = getTargetState('simulator')
   state.connected = false
   state.client = null
+  state.owner = null
   state.consoleLogs = []
   state.networkRequests = []
 }
@@ -99,16 +104,27 @@ async function callOverview(handlers: Map<string, ToolHandler>): Promise<Record<
   return JSON.parse(text as string) as Record<string, unknown>
 }
 
+// Stands in for the project window MCP is driving: it owns the native-host
+// state the overview reads.
+const activeWindow = {}
+let registration: McpWindowRegistration
+
 describe('simulator_get_overview — native-host cross-process fields', () => {
   beforeEach(() => {
-    setNativeHost(true)
-    setNativeOverviewProvider(null)
+    registration = registerMcpWindow(activeWindow, {
+      nativeHost: true,
+      activeBridgeId: null,
+      nativeOverviewProvider: null,
+      projectPath: '/proj/demo',
+      getAppId: () => 'app-demo',
+    })
+    setActiveMcpWindowResolver(() => activeWindow)
     injectConnectedBlindSimulator()
   })
 
   afterEach(() => {
-    setNativeHost(false)
-    setNativeOverviewProvider(null)
+    registration.dispose()
+    setActiveMcpWindowResolver(() => null)
     resetSimulatorState()
   })
 
@@ -120,7 +136,7 @@ describe('simulator_get_overview — native-host cross-process fields', () => {
       storageCount: 3,
       appDataKeys: ['list', 'loading'],
     }
-    setNativeOverviewProvider(async () => native)
+    registration.facts.nativeOverviewProvider = async () => native
 
     const { server, handlers } = makeFakeServer()
     registerContextTools(server)

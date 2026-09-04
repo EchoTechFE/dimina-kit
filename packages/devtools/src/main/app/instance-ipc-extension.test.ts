@@ -540,53 +540,53 @@ describe('Requirement B: instance.registerTrustedWindow', () => {
     ).toBe(false)
   })
 
-  // ── Registry-entry leak: the returned Disposable must be the registry wrapper ─
-  //
-  // `instance.registerTrustedWindow` does `ctx.registry.add(disposable)` but
-  // `DisposableRegistry.add()` RETURNS a wrapper — only disposing that wrapper
-  // splices the entry out of `registry.entries`. If the method returns the raw
-  // `disposable` instead of the wrapper, the host can dispose it (un-trusting
-  // the window) yet the dead registry entry lingers, accumulating until the
-  // whole context is torn down. The fix must return the wrapper so a single
-  // dispose does BOTH: un-trust the window AND drop the registry entry.
+  // ── App-level ownership: the trusted-sender ledger outlives any one window's
+  // context, so `registerTrustedWindow`'s Disposable is tracked at the app
+  // level rather than in `ctx.registry`. What must hold regardless of WHERE
+  // the bookkeeping lives is the observable IPC contract: a channel gated by
+  // `context.senderPolicy` (the same gate the built-in workbench IPC surface
+  // uses) accepts the window while registered and rejects it — with the
+  // IpcRegistry gate's own rejection — once disposed, and a second dispose is
+  // a safe no-op rather than resurrecting trust or throwing.
 
-  it('disposing the returned Disposable drops its ctx.registry entry (no leak)', async () => {
+  it('registerTrustedWindow(win) is accepted by a senderPolicy-gated IPC channel until disposed, and dispose is idempotent', async () => {
     const instance = await setupInstance()
+    const hostWin = new BrowserWindowMock()
     const reg = instance as unknown as {
       registerTrustedWindow: (w: import('electron').BrowserWindow) => import('@dimina-kit/electron-deck/main').Disposable
     }
-    const registry = instance.context.registry as unknown as { size: number }
 
-    // `size` is the only stable window into live registry entries — the fix
-    // adds it as a readonly getter on DisposableRegistry.
-    const baseline = registry.size
+    // Same gate shape the built-in workbench IPC surface uses (see e.g.
+    // automation/index.ts's `new IpcRegistry((sender) => getCtx().senderPolicy(sender))`).
+    const gated = new IpcRegistry((sender) => instance.context.senderPolicy(sender))
+    gated.handle('host:trust-gate', () => 'trusted-data')
+    const guarded = stubs.ipcHandlers.get('host:trust-gate')!
 
-    const hostWin = new BrowserWindowMock()
     const disposable = reg.registerTrustedWindow(hostWin)
 
-    // Registration added exactly one live entry to ctx.registry.
-    expect(
-      registry.size,
-      'registerTrustedWindow must add exactly one entry to ctx.registry',
-    ).toBe(baseline + 1)
+    // Registered: the gate resolves the channel for this window's sender.
+    await expect(
+      Promise.resolve(guarded({ sender: hostWin.webContents })),
+      'a registered window must be accepted by a senderPolicy-gated channel',
+    ).resolves.toBe('trusted-data')
 
     await disposable.dispose()
 
-    // The returned disposable must be the registry wrapper, not the RAW
-    // disposable: disposing it splices the entry out so size returns to
-    // baseline. (A raw disposable would never splice the entry, leaving a
-    // leaked dead entry at baseline+1.)
-    expect(
-      registry.size,
-      'disposing the returned Disposable must remove its ctx.registry entry — return the wrapper from registry.add(), not the raw disposable',
-    ).toBe(baseline)
+    // Disposed: the same sender is rejected, with the IpcRegistry gate's own
+    // rejection message (not a generic thrown/falsy value).
+    await expect(
+      Promise.resolve(guarded({ sender: hostWin.webContents })),
+      'a disposed registration must be rejected by the senderPolicy gate',
+    ).rejects.toThrow('IPC sender rejected for channel host:trust-gate')
 
-    // The dispose must ALSO release the underlying resource: the window is
-    // un-trusted. So the single dispose does both jobs.
-    expect(
-      instance.context.senderPolicy(hostWin.webContents),
-      'disposing the returned Disposable must also un-trust the window',
-    ).toBe(false)
+    // Idempotent: a second dispose must not throw, and must not resurrect trust.
+    await expect(
+      Promise.resolve(disposable.dispose()),
+      'disposing an already-disposed registration must be a safe no-op',
+    ).resolves.not.toThrow()
+    await expect(
+      Promise.resolve(guarded({ sender: hostWin.webContents })),
+    ).rejects.toThrow('IPC sender rejected for channel host:trust-gate')
 
     await instance.dispose()
   })

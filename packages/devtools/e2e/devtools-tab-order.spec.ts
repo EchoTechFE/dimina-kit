@@ -38,9 +38,9 @@ test.describe('Right-panel DevTools tab bar (default order, Sources kept)', () =
 
   useSharedProject(test, DEMO_APP_DIR)
 
-  test('Elements / Console / Sources / Network all visible; Network click selects Network', async ({ mainWindow, electronApp }) => {
+  test('Elements / Console / Sources / Network all visible; Network click selects Network', async ({ workbench, electronApp }) => {
     // Open the Console panel so the embedded Chrome DevTools front-end is mounted.
-    const consoleTab = mainWindow.getByRole('tab', { name: 'Console' })
+    const consoleTab = workbench.getByRole('tab', { name: 'Console' })
     await consoleTab.click()
     await expect(consoleTab).toHaveAttribute('data-active', 'true')
 

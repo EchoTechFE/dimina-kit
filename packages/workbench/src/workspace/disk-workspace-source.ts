@@ -8,7 +8,11 @@ import { WORKSPACE_FILE_ROOT, mirrorDiskToFileWorkspace, flushFileWorkspaceSaveT
 import type { WorkspaceSource } from './types'
 
 export interface DiskMirrorOptions {
-  /** Base URL of the COI server exposing `/__fs/*` (usually `location.origin + '/'`). */
+  /**
+   * Base URL of the COI server exposing `__fs/*`. Every project window shares
+   * one origin and is addressed by a path prefix, so this is the document's own
+   * directory (`HOST_BASE_URL`) and never bare `location.origin`.
+   */
   fsBaseUrl: string
 }
 

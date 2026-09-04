@@ -33,7 +33,6 @@
  * of compile state; see {@link handleFsWatchRequest}.
  */
 import http from 'node:http'
-import nodeFs from 'node:fs'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import {
@@ -47,6 +46,9 @@ import {
   SKIP_DIRS,
 } from '../ipc/project-fs.js'
 import { handleFsWatchRequest } from './fs-watch-sse.js'
+import { createCoiServerShutdown } from './workbench-coi-shutdown.js'
+import { serveStaticFile } from './workbench-coi-static.js'
+import { registerCoiHostSession } from './workbench-coi-host.js'
 import { FS_TYPE_DIR, FS_TYPE_FILE, toFsBridgeEntry } from './fs-bridge-protocol.js'
 import type { FsBridgeStat } from './fs-bridge-protocol.js'
 import { jsonRes } from './http-json.js'
@@ -54,65 +56,6 @@ import { miniappPartitionKey } from './views/miniapp-partition.js'
 
 /** Max `/__fs/write` body; enough to save large source files without OOM. */
 const MAX_FS_WRITE_BYTES = 32 * 1024 * 1024
-
-const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.map': 'application/json; charset=utf-8',
-  '.wasm': 'application/wasm',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ttf': 'font/ttf',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.ico': 'image/x-icon',
-}
-
-function setIsolationHeaders(res: http.ServerResponse): void {
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin')
-  res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp')
-  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin')
-}
-
-/** Resolve a request pathname inside `root`, rejecting lexical traversal escapes. */
-function containedStaticPath(root: string, pathname: string): string | null {
-  const rel = pathname.replace(/^\/+/, '') || 'index.html'
-  const resolved = path.resolve(root, rel)
-  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null
-  return resolved
-}
-
-/**
- * Serve a static file under `root`: lexical containment, then `fs.realpath`
- * BOTH the root and the resolved file before stat/stream, so a symlink inside
- * `root` pointing outside it cannot be served (the lexical check alone follows
- * symlinks because `stat`/`createReadStream` do). Sends the response itself.
- */
-function serveStaticFile(res: http.ServerResponse, root: string, pathname: string): void {
-  const candidate = containedStaticPath(root, pathname)
-  if (!candidate) { res.writeHead(403); res.end('Forbidden'); return }
-  Promise.all([fs.realpath(root), fs.realpath(candidate)])
-    .then(([realRoot, realFile]) => {
-      if (realFile !== realRoot && !realFile.startsWith(realRoot + path.sep)) {
-        res.writeHead(403); res.end('Forbidden'); return
-      }
-      nodeFs.stat(realFile, (err, stat) => {
-        if (err || !stat.isFile()) { res.writeHead(404); res.end('Not Found'); return }
-        res.writeHead(200, {
-          'Content-Type': MIME[path.extname(realFile)] ?? 'application/octet-stream',
-          'Content-Length': stat.size,
-          'Cache-Control': 'no-store',
-        })
-        // Stream the realpath'd file (already resolved to its real on-disk
-        // location, so a symlink inside the root cannot redirect it outside).
-        nodeFs.createReadStream(realFile).pipe(res)
-      })
-    })
-    .catch(() => { if (!res.headersSent) { res.writeHead(404); res.end('Not Found') } })
-}
 
 /** Thrown by {@link readBody} when the accumulated body exceeds the cap. */
 class BodyTooLargeError extends Error {
@@ -185,6 +128,22 @@ function rejectUnsafeMutation(req: http.IncomingMessage): number | null {
 }
 
 /** Map a node fs error to the HTTP status the provider expects. */
+/**
+ * Percent-decode a request path, answering the client on a malformed escape.
+ * A stray `%` is the client's error and belongs here, not at the shared
+ * listener's exception boundary, which cannot tell a bad request from a bug in
+ * this handler. Returns `null` once the 400 has been sent.
+ */
+function decodePath(res: http.ServerResponse, pathname: string): string | null {
+  try {
+    return decodeURIComponent(pathname)
+  } catch {
+    res.writeHead(400)
+    res.end('Bad Request')
+    return null
+  }
+}
+
 function fsErrorStatus(e: unknown): number {
   const code = (e as { code?: string }).code
   if (code === 'ENOACTIVE') return 409
@@ -412,16 +371,28 @@ function workspaceIdOf(identity: { appId: string | null; projectPath: string } |
 export async function startWorkbenchCoiServer(options: WorkbenchCoiServerOptions): Promise<WorkbenchCoiServer> {
   const root = path.resolve(options.rootDir)
   const contribRoot = options.extensionsDir ? path.resolve(options.extensionsDir) : null
-  const server = http.createServer((req, res) => {
-    setIsolationHeaders(res)
-    const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-
+  const shutdown = createCoiServerShutdown()
+  const handle = (req: http.IncomingMessage, res: http.ServerResponse, url: URL): void => {
+    // This window is tearing down. Anything accepted from here on would act on
+    // a project the user has already closed, and a new SSE stream would outlive
+    // the drain that was supposed to end them all.
+    if (shutdown.closing) {
+      res.writeHead(503)
+      res.end('Closing')
+      return
+    }
     // Special-cased ahead of the generic `/__fs/*` dispatch: unlike every other
     // action, this is a long-lived SSE stream, not a one-shot JSON response.
     if (url.pathname === '/__fs/watch') {
-      handleFsWatchRequest(req, res, options.getProjectRoot)
+      const endStream = handleFsWatchRequest(req, res, options.getProjectRoot)
+      if (endStream) shutdown.trackWatchStream(res, endStream)
       return
     }
+
+    // Everything below answers once. Shutdown lets these land rather than
+    // dropping the socket under them — a `/__fs/write` mid-body is the file the
+    // user just saved.
+    shutdown.trackRequest(res)
 
     if (url.pathname.startsWith('/__fs/')) {
       handleFsRequest(req, res, options.getProjectRoot(), url).catch((e) => {
@@ -464,26 +435,37 @@ export async function startWorkbenchCoiServer(options: WorkbenchCoiServerOptions
           .catch((e) => { if (!res.headersSent) jsonRes(res, 500, { error: String(e) }) })
         return
       }
-      const rel = decodeURIComponent(url.pathname.slice('/__contrib/'.length))
+      const rel = decodePath(res, url.pathname.slice('/__contrib/'.length))
+      if (rel === null) return
       serveStaticFile(res, contribRoot, rel)
       return
     }
 
-    serveStaticFile(res, root, decodeURIComponent(url.pathname))
-  })
+    const filePath = decodePath(res, url.pathname)
+    if (filePath === null) return
+    serveStaticFile(res, root, filePath)
+  }
 
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => {
-      server.off('error', reject)
-      resolve()
-    })
-  })
-  const addr = server.address()
-  const port = typeof addr === 'object' && addr ? addr.port : 0
+  // The listener is shared with every other project window so they land on one
+  // origin; this window is reached through its own path prefix. See
+  // workbench-coi-host.ts for why the port cannot be per-window.
+  const registration = await registerCoiHostSession({ rootDir: root, extensionsDir: contribRoot, session: { handle } })
   return {
-    baseUrl: `http://127.0.0.1:${port}/`,
-    port,
-    close: () => new Promise<void>((r) => server.close(() => r())),
+    baseUrl: `${registration.origin}/w/${registration.token}/`,
+    port: registration.port,
+    // Why this is not a bare `server.close()`: see workbench-coi-shutdown.ts.
+    // Drain first so this window's SSE streams end and its in-flight writes
+    // land, THEN drop the route — the listener itself only goes away with the
+    // last window.
+    close: async () => {
+      // `finally`: a drain that throws must still drop this window's route.
+      // Leaving it registered would keep a torn-down window's bridge reachable
+      // on the shared listener for the rest of the process.
+      try {
+        await shutdown.drain()
+      } finally {
+        await registration.release()
+      }
+    },
   }
 }

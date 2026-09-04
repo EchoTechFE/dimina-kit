@@ -159,7 +159,15 @@ beforeEach(() => {
   stubs.reset()
 })
 
+// The router registers on process-wide ipc channels through the mux, which
+// installs one real `ipcMain` registration per channel and keeps it until the
+// last owner leaves. Running each install's disposers is what lets the next
+// test's install register on a freshly cleared stub instead of finding the
+// channel already taken by the previous test's router.
+const routerDisposers: AnyFn[] = []
+
 afterEach(() => {
+  for (const dispose of routerDisposers.splice(0)) dispose()
   vi.clearAllMocks()
 })
 
@@ -173,10 +181,10 @@ function emitOn(channel: string, sender: unknown, payload: unknown): void {
 function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
   const simulatorWc = stubs.makeWebContents()
   const ctx = {
-    registry: { add: (_fn: AnyFn) => {} },
+    registry: { add: (fn: AnyFn) => { routerDisposers.push(fn) } },
     connections: createConnectionRegistry(),
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
-    windows: { mainWindow: { webContents: simulatorWc } },
+    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
     workspace: { getSession: () => undefined },
     onServiceStorageChanged: vi.fn(),
   } as unknown as WorkbenchContext

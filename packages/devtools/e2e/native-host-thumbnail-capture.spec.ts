@@ -69,6 +69,7 @@ test.describe('native-host captureThumbnail targets the render guest, not the si
 
   let electronApp: ElectronApplication
   let mainWindow: PwPage
+  let workbench: PwPage
 
   test.beforeAll(async () => {
     // Extend the hook timeout: Electron cold-boot + first fixture compile can
@@ -118,7 +119,7 @@ test.describe('native-host captureThumbnail targets the render guest, not the si
       100,
     )
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    workbench = await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
 
     // Wait until the render guest (__frame__.html) is mounted and has a URL —
@@ -137,7 +138,7 @@ test.describe('native-host captureThumbnail targets the render guest, not the si
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 
@@ -196,7 +197,7 @@ test.describe('native-host captureThumbnail targets the render guest, not the si
 
     // Call captureThumbnail via IPC (the renderer-facing entry point).
     const thumbnailDataUrl = await ipcInvoke<string | null>(
-      mainWindow,
+      workbench,
       ProjectChannel.CaptureThumbnail,
       FIXTURE_DIR,
     )

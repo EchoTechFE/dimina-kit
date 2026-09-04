@@ -1,10 +1,12 @@
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import { ipcMain } from 'electron'
 import {
+  addMuxedInvokeHandler,
   isMainFrameIpcSender,
   type Disposable,
   type IpcSenderPolicy,
 } from '@dimina-kit/electron-deck/main'
+import type { IpcContextSource } from './ipc-context-source.js'
 import { IpcValidationError } from './ipc-schema.js'
 import { createLogger } from './logger.js'
 
@@ -70,24 +72,43 @@ function summarizeSender(sender: WebContents): string {
  * possibly null) from a frame-unaware unit-test stub (neither present) and only
  * skip the check for the latter (the sender-id white-list still gates tests).
  */
+/** Internal marker for "this sender is not allowed on this channel". */
+const REJECT = Symbol('ipc-reject')
+
+// Channel multiplexing (one real `ipcMain.handle` per channel, dispatched to
+// whichever per-window registration claims the sender — needed because the
+// storage, WXML and AppData panels each register their channels once per
+// window) is shared with dimina-electron-runtime's bridge router; see
+// @dimina-kit/electron-deck/main's ipc-mux.ts for the mux itself.
+
 /**
  * Tiny fluent helper that wraps every `ipcMain.handle` / `ipcMain.on` with a
  * matching removeHandler/removeListener registered into an internal registry.
  *
- * Each `register*Ipc(ctx)` returns one of these as a Disposable so the
+ * Each `register*Ipc(...)` returns one of these as a Disposable so the
  * workbench-level registry can dispose all built-in handlers in one shot.
  *
- * If a {@link SenderPolicy} is provided, every incoming invocation is gated:
- * - `handle`: rejected senders cause the invoke promise to reject with
- *   `Error('IPC sender rejected for channel <channel>')`.
- * - `on`: rejected senders are silently dropped (the original listener is
- *   never called).
- * In both cases a single `console.warn` is emitted with the channel name
- * and a short sender summary. Without a policy the wrapper is a no-op,
- * preserving backwards compatibility for unit tests and callers that
- * opted out.
+ * The constructor takes either a {@link SenderPolicy} (trust only: is this
+ * sender allowed?) or an {@link IpcContextSource} (trust plus ownership: which
+ * window context does this sender belong to?). With either, every incoming
+ * invocation is gated:
+ * - `handle` / `handleRouted`: rejected senders cause the invoke promise to
+ *   reject with `Error('IPC sender rejected for channel <channel>')`.
+ * - `on` / `onRouted`: rejected senders are silently dropped (the original
+ *   listener is never called).
+ * - `handleSync` / `handleSyncRouted`: rejected senders get a structured
+ *   `{ ok: false, code: 'EREJECTED', … }` returnValue, because sendSync blocks
+ *   the renderer until one is set.
+ * In every case a single `console.warn` is emitted with the channel name and a
+ * short sender summary. With no policy — or a source that declares itself
+ * `ungated` — the wrapper is a pass-through, preserving backwards
+ * compatibility for unit tests and callers that opted out.
+ *
+ * The `*Routed` variants hand the owning context to the handler as its first
+ * argument. `TCtx` is `never` unless the registry was built from a source, so
+ * they are unusable (and unreachable) on a policy-only registry.
  */
-export class IpcRegistry implements Disposable {
+export class IpcRegistry<TCtx = never> implements Disposable {
   // Every cleanup is a synchronous ipcMain.removeHandler/removeListener call,
   // so dispose() can (and must) run them all before returning: callers
   // `dispose()` without awaiting and rely on every channel being unregistered
@@ -95,53 +116,95 @@ export class IpcRegistry implements Disposable {
   // live until a later microtask.
   private cleanups: Array<() => void> = []
   private _disposed = false
+  private readonly policy: SenderPolicy | null
+  private readonly source: IpcContextSource<TCtx> | null
+  /** False reproduces the policy-less pass-through exactly: no main-frame
+   * check, and a synchronous handler keeps its synchronous return value. */
+  private readonly gated: boolean
 
-  constructor(private policy?: SenderPolicy) {}
+  constructor(policyOrSource?: SenderPolicy | IpcContextSource<TCtx>) {
+    const isPolicy = typeof policyOrSource === 'function'
+    this.policy = isPolicy ? policyOrSource : null
+    this.source = policyOrSource != null && !isPolicy ? policyOrSource : null
+    this.gated = this.policy != null || (this.source != null && !this.source.ungated)
+  }
 
-  handle(channel: string, fn: HandleFn): this {
-    const policy = this.policy
+  /** Trust gate and owner resolution for one incoming message. */
+  private admit(event: IpcMainEvent | IpcMainInvokeEvent): TCtx | typeof REJECT {
+    const source = this.source
+    if (source) {
+      // An ungated source always claims the sender, so the frame check — part
+      // of the trust gate, not of ownership — stays off with it.
+      if (source.ungated) return source.resolve(event.sender) as TCtx
+      if (!isMainFrameIpcSender(event)) return REJECT
+      const ctx = source.resolve(event.sender)
+      return ctx == null ? REJECT : ctx
+    }
+    // A bare policy answers trust only, so the accepted branch carries no
+    // context; `TCtx` is `never` in that mode, so no handler can observe it.
+    if (!this.policy) return undefined as TCtx
+    return this.policy(event.sender) && isMainFrameIpcSender(event)
+      ? (undefined as TCtx)
+      : REJECT
+  }
+
+  private warnRejected(channel: string, sender: WebContents): void {
+    console.warn(`[ipc] sender rejected for channel '${channel}' (${summarizeSender(sender)})`)
+  }
+
+  private addInvokeHandler(
+    channel: string,
+    invoke: (ctx: TCtx, event: IpcMainInvokeEvent, args: unknown[]) => unknown,
+  ): this {
     // The gate is `async` so a rejected sender surfaces as a *rejected
     // promise* (the invoke-result contract) rather than a synchronous throw —
     // synchronous throws can escape callers that wrap the result in
     // `Promise.resolve(...)` instead of `await`-ing it directly.
-    const guarded: HandleFn = policy
+    const guarded: HandleFn = this.gated
       ? async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
-          const sender = event.sender
-          if (!policy(sender) || !isMainFrameIpcSender(event)) {
-            console.warn(
-              `[ipc] sender rejected for channel '${channel}' (${summarizeSender(sender)})`,
-            )
+          const ctx = this.admit(event)
+          if (ctx === REJECT) {
+            this.warnRejected(channel, event.sender)
             throw new Error(`IPC sender rejected for channel ${channel}`)
           }
-          return (fn as (e: IpcMainInvokeEvent, ...a: unknown[]) => unknown)(event, ...args)
+          return invoke(ctx, event, args)
         }
-      : fn
-    ipcMain.handle(channel, guarded)
-    this.cleanups.push(() => ipcMain.removeHandler(channel))
+      : (event: IpcMainInvokeEvent, ...args: unknown[]) =>
+          invoke(this.admit(event) as TCtx, event, args)
+    this.cleanups.push(addMuxedInvokeHandler(ipcMain, channel, {
+      claims: (event) => this.admit(event) !== REJECT,
+      handle: guarded,
+    }))
     return this
   }
 
-  /**
-   * Register a SYNCHRONOUS `ipcRenderer.sendSync` handler. Unlike {@link on}
-   * (fire-and-forget), the renderer is blocked until we set `event.returnValue`,
-   * so `fn` MUST be synchronous and return the value to hand back. The sender
-   * policy gates it like {@link handle}; a rejected sender or a thrown error
-   * yields a structured `{ ok: false, code, message }` returnValue instead of
-   * the silent drop `on` uses, so the blocked renderer always gets an answer.
-   */
-  handleSync(channel: string, fn: (event: IpcMainEvent, ...args: unknown[]) => unknown): this {
-    const policy = this.policy
+  handle(channel: string, fn: HandleFn): this {
+    const raw = fn as (e: IpcMainInvokeEvent, ...a: unknown[]) => unknown
+    return this.addInvokeHandler(channel, (_ctx, event, args) => raw(event, ...args))
+  }
+
+  /** {@link handle} answered by the context that owns the calling sender. */
+  handleRouted(
+    channel: string,
+    fn: (ctx: TCtx, event: IpcMainInvokeEvent, ...args: unknown[]) => unknown,
+  ): this {
+    return this.addInvokeHandler(channel, (ctx, event, args) => fn(ctx, event, ...args))
+  }
+
+  private addSyncHandler(
+    channel: string,
+    invoke: (ctx: TCtx, event: IpcMainEvent, args: unknown[]) => unknown,
+  ): this {
     const listener = (event: IpcMainEvent, ...args: unknown[]) => {
       const syncEvent = event as IpcMainEvent & { returnValue: unknown }
-      // Everything — including the policy check — runs inside the try so EVERY
-      // path sets `event.returnValue`. sendSync blocks the renderer until it is
+      // Everything — including the gate — runs inside the try so EVERY path
+      // sets `event.returnValue`. sendSync blocks the renderer until it is
       // set, so an unset value (e.g. a throwing policy fn) would hang the
       // renderer forever; the catch guarantees a sentinel instead.
       try {
-        if (policy && (!policy(event.sender) || !isMainFrameIpcSender(event))) {
-          console.warn(
-            `[ipc] sender rejected for channel '${channel}' (${summarizeSender(event.sender)})`,
-          )
+        const ctx = this.admit(event)
+        if (ctx === REJECT) {
+          this.warnRejected(channel, event.sender)
           syncEvent.returnValue = {
             ok: false,
             code: 'EREJECTED',
@@ -149,7 +212,7 @@ export class IpcRegistry implements Disposable {
           }
           return
         }
-        syncEvent.returnValue = fn(event, ...args)
+        syncEvent.returnValue = invoke(ctx, event, args)
       } catch (err) {
         reportListenerError(channel, err)
         const code = (err as NodeJS.ErrnoException)?.code
@@ -165,12 +228,30 @@ export class IpcRegistry implements Disposable {
     return this
   }
 
-  on(channel: string, fn: ListenerFn): this {
-    const policy = this.policy
-    const raw = fn as (e: IpcMainEvent, ...a: unknown[]) => unknown
-    const safeInvoke = (event: IpcMainEvent, args: unknown[]) => {
+  /**
+   * Register a SYNCHRONOUS `ipcRenderer.sendSync` handler. Unlike {@link on}
+   * (fire-and-forget), the renderer is blocked until we set `event.returnValue`,
+   * so `fn` MUST be synchronous and return the value to hand back.
+   */
+  handleSync(channel: string, fn: (event: IpcMainEvent, ...args: unknown[]) => unknown): this {
+    return this.addSyncHandler(channel, (_ctx, event, args) => fn(event, ...args))
+  }
+
+  /** {@link handleSync} answered by the context that owns the calling sender. */
+  handleSyncRouted(
+    channel: string,
+    fn: (ctx: TCtx, event: IpcMainEvent, ...args: unknown[]) => unknown,
+  ): this {
+    return this.addSyncHandler(channel, (ctx, event, args) => fn(ctx, event, ...args))
+  }
+
+  private addListener(
+    channel: string,
+    invoke: (ctx: TCtx, event: IpcMainEvent, args: unknown[]) => unknown,
+  ): this {
+    const safeInvoke = (ctx: TCtx, event: IpcMainEvent, args: unknown[]) => {
       try {
-        const ret = raw(event, ...args)
+        const ret = invoke(ctx, event, args)
         if (isThenable(ret)) {
           // Async listeners would otherwise leak rejections into Electron's
           // event loop as `UnhandledPromiseRejection`. Funnel them into the
@@ -181,21 +262,33 @@ export class IpcRegistry implements Disposable {
         reportListenerError(channel, err)
       }
     }
-    const guarded: ListenerFn = policy
+    const guarded: ListenerFn = this.gated
       ? (event: IpcMainEvent, ...args: unknown[]) => {
-          const sender = event.sender
-          if (!policy(sender) || !isMainFrameIpcSender(event)) {
-            console.warn(
-              `[ipc] sender rejected for channel '${channel}' (${summarizeSender(sender)})`,
-            )
+          const ctx = this.admit(event)
+          if (ctx === REJECT) {
+            this.warnRejected(channel, event.sender)
             return
           }
-          safeInvoke(event, args)
+          safeInvoke(ctx, event, args)
         }
-      : (event: IpcMainEvent, ...args: unknown[]) => safeInvoke(event, args)
+      : (event: IpcMainEvent, ...args: unknown[]) =>
+          safeInvoke(this.admit(event) as TCtx, event, args)
     ipcMain.on(channel, guarded)
     this.cleanups.push(() => ipcMain.removeListener(channel, guarded))
     return this
+  }
+
+  on(channel: string, fn: ListenerFn): this {
+    const raw = fn as (e: IpcMainEvent, ...a: unknown[]) => unknown
+    return this.addListener(channel, (_ctx, event, args) => raw(event, ...args))
+  }
+
+  /** {@link on} answered by the context that owns the calling sender. */
+  onRouted(
+    channel: string,
+    fn: (ctx: TCtx, event: IpcMainEvent, ...args: unknown[]) => unknown,
+  ): this {
+    return this.addListener(channel, (ctx, event, args) => fn(ctx, event, ...args))
   }
 
   dispose(): Promise<void> {

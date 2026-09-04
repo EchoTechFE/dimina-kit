@@ -44,7 +44,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 // ── Boot / shutdown ──────────────────────────────────────────────────────
 
-interface AppHandle { app: ElectronApplication; win: PwPage }
+interface AppHandle { app: ElectronApplication; win: PwPage; workbench: PwPage }
 
 async function bootApp(): Promise<AppHandle> {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
@@ -87,9 +87,9 @@ async function bootApp(): Promise<AppHandle> {
     100,
   )
 
-  await openProjectInUI(win, DEMO_APP_DIR, { waitMs: 30000 })
+  const workbench = await openProjectInUI(app, DEMO_APP_DIR, { waitMs: 30000 })
 
-  return { app, win }
+  return { app, win, workbench }
 }
 
 // ── Render-guest text probe (main-process evaluation) ────────────────────
@@ -220,9 +220,9 @@ async function pollGetDocumentRoot(
  * next cycle (or following spec) opens against a clean, fully-compiled output.
  * Best-effort — never throws.
  */
-async function settleAfterRestore(win: PwPage): Promise<void> {
+async function settleAfterRestore(workbench: PwPage): Promise<void> {
   const compileStatus = (): Promise<'done' | 'building' | 'unknown'> =>
-    win.evaluate(() => {
+    workbench.evaluate(() => {
       const els = document.querySelectorAll('[class*="truncate"]')
       for (const el of els) {
         const t = el.textContent || ''
@@ -283,7 +283,7 @@ test.describe('native-host Elements panel stays pointed at the render guest afte
   })
 
   test('DOM.getDocument returns the render guest document across hot-reload respawn cycles', async () => {
-    const { app, win } = handle!
+    const { app, workbench } = handle!
 
     const wxmlPath = path.join(DEMO_APP_DIR, 'pages', 'index', 'index.wxml')
     const original = fs.readFileSync(wxmlPath, 'utf8')
@@ -326,7 +326,7 @@ test.describe('native-host Elements panel stays pointed at the render guest afte
 
       try {
         // Trigger hot reload via the same write path Monaco uses.
-        await ipcInvoke(win, ProjectFsChannel.WriteFile, wxmlPath, mutated)
+        await ipcInvoke(workbench, ProjectFsChannel.WriteFile, wxmlPath, mutated)
 
         // Wait for the render guest to respawn and show the new text — this is the
         // signal that the DeviceShell has been replaced with a new WebContents.
@@ -371,7 +371,7 @@ test.describe('native-host Elements panel stays pointed at the render guest afte
         // Restore the original source so the next cycle (or following spec) starts
         // clean. Use sync write to guarantee the file is on disk before settle.
         fs.writeFileSync(wxmlPath, original, 'utf8')
-        await settleAfterRestore(win)
+        await settleAfterRestore(workbench)
       }
     }
   })

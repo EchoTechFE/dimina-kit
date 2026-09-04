@@ -1,4 +1,4 @@
-import type { CompileConfig, ProjectType } from '@/shared/types'
+import type { CompileConfig, Project, ProjectType } from '@/shared/types'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels'
 import {
   SimulatorChannel,
@@ -217,14 +217,13 @@ export function onWindowOpenProject(
 }
 
 /**
- * Report the current top-level screen to main so its window-close decision
- * knows whether to return to the project list or quit the app. Call on every
- * screen change, including entering a project (BEFORE the open resolves — a
- * failed open then leaves main's mirror = 'project', so closing returns to the
- * list instead of quitting). Fire-and-forget.
+ * Ask main to open `project` in its own standalone workbench window
+ * (`entries/workbench/`), replacing the old in-place `page: 'project'` switch
+ * inside the list window. Fire-and-forget from the caller's perspective — the
+ * new window reports its own screen state once it boots.
  */
-export function notifyWindowScreen(screen: 'list' | 'project'): void {
-  void invoke<void>(WindowChannel.ScreenState, screen)
+export function openProjectWindow(project: Project): Promise<void> {
+  return invoke<void>(WindowChannel.OpenProjectWindow, project)
 }
 
 /**

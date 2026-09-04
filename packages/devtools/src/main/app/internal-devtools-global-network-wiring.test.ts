@@ -1,11 +1,16 @@
 /**
- * `createDevtoolsRuntime` must wire `context.internalDevtoolsWindow`'s
+ * A workbench window's assembly must wire its `context.internalDevtoolsWindow`
  * `onHostChanged` subscription to `context.networkForward.setGlobalDevtoolsHost`
  * so the independent floating internal-DevTools window (once its own
  * front-end host view exists) receives the full, unfiltered CDP Network
  * mirror — see network-forward/index.ts's `setGlobalDevtoolsHost(wc)` (already
  * implemented+tested) and internal-devtools-window/index.ts's `open()` (which
  * builds the host view attached via `target.webContents.setDevToolsWebContents`).
+ *
+ * Both halves are per-window: each workbench window debugs its own renderer and
+ * forwards its own project's network traffic. The project-list window owns no
+ * simulator and therefore no forwarder at all, so this whole contract lives on
+ * a workbench window's context.
  *
  * The subscription must be attached AFTER `context.networkForward` is
  * assigned: `internalDevtoolsWindow.onHostChanged((hostWc) => {
@@ -21,13 +26,13 @@
  * `context.networkForward` exists at open() time.
  *
  * `context.networkForward` is only assembled when `context.bridge?.isNativeHost()`
- * is true (see app.ts around the `createNetworkForwarder` call). EMPIRICAL
- * FINDING (verified by actually running `createDevtoolsRuntime({})` in this
- * suite, not assumed): on this branch the default boot path's bridge IS a
- * native-host bridge (native-host is the only runtime left — see
- * native-only-decommission history), so `context.networkForward` is ALWAYS
- * assembled (truthy) for `createDevtoolsRuntime({})`, no special adapter
- * config needed. This suite therefore asserts the wiring's real
+ * is true (see window-runtime-services.ts around the `createNetworkForwarder`
+ * call). EMPIRICAL FINDING (verified by actually opening a workbench window in
+ * this suite, not assumed): the default boot path's bridge IS a native-host
+ * bridge (native-host is the only runtime left — see native-only-decommission
+ * history), so `context.networkForward` is ALWAYS assembled (truthy) for a
+ * workbench window opened out of `createDevtoolsRuntime({})`, no special
+ * adapter config needed. This suite therefore asserts the wiring's real
  * value-passing end-to-end against the REAL `NetworkForwarder` instance
  * (spied via `vi.spyOn`, not a hand-rolled stub — replacing
  * `context.networkForward` with an incomplete fake object breaks unrelated
@@ -238,18 +243,33 @@ interface NetworkForwardWiringContext {
   }
 }
 
+type Instance = Awaited<ReturnType<typeof createDevtoolsRuntime>>
+
+/**
+ * Boots the app and opens one workbench window, returning its context — the
+ * only context that owns a simulator, and therefore a network forwarder.
+ */
+async function openWorkbenchContext(
+  instance: Instance,
+): Promise<NetworkForwardWiringContext> {
+  await instance.openProjectWindow({ path: '/tmp/projNetworkForward' })
+  const [projectWindow] = instance.projectWindows()
+  expect(projectWindow, 'openProjectWindow must publish the window it opened').toBeTruthy()
+  return projectWindow!.context as unknown as NetworkForwardWiringContext
+}
+
 describe('main-process wiring: internalDevtoolsWindow host changes drive networkForward.setGlobalDevtoolsHost', () => {
-  it('context.networkForward IS assembled under the default createDevtoolsRuntime({}) boot (empirical baseline for the tests below)', async () => {
+  it('a workbench window\'s context.networkForward IS assembled under the default boot (empirical baseline for the tests below)', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
-      const ctx = instance.context as unknown as NetworkForwardWiringContext
+      const ctx = await openWorkbenchContext(instance)
 
-      // Empirical finding this suite locks in (verified by actually running
-      // createDevtoolsRuntime({}), not assumed): on this branch the default
-      // bridge is native-host, so context.networkForward is truthy without
-      // any special adapter config. If this assertion starts failing, the
-      // default assembly path changed — the two tests below (which spy on
-      // the REAL networkForward instance) would need re-checking.
+      // Empirical finding this suite locks in (verified by actually opening a
+      // workbench window, not assumed): the default bridge is native-host, so
+      // the window's context.networkForward is truthy without any special
+      // adapter config. If this assertion starts failing, the window assembly
+      // path changed — the two tests below (which spy on the REAL
+      // networkForward instance) would need re-checking.
       expect(ctx.networkForward).toBeTruthy()
       expect(typeof ctx.networkForward!.setGlobalDevtoolsHost).toBe('function')
     } finally {
@@ -260,14 +280,14 @@ describe('main-process wiring: internalDevtoolsWindow host changes drive network
   it('context.internalDevtoolsWindow.open() does not throw regardless of whether networkForward is wired up', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
-      const ctx = instance.context as unknown as NetworkForwardWiringContext
+      const ctx = await openWorkbenchContext(instance)
 
       // Guards the optional-chaining wiring: `context.networkForward?.setGlobalDevtoolsHost(...)`
-      // must not throw. On this branch's default boot networkForward is
-      // actually assembled (see the baseline test above), so this mainly
-      // guards against the wiring itself throwing — a real undefined case
-      // would additionally need a boot path without native-host, which was
-      // not found under `createDevtoolsRuntime({})`.
+      // must not throw. On a workbench window networkForward is actually
+      // assembled (see the baseline test above), so this mainly guards against
+      // the wiring itself throwing — a real undefined case would additionally
+      // need a boot path without native-host, which was not found under
+      // `createDevtoolsRuntime({})`.
       expect(() => ctx.internalDevtoolsWindow!.open()).not.toThrow()
     } finally {
       await instance.dispose()
@@ -277,11 +297,11 @@ describe('main-process wiring: internalDevtoolsWindow host changes drive network
   it('forwards the fresh host webContents to the REAL networkForward.setGlobalDevtoolsHost on open()', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
-      const ctx = instance.context as unknown as NetworkForwardWiringContext
-      // Spy on the method of the REAL NetworkForwarder assembled by boot —
-      // not a hand-rolled stub swapped into context.networkForward, which
-      // would break unrelated teardown code (disposeProjectViews expects the
-      // full NetworkForwarder shape, e.g. detachSimulator).
+      const ctx = await openWorkbenchContext(instance)
+      // Spy on the method of the REAL NetworkForwarder assembled with the
+      // window — not a hand-rolled stub swapped into context.networkForward,
+      // which would break unrelated teardown code (disposeProjectViews expects
+      // the full NetworkForwarder shape, e.g. detachSimulator).
       const spy = vi.spyOn(ctx.networkForward!, 'setGlobalDevtoolsHost')
 
       ctx.internalDevtoolsWindow!.open()
@@ -297,7 +317,7 @@ describe('main-process wiring: internalDevtoolsWindow host changes drive network
   it('forwards null to the REAL networkForward.setGlobalDevtoolsHost when the internal devtools window closes', async () => {
     const instance = await createDevtoolsRuntime({})
     try {
-      const ctx = instance.context as unknown as NetworkForwardWiringContext
+      const ctx = await openWorkbenchContext(instance)
       const spy = vi.spyOn(ctx.networkForward!, 'setGlobalDevtoolsHost')
 
       ctx.internalDevtoolsWindow!.open()

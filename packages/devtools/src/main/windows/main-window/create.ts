@@ -12,11 +12,31 @@ export interface WindowOptions {
   minHeight?: number
   indexHtml: string
   /**
+   * Query string appended to the loaded `file://` URL. This is how a window
+   * receives its own bootstrap identity (the workbench window reads the project
+   * it belongs to from here), so the renderer entry knows what to mount without
+   * a round-trip. Survives navigation-hardening: that check matches on the
+   * `file://` prefix only and ignores the query (see navigation-hardening.ts).
+   */
+  query?: Record<string, string>
+  /**
    * Auto-show the window on `ready-to-show` in non-test envs. Defaults to
    * `true`. `false` lets a login-gating host keep the window hidden and call
    * `show()` itself. The test env always uses `showInactive()` regardless.
    */
   autoShow?: boolean
+}
+
+/**
+ * Shows `win` the way the current env expects: `showInactive()` in test env
+ * so e2e windows don't steal focus, `show()` otherwise. Shared by this
+ * module's own `ready-to-show` handler and by the workbench window manager's
+ * reveal-after-hook-and-paint gate (`workbench-window.ts`), so the two reveal
+ * paths can never pick different show methods.
+ */
+export function revealMainWindow(win: BrowserWindow): void {
+  if (process.env.NODE_ENV === 'test') win.showInactive()
+  else win.show()
 }
 
 export function createMainWindow(opts: WindowOptions): BrowserWindow {
@@ -42,14 +62,10 @@ export function createMainWindow(opts: WindowOptions): BrowserWindow {
     const isTest = process.env.NODE_ENV === 'test'
     // Visibility is governed by `autoShow` in BOTH envs. A login-gating host
     // opts out via `autoShow: false` and reveals the window itself once auth
-    // passes — don't flash an un-authed window. The env only chooses HOW to
-    // show: test uses showInactive() so e2e windows don't steal focus, prod
-    // uses show(). The framework must never force-show when the host opted
-    // out, in test env either (that would fight the host's own reveal handler).
-    if (opts.autoShow !== false) {
-      if (isTest) mainWindow.showInactive()
-      else mainWindow.show()
-    }
+    // passes — don't flash an un-authed window. The framework must never
+    // force-show when the host opted out, in test env either (that would
+    // fight the host's own reveal handler).
+    if (opts.autoShow !== false) revealMainWindow(mainWindow)
     // Don't auto-open a detached DevTools for the devtools UI shell itself —
     // it's noise for normal use (the mini-app's Console lives in the embedded
     // right-panel DevTools, not here). Opt in via env for debugging the shell.
@@ -64,7 +80,7 @@ export function createMainWindow(opts: WindowOptions): BrowserWindow {
   // route every popup through the OS browser. See navigation-hardening.ts.
   applyNavigationHardening(mainWindow.webContents, rendererDir)
 
-  mainWindow.loadFile(opts.indexHtml)
+  mainWindow.loadFile(opts.indexHtml, opts.query ? { query: opts.query } : undefined)
 
   const container = new View()
   const mainWebView = mainWindow.contentView as WebContentsView

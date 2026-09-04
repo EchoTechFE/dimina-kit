@@ -223,7 +223,7 @@ function makeCtx(apiNamespaces: string[] = []): { ctx: WorkbenchContext; simulat
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
-    windows: { mainWindow: { webContents: simulatorWc } },
+    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
     workspace: { getSession: () => undefined },
     connections: createConnectionRegistry(),
     apiNamespaces,

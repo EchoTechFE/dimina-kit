@@ -188,7 +188,7 @@ async function bootApp(projectDir: string, userDataDir: string): Promise<AppHand
   })
   const win = await findMainWindow(app)
   await win.waitForLoadState('domcontentloaded')
-  await openProjectInUI(win, projectDir, { waitMs: 20_000 })
+  await openProjectInUI(app, projectDir, { waitMs: 20_000 })
   await waitForSimulatorWebview(app)
   await pollUntil(
     () => evalInWebContentsByUrl<boolean>(
@@ -230,7 +230,7 @@ test.describe('DevTools runs the upstream WebSocket contract page', () => {
 
   test.afterAll(async () => {
     if (handle) {
-      await closeProject(handle.win).catch(() => {})
+      await closeProject(handle.app).catch(() => {})
       await handle.app.close().catch(() => {})
     }
     if (wss) {

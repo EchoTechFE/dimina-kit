@@ -35,6 +35,7 @@ export default defineConfig({
       external: ['electron', 'path', 'fs', 'os', 'url', 'child_process'],
       input: {
         index: resolve(rendererRoot, 'entries/main/index.html'),
+        workbench: resolve(rendererRoot, 'entries/workbench/index.html'),
         popover: resolve(rendererRoot, 'entries/popover/index.html'),
         settings: resolve(rendererRoot, 'entries/settings/index.html'),
         tooltip: resolve(rendererRoot, 'entries/tooltip/index.html'),

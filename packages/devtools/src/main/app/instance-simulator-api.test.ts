@@ -248,10 +248,19 @@ async function setupInstance(): Promise<AppInstance & WithRegisterSimulatorApi> 
   return instance as AppInstance & WithRegisterSimulatorApi
 }
 
-/** The per-context simulator registry the instance must register into. */
-function ctxRegistry(instance: AppInstance): SimulatorApiRegistry {
-  const reg = (instance.context as unknown as { simulatorApis?: SimulatorApiRegistry }).simulatorApis
-  expect(reg, 'ctx.simulatorApis must exist (Requirement A)').toBeDefined()
+/**
+ * Only a workbench (project) window ever runs a simulator, so
+ * `ctx.simulatorApis` lives on a `ProjectWindow`'s context — never on the
+ * launcher's `instance.context`. Opens a project window at a fresh path (the
+ * window manager keys windows by path, so reusing one across calls in the
+ * same test would return the existing window instead of a new one) and
+ * returns its registry.
+ */
+async function openWindowRegistry(instance: AppInstance, path: string): Promise<SimulatorApiRegistry> {
+  await instance.openProjectWindow({ path })
+  const pw = instance.projectWindows().at(-1)!
+  const reg = (pw.context as unknown as { simulatorApis?: SimulatorApiRegistry }).simulatorApis
+  expect(reg, 'ctx.simulatorApis must exist on a project window context (Requirement A)').toBeDefined()
   return reg!
 }
 
@@ -262,15 +271,16 @@ describe('Requirement B: instance.registerSimulatorApi', () => {
     await instance.dispose()
   })
 
-  it('registered handler is visible in THIS context\'s registry (list + invoke)', async () => {
+  it('an api registered before a workbench window opens is replayed into that window\'s registry (list + invoke)', async () => {
     const instance = await setupInstance()
     const handler = vi.fn((p: unknown) => ({ echoed: p }))
 
     instance.registerSimulatorApi('host.api', handler)
 
-    const reg = ctxRegistry(instance)
-    // Catches: registerSimulatorApi was a no-op, or wrote somewhere other
-    // than ctx.simulatorApis (e.g. the deleted process-global).
+    // Catches: registerSimulatorApi only reaching windows that already
+    // existed, or writing nowhere a later window can see (e.g. the deleted
+    // process-global).
+    const reg = await openWindowRegistry(instance, '/tmp/dimina-test-replay-project')
     expect(reg.list()).toContain('host.api')
 
     const result = await reg.invoke('host.api', { v: 1 })
@@ -280,106 +290,87 @@ describe('Requirement B: instance.registerSimulatorApi', () => {
     await instance.dispose()
   })
 
-  it('returns a Disposable; disposing it removes the registration', async () => {
+  it('a window already open when the api is registered sees it immediately', async () => {
     const instance = await setupInstance()
+    const reg = await openWindowRegistry(instance, '/tmp/dimina-test-live-project')
+    const handler = vi.fn(() => 'live')
 
-    const disposable = instance.registerSimulatorApi('temp.api', () => 'x')
-    // Catches: registerSimulatorApi returning void / a bare disposer fn.
-    expect(typeof disposable?.dispose, 'registerSimulatorApi must return a Disposable').toBe('function')
+    // Catches: registration only replaying into FUTURE windows and skipping
+    // ones already open.
+    instance.registerSimulatorApi('live.api', handler)
 
-    const reg = ctxRegistry(instance)
-    expect(reg.list()).toContain('temp.api')
-
-    await disposable.dispose()
-
-    // Catches: the returned Disposable is a no-op.
-    expect(reg.list()).not.toContain('temp.api')
-    await expect(reg.invoke('temp.api', null)).rejects.toThrowError(/temp\.api/)
+    expect(reg.list()).toContain('live.api')
+    await expect(reg.invoke('live.api', null)).resolves.toBe('live')
+    expect(handler).toHaveBeenCalled()
 
     await instance.dispose()
   })
 
-  it('the registration is released when the context is disposed (it joins ctx.registry)', async () => {
+  it('returns a Disposable; disposing it removes the api from an already-open window and withholds it from windows opened afterward', async () => {
     const instance = await setupInstance()
-    const reg = ctxRegistry(instance)
 
-    // Never call the returned disposable — context dispose alone must clean up.
-    instance.registerSimulatorApi('ctx.scoped.api', () => 'y')
-    expect(reg.list()).toContain('ctx.scoped.api')
+    // The window must already be open BEFORE registration, matching the
+    // "already-open window" case above — registerSimulatorApi snapshots the
+    // currently-open windows to revoke from on dispose.
+    const regOpen = await openWindowRegistry(instance, '/tmp/dimina-test-dispose-open-project')
+
+    const disposable = instance.registerSimulatorApi('temp.api', () => 'x')
+    // Catches: registerSimulatorApi returning void / a bare disposer fn.
+    expect(typeof disposable?.dispose, 'registerSimulatorApi must return a Disposable').toBe('function')
+    expect(regOpen.list()).toContain('temp.api')
+
+    await disposable.dispose()
+
+    // Catches: dispose only clearing the host-level map and leaving the copy
+    // already replayed into a live window's registry dangling.
+    expect(regOpen.list(), 'dispose must revoke the api from a window that already had it').not.toContain('temp.api')
+    await expect(regOpen.invoke('temp.api', null)).rejects.toThrowError(/temp\.api/)
+
+    // Catches: dispose only touching already-open windows, leaving the
+    // host-level map entry (and thus the replay-on-open path) intact.
+    const regLater = await openWindowRegistry(instance, '/tmp/dimina-test-dispose-later-project')
+    expect(regLater.list(), 'a window opened after dispose must never see the api').not.toContain('temp.api')
+
+    // Idempotent: a second dispose must not throw or resurrect the registration.
+    await expect(Promise.resolve(disposable.dispose())).resolves.not.toThrow()
+    expect(regOpen.list()).not.toContain('temp.api')
 
     await instance.dispose()
+  })
 
-    // Catches: registerSimulatorApi forgot to add its disposable to
-    // ctx.registry, so context teardown leaves the handler dangling.
-    expect(
-      reg.list(),
-      'context dispose must release the registerSimulatorApi registration (it must live in ctx.registry)',
-    ).not.toContain('ctx.scoped.api')
+  it('dispose also revokes the api from windows that got it through the open-time replay', async () => {
+    const instance = await setupInstance()
+
+    // Registration first, window second: this window receives the api through
+    // the setupWindowModules replay, NOT through the list of windows live at
+    // registration time. Catches a dispose that only walks that registration-
+    // time list, leaving every later window holding a revoked api forever.
+    const disposable = instance.registerSimulatorApi('replayed.api', () => 'x')
+    const reg = await openWindowRegistry(instance, '/tmp/dimina-test-dispose-replayed-project')
+    expect(reg.list()).toContain('replayed.api')
+
+    await disposable.dispose()
+
+    expect(reg.list(), 'dispose must revoke the api from a window opened after registration').not.toContain('replayed.api')
+    await expect(reg.invoke('replayed.api', null)).rejects.toThrowError(/replayed\.api/)
+
+    await instance.dispose()
   })
 
   it('two app instances do not share simulator APIs (per-context isolation)', async () => {
     const a = await setupInstance()
     a.registerSimulatorApi('a.only', () => 'A')
+    const regA = await openWindowRegistry(a, '/tmp/dimina-test-isolation-a')
 
     const b = await setupInstance()
-
-    const regA = ctxRegistry(a)
-    const regB = ctxRegistry(b)
+    const regB = await openWindowRegistry(b, '/tmp/dimina-test-isolation-b')
 
     // The bug the old process-global caused: an API registered on one app
-    // leaking into a second app. Per-context kills it.
+    // leaking into a second app's window. Per-app-instance host map kills it.
     expect(regA.list()).toContain('a.only')
     expect(regB.list()).not.toContain('a.only')
 
     await a.dispose()
     await b.dispose()
-  })
-
-  // ── Registry-entry leak: the returned Disposable must be the registry wrapper ─
-  //
-  // `instance.registerSimulatorApi` does `ctx.registry.add(disposable)` but
-  // `DisposableRegistry.add()` RETURNS a wrapper — only disposing that wrapper
-  // splices the entry out of `registry.entries`. If the method returns the raw
-  // `disposable` instead of the wrapper, the host can dispose it (removing the
-  // API) yet the dead registry entry lingers, accumulating until the whole
-  // context is torn down. The fix must return the wrapper so a single dispose
-  // does BOTH: remove the API AND drop the registry entry.
-
-  it('disposing the returned Disposable drops its ctx.registry entry (no leak)', async () => {
-    const instance = await setupInstance()
-    const reg = ctxRegistry(instance)
-    const registry = instance.context.registry as unknown as { size: number }
-
-    // `size` is the only stable window into live registry entries — the fix
-    // adds it as a readonly getter on DisposableRegistry.
-    const baseline = registry.size
-
-    const disposable = instance.registerSimulatorApi('leak.api', () => 'z')
-
-    // Registration added exactly one live entry to ctx.registry.
-    expect(
-      registry.size,
-      'registerSimulatorApi must add exactly one entry to ctx.registry',
-    ).toBe(baseline + 1)
-
-    await disposable.dispose()
-
-    // The returned disposable is the registry wrapper, not the RAW
-    // toDisposable(disposer): disposing it splices the entry out, so size
-    // returns to baseline rather than lingering at baseline+1 as a leaked
-    // dead entry.
-    expect(
-      registry.size,
-      'disposing the returned Disposable must remove its ctx.registry entry — return the wrapper from registry.add(), not the raw disposable',
-    ).toBe(baseline)
-
-    // The dispose must ALSO release the underlying resource: the API is gone.
-    // So the single dispose does both jobs.
-    expect(
-      reg.list(),
-      'disposing the returned Disposable must also remove the simulator API',
-    ).not.toContain('leak.api')
-
-    await instance.dispose()
   })
 })

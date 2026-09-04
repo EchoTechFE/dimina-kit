@@ -28,13 +28,12 @@ import {
   DEMO_APP_DIR,
   installConsoleCollector,
   readConsoleErrors,
-  findMainWindow,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let electronApp: ElectronApplication
-let mainWindow: PwPage
+let workbench: PwPage
 
 test.beforeAll(async () => {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
@@ -48,19 +47,17 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await findMainWindow(electronApp)
-  await mainWindow.waitForLoadState('domcontentloaded')
   await installConsoleCollector(electronApp)
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) { win.setPosition(-2000, -2000); win.blur() }
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await mainWindow.waitForSelector('[data-deck-tab="storage"]', { timeout: 15000 })
+  workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await workbench.waitForSelector('[data-deck-tab="storage"]', { timeout: 15000 })
 })
 
 test.afterAll(async () => {
-  try { await closeProject(mainWindow) } catch { /* best effort */ }
+  try { await closeProject(electronApp) } catch { /* best effort */ }
   await electronApp.close()
 })
 
@@ -131,7 +128,7 @@ async function realReorderTab(
 test('debug tab reorders within its own strip on a drag-drop (real gesture)', async () => {
   // Order-INDEPENDENT: the e2e userDataDir persists the dock tree across runs, so
   // we don't assume the pristine default order — we capture whatever it is now.
-  const before = await tabOrderOfGroupOwning(mainWindow, 'storage')
+  const before = await tabOrderOfGroupOwning(workbench, 'storage')
   // The five debug panels are co-located in one group.
   expect([...before].sort()).toEqual(['appdata', 'compile', 'console', 'storage', 'wxml'])
 
@@ -139,11 +136,11 @@ test('debug tab reorders within its own strip on a drag-drop (real gesture)', as
   // last tab → it should move to the END of the strip.
   const first = before[0]
   const last = before[before.length - 1]
-  const res = await realReorderTab(mainWindow, first, last, 0.9)
+  const res = await realReorderTab(workbench, first, last, 0.9)
   expect(res.error, 'reorder gesture threw').toBeNull()
   expect(res.ok).toBe(true)
 
-  const after = await tabOrderOfGroupOwning(mainWindow, 'storage')
+  const after = await tabOrderOfGroupOwning(workbench, 'storage')
   // Same five panels, still ONE group, but the dragged tab moved to the end.
   expect([...after].sort()).toEqual([...before].sort())
   expect(after).toEqual([...before.slice(1), first])
@@ -155,7 +152,7 @@ test('a debug tab cannot be torn OUT of its group into another region', async ()
   // must be a no-op — the panel stays in the debug group; the editor group is
   // not joined/split. (Drives the GOAL-B "never leave the group" guard with real
   // geometry, complementing the jsdom seam tests.)
-  const groupsBefore = await mainWindow.evaluate(() =>
+  const groupsBefore = await workbench.evaluate(() =>
     Array.from(document.querySelectorAll('[data-deck-group]')).map((g) => ({
       id: g.getAttribute('data-deck-group'),
       // Include non-tab panels (hideTab: simulator/editor) via their body/native slot.
@@ -171,7 +168,7 @@ test('a debug tab cannot be torn OUT of its group into another region', async ()
   )
 
   // Drop 'storage' onto the center of the editor group's body.
-  await mainWindow.evaluate(async () => {
+  await workbench.evaluate(async () => {
     const tab = document.querySelector('[data-deck-tab="storage"]') as HTMLElement
     // editor has no tab (hideTab) — locate its group via the panel body.
     const editorBody = document.querySelector('[data-deck-panel-body="editor"]') as HTMLElement
@@ -196,7 +193,7 @@ test('a debug tab cannot be torn OUT of its group into another region', async ()
     await flush()
   })
 
-  const groupsAfter = await mainWindow.evaluate(() =>
+  const groupsAfter = await workbench.evaluate(() =>
     Array.from(document.querySelectorAll('[data-deck-group]')).map((g) => ({
       id: g.getAttribute('data-deck-group'),
       // Include non-tab panels (hideTab: simulator/editor) via their body/native slot.
@@ -240,20 +237,20 @@ test('a debug tab cannot be torn OUT of its group into another region', async ()
 
 test('simulator + editor render NO tab (hideTab), but their panels still exist', async () => {
   // The two structural panels draw their own chrome — no engine tab header.
-  expect(await mainWindow.locator('[data-deck-tab="simulator"]').count()).toBe(0)
-  expect(await mainWindow.locator('[data-deck-tab="editor"]').count()).toBe(0)
+  expect(await workbench.locator('[data-deck-tab="simulator"]').count()).toBe(0)
+  expect(await workbench.locator('[data-deck-tab="editor"]').count()).toBe(0)
   // …yet their bodies are still mounted (the panels render, just tabless).
-  expect(await mainWindow.locator('[data-deck-panel-body="editor"]').count()).toBeGreaterThan(0)
+  expect(await workbench.locator('[data-deck-panel-body="editor"]').count()).toBeGreaterThan(0)
   // debug tabs still have their headers.
-  expect(await mainWindow.locator('[data-deck-tab="storage"]').count()).toBe(1)
+  expect(await workbench.locator('[data-deck-tab="storage"]').count()).toBe(1)
 })
 
 test('the active debug panel body fills its full height (no dead space below)', async () => {
   // Activate a DOM debug tab so its body is the visible one, then verify the
   // panel content stretches to the body height (the #51 flex-fill regression).
-  await mainWindow.click('[data-deck-tab="storage"]')
-  await mainWindow.waitForTimeout(200)
-  const fit = await mainWindow.evaluate(() => {
+  await workbench.click('[data-deck-tab="storage"]')
+  await workbench.waitForTimeout(200)
+  const fit = await workbench.evaluate(() => {
     const body = document.querySelector('[data-deck-panel-body="storage"]') as HTMLElement | null
     if (!body) return null
     const child = body.firstElementChild as HTMLElement | null

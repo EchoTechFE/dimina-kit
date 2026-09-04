@@ -16,6 +16,7 @@ import {
   getClient,
   getNativeOverviewProvider,
   getTargetState,
+  type NativeOverviewProvider,
   type TargetKind,
 } from '../target-manager.js'
 
@@ -182,8 +183,21 @@ export function registerContextTools(server: McpServer): void {
       }
 
       let result
+      // Snapshot the provider AND the console/network summaries in the same
+      // tick as `getClient`: the provider reads the active window live off
+      // `resolveActiveOwner()`, and the buffers are process-wide and get
+      // cleared and re-owned the moment a reconnect lands on another window.
+      // Both awaits below (the CDP probe, the native provider) are windows the
+      // user can switch projects during; reading either after them would mix
+      // this window's probe with whichever window is active by then.
+      let nativeOverviewProvider: NativeOverviewProvider | null
+      let consoleSum: ConsoleSummary
+      let networkSum: NetworkSummary
       try {
         const c = getClient('simulator')
+        nativeOverviewProvider = getNativeOverviewProvider()
+        consoleSum = summarizeConsole('simulator')
+        networkSum = summarizeNetwork('simulator')
         result = await c.Runtime.evaluate({ expression: SIMULATOR_PROBE_EXPR, returnByValue: true })
       } catch {
         const payload = buildDisconnectedOverview('simulator', [...hints, 'simulator disconnected before overview could finish'])
@@ -206,7 +220,6 @@ export function registerContextTools(server: McpServer): void {
         }
       }
 
-      const nativeOverviewProvider = getNativeOverviewProvider()
       if (nativeOverviewProvider) {
         try {
           const nativeOverview = await nativeOverviewProvider()
@@ -224,9 +237,6 @@ export function registerContextTools(server: McpServer): void {
       else if (!probe.bridgeReady) hints.push('simulator bridge present but storage snapshot not ready')
       if (probe.pageStackDepth === 0) hints.push('no active miniapp page (empty page stack)')
       if (probe.storageCount > MAX_KEYS) hints.push(`storageKeys truncated to first ${MAX_KEYS} of ${probe.storageCount}`)
-
-      const consoleSum = summarizeConsole('simulator')
-      const networkSum = summarizeNetwork('simulator')
 
       const payload = {
         connected: true,
@@ -265,8 +275,15 @@ export function registerContextTools(server: McpServer): void {
       }
 
       let result
+      // Same snapshot rule as the simulator overview: the buffers belong to
+      // the connection `getClient` just vouched for, so they are read before
+      // the probe's await, not after it.
+      let consoleSum: ConsoleSummary
+      let networkSum: NetworkSummary
       try {
         const c = getClient('workbench')
+        consoleSum = summarizeConsole('workbench')
+        networkSum = summarizeNetwork('workbench')
         result = await c.Runtime.evaluate({ expression: WORKBENCH_PROBE_EXPR, returnByValue: true })
       } catch {
         const payload = buildDisconnectedOverview('workbench', [...hints, 'workbench disconnected before overview could finish'])
@@ -288,9 +305,6 @@ export function registerContextTools(server: McpServer): void {
           isError: true,
         }
       }
-
-      const consoleSum = summarizeConsole('workbench')
-      const networkSum = summarizeNetwork('workbench')
 
       const payload = {
         connected: true,

@@ -46,7 +46,7 @@ import { AutomationChannel, SimulatorWxmlChannel } from '../src/shared/ipc-chann
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 
-interface AppHandle { app: ElectronApplication; win: PwPage }
+interface AppHandle { app: ElectronApplication; win: PwPage; workbench: PwPage }
 
 interface WxmlNode { tagName?: string; children?: WxmlNode[] }
 
@@ -89,7 +89,7 @@ async function bootApp(): Promise<AppHandle> {
     100,
   )
 
-  await openProjectInUI(win, FIXTURE_DIR, { waitMs: 20000 })
+  const workbench = await openProjectInUI(app, FIXTURE_DIR, { waitMs: 20000 })
   await waitForSimulatorWebview(app)
 
   // Wait for at least one render guest (__frame__.html) to exist — the
@@ -108,18 +108,18 @@ async function bootApp(): Promise<AppHandle> {
   // Wait for the WXML tree to mount — this is the readiness signal the WXML panel
   // uses and indicates the render guest is fully set up.
   await pollUntil(
-    () => ipcInvoke<WxmlNode | null>(win, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
+    () => ipcInvoke<WxmlNode | null>(workbench, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
     (t) => !!t && typeof (t as WxmlNode).tagName === 'string',
     30000,
     400,
   )
 
-  return { app, win }
+  return { app, win, workbench }
 }
 
 async function shutdownApp(handle: AppHandle | undefined): Promise<void> {
   if (!handle) return
-  await closeProject(handle.win).catch(() => {})
+  await closeProject(handle.app).catch(() => {})
   await handle.app.close().catch(() => {})
 }
 

@@ -72,9 +72,9 @@ test.describe('fs-core disk↔editor sync (embedded workbench)', () => {
   // the first test pays the attach+ready wait.
   useSharedProject(test, DEMO_APP_DIR, { openOptions: { waitMs: 60_000 }, openTimeoutMs: 120_000 })
   let workbenchReady = false
-  test.beforeEach(async ({ mainWindow, electronApp }) => {
+  test.beforeEach(async ({ workbench, electronApp }) => {
     if (workbenchReady) return
-    const status = await attachWorkbenchAndWaitReady(mainWindow, electronApp)
+    const status = await attachWorkbenchAndWaitReady(workbench, electronApp)
     expect(status, 'workbench must reach a ready status before driving the sync engine').toMatch(
       /workbench-ready|exthost-alive/,
     )

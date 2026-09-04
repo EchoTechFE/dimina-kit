@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs from 'node:fs/promises'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 
@@ -331,4 +332,135 @@ describe('symlink containment on /__contrib', () => {
     expect(pkgRes.status).toBe(200)
     expect(await pkgRes.text()).toContain('"name":"ext"')
   })
+})
+
+describe('503 on new requests once the window has begun closing', () => {
+  it('serves normally before close() and refuses new requests with 503 once closing starts', async () => {
+    // getProjectRoot is read on every /__fs request, including the sanity GET
+    // below — so the "being served" signal has to single out the SECOND call
+    // (the write), or it fires early and close() races ahead of the write
+    // ever being tracked as in flight.
+    let calls = 0
+    let serving: () => void = () => {}
+    const beingServed = new Promise<void>((resolve) => { serving = resolve })
+    server = await startWorkbenchCoiServer({
+      rootDir,
+      getProjectRoot: () => { calls += 1; if (calls === 2) serving(); return activeProjectRoot },
+    })
+
+    const before = await fetch(`${server.baseUrl}__fs/readdir?p=.`)
+    expect(before.status).toBe(200)
+
+    // Keep a write in flight (headers sent, body withheld) so `drain()` has
+    // something to wait on: with nothing in flight it resolves synchronously
+    // and releases the window's route before a next request could observe
+    // `closing`, undershooting the window this guards.
+    const saveUrl = new URL('__fs/write?p=held.txt', server.baseUrl)
+    const save = http.request({
+      host: '127.0.0.1',
+      port: server.port,
+      path: saveUrl.pathname + saveUrl.search,
+      method: 'POST',
+      headers: { 'Content-Length': '4' },
+    })
+    save.on('error', () => {})
+    save.write('ab')
+    await beingServed
+
+    try {
+      // shutdown.drain() flips `closing` synchronously before its first
+      // await (see workbench-coi-shutdown.ts), so this observes the flip
+      // deterministically rather than racing it.
+      const closingPromise = server.close()
+      const after = await fetch(`${server.baseUrl}__fs/readdir?p=.`)
+      expect(after.status).toBe(503)
+
+      save.end('cd')
+      await closingPromise
+    } finally {
+      save.destroy()
+    }
+    server = null
+  })
+})
+
+/**
+ * A window's bridge is a route on the shared COI host, and the window cannot
+ * finish closing until that route is drained and dropped. `/__fs/watch` is an
+ * SSE stream that never ends on its own, so shutdown has to be driven by the
+ * side that is going away — without taking a save that is still arriving down
+ * with it.
+ *
+ * These reach the bridge over a raw `http.request` (a `fetch` cannot leave a
+ * body half-sent), so they have to spell out the window path prefix that
+ * `baseUrl` carries.
+ */
+describe('shutting the server down with connections still open', () => {
+  it('does not wait for a watch stream to disconnect first', async () => {
+    // The handler reads the project root as it starts, so this is the signal
+    // that the request is being served — the stream sends no response until the
+    // first file change, and a `fetch` would still be waiting for headers.
+    let serving: () => void = () => {}
+    const beingServed = new Promise<void>((resolve) => { serving = resolve })
+    server = await startWorkbenchCoiServer({
+      rootDir,
+      getProjectRoot: () => { serving(); return activeProjectRoot },
+    })
+
+    const watchUrl = new URL('__fs/watch', server.baseUrl)
+    const watch = http.request({ host: '127.0.0.1', port: server.port, path: watchUrl.pathname })
+    watch.on('error', () => {})
+    watch.end()
+    await beingServed
+
+    try {
+      const closed = server.close().then(() => 'closed' as const)
+      const hung = new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 3000))
+      expect(
+        await Promise.race([closed, hung]),
+        'a client that never disconnects on its own would otherwise hold the window open for as long as it lives',
+      ).toBe('closed')
+    } finally {
+      watch.destroy()
+    }
+    // Longer than the race above, so a shutdown that hangs reports the
+    // assertion rather than a bare test timeout.
+  }, 15_000)
+
+  it('lets a save that is still uploading reach disk', async () => {
+    let serving: () => void = () => {}
+    const beingServed = new Promise<void>((resolve) => { serving = resolve })
+    server = await startWorkbenchCoiServer({
+      rootDir,
+      getProjectRoot: () => { serving(); return activeProjectRoot },
+    })
+
+    const body = Buffer.from('the edit the user just made\n'.repeat(64))
+    const saveUrl = new URL('__fs/write?p=saved.txt', server.baseUrl)
+    const save = http.request({
+      host: '127.0.0.1',
+      port: server.port,
+      path: saveUrl.pathname + saveUrl.search,
+      method: 'POST',
+      headers: { 'Content-Length': String(body.length) },
+    })
+    save.on('error', () => {})
+    // Headers first, body second — that split is where an editor save is when
+    // the window closes underneath it.
+    save.write(body.subarray(0, 16))
+    await beingServed
+
+    try {
+      const closed = server.close()
+      save.end(body.subarray(16))
+      await closed
+
+      expect(
+        await fs.readFile(path.join(projectRoot, 'saved.txt'), 'utf8'),
+        'taking the sockets the moment shutdown starts would discard the file the user just saved',
+      ).toBe(body.toString())
+    } finally {
+      save.destroy()
+    }
+  }, 15_000)
 })

@@ -3,8 +3,11 @@
  *
  * Contracts pinned here:
  *  - project_open pushes the renderer-driven open (`requestOpenInUi`), never
- *    opens the workspace session from main, and only settles on a state
- *    recorded AFTER its own trigger (stale previous-session 'ready' rejected)
+ *    opens the workspace session from main, and awaits the compile of the
+ *    WINDOW that open landed in — not whichever window happened to be active
+ *    when the call arrived
+ *  - a freshly opened window has recorded nothing yet, so its empty store is
+ *    never mistaken for a finished compile
  *  - a compile error surfaces as isError with a compile_logs/stderr pointer
  *  - an already-open ready project short-circuits without re-triggering
  *  - project_status derives the public phase: settled 'ready' with no live
@@ -15,9 +18,11 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createCompileLogBuffer } from '../../workspace/compile-log-buffer.js'
 import { createSessionStatusStore } from '../../workspace/session-status-store.js'
+import type { McpOpenedProject } from '../opened-project.js'
 import {
   registerProjectTools,
   type McpProjectHost,
+  type McpProjectTarget,
 } from './project-tools.js'
 
 interface ToolResult {
@@ -46,8 +51,32 @@ function parse(result: ToolResult): Record<string, unknown> {
   return JSON.parse(result.content[0]!.text) as Record<string, unknown>
 }
 
-function makeHost(overrides?: Partial<McpProjectHost['workspace']>): McpProjectHost {
+/**
+ * The window an open lands in: its own status store plus the generation guard
+ * a brand-new window carries (nothing recorded yet, so accept only what this
+ * open produces).
+ */
+function newWindow(): McpOpenedProject {
   return {
+    workspace: {
+      getProjectPath: vi.fn(() => ''),
+      hasActiveSession: vi.fn(() => false),
+    },
+    sessionStatus: createSessionStatusStore(),
+    afterGeneration: 0,
+  }
+}
+
+/**
+ * One host over one target. Spread flat as well, so a test can drive the
+ * target's stores directly — they are the same objects the tools reach through
+ * `currentProject()`.
+ */
+function makeHost(
+  overrides?: Partial<McpProjectTarget['workspace']>,
+  opened: McpOpenedProject = newWindow(),
+): McpProjectHost & McpProjectTarget {
+  const target: McpProjectTarget = {
     workspace: {
       validateProjectDir: vi.fn(async () => null),
       hasProject: vi.fn(async () => false),
@@ -60,21 +89,28 @@ function makeHost(overrides?: Partial<McpProjectHost['workspace']>): McpProjectH
     },
     sessionStatus: createSessionStatusStore(),
     compileLogs: createCompileLogBuffer(),
-    requestOpenInUi: vi.fn(),
-    requestNavigateBack: vi.fn(),
+    closeWindow: vi.fn(),
+  }
+  return {
+    ...target,
+    currentProject: () => target,
+    requestOpenInUi: vi.fn(async () => opened),
   }
 }
 
 describe('project_open', () => {
   it('registers unknown dirs, pushes the renderer open, and resolves on the compile settling', async () => {
-    const host = makeHost()
+    const opened = newWindow()
+    const host = makeHost(undefined, opened)
     // Simulate the renderer-driven open: the push eventually produces the
-    // compile transitions through the notifier tap (recorded to the store).
-    vi.mocked(host.requestOpenInUi).mockImplementation(() => {
-      host.sessionStatus.record({ status: 'compiling', message: '编译中' })
-      host.sessionStatus.record({ status: 'ready', message: '编译完成' })
-      vi.mocked(host.workspace.getProjectPath).mockReturnValue('/proj/demo')
-      vi.mocked(host.workspace.hasActiveSession).mockReturnValue(true)
+    // compile transitions through the notifier tap (recorded to the store of
+    // the window that was opened).
+    vi.mocked(host.requestOpenInUi).mockImplementation(async () => {
+      opened.sessionStatus.record({ status: 'compiling', message: '编译中' })
+      opened.sessionStatus.record({ status: 'ready', message: '编译完成' })
+      vi.mocked(opened.workspace.getProjectPath).mockReturnValue('/proj/demo')
+      vi.mocked(opened.workspace.hasActiveSession).mockReturnValue(true)
+      return opened
     })
     const { call } = captureTools(host)
 
@@ -90,33 +126,65 @@ describe('project_open', () => {
     })
   })
 
-  it('never accepts the PREVIOUS session settled state as its own result', async () => {
-    const host = makeHost()
-    // A previous session already settled 'ready' before this open.
-    host.sessionStatus.record({ status: 'ready', message: 'previous session' })
+  it('awaits the window it opened, not the window that was active when the call arrived', async () => {
+    const opened = newWindow()
+    const host = makeHost(undefined, opened)
     const { call } = captureTools(host)
 
     const pending = call('project_open', { path: '/proj/demo', timeoutMs: 1000 })
     let done = false
-    pending.then(() => { done = true })
-    // Macrotask flush: lets the handler run through its awaits and reach the
-    // settled-wait. A buggy wait (no generation guard) would have resolved on
-    // the stale 'ready' by now.
-    await new Promise((r) => setTimeout(r, 0))
-    expect(done).toBe(false)
+    void pending.then(() => { done = true })
 
-    // Only the transitions triggered by THIS open settle the call.
+    // The previously active window finishes a rebuild of ITS OWN project,
+    // after this open already reached its wait.
+    await new Promise((r) => setTimeout(r, 0))
     host.sessionStatus.record({ status: 'compiling', message: '' })
-    host.sessionStatus.record({ status: 'ready', message: '编译完成' })
+    host.sessionStatus.record({ status: 'ready', message: 'another project rebuilt' })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(
+      done,
+      'another project window settling must never be reported as this open result',
+    ).toBe(false)
+
+    vi.mocked(opened.workspace.getProjectPath).mockReturnValue('/proj/demo')
+    vi.mocked(opened.workspace.hasActiveSession).mockReturnValue(true)
+    opened.sessionStatus.record({ status: 'ready', message: '编译完成' })
+
+    const result = await pending
+    expect(result.isError).toBeUndefined()
+    expect(
+      parse(result),
+      'the reported status describes the project that was opened',
+    ).toMatchObject({ projectPath: '/proj/demo', message: '编译完成' })
+  })
+
+  it('never accepts the empty store of a brand-new window as its own result', async () => {
+    const opened = newWindow()
+    const host = makeHost(undefined, opened)
+    const { call } = captureTools(host)
+
+    const pending = call('project_open', { path: '/proj/demo', timeoutMs: 1000 })
+    let done = false
+    void pending.then(() => { done = true })
+    // Macrotask flush: lets the handler run through its awaits and reach the
+    // settled-wait. Without the generation guard the fresh window's initial
+    // 'idle' would already have resolved it.
+    await new Promise((r) => setTimeout(r, 0))
+    expect(done, 'a window that has compiled nothing yet must not report success').toBe(false)
+
+    opened.sessionStatus.record({ status: 'compiling', message: '' })
+    opened.sessionStatus.record({ status: 'ready', message: '编译完成' })
     const result = await pending
     expect(result.isError).toBeUndefined()
   })
 
   it('reports a compile error as isError pointing at compile_logs stderr', async () => {
-    const host = makeHost()
-    vi.mocked(host.requestOpenInUi).mockImplementation(() => {
-      host.sessionStatus.record({ status: 'compiling', message: '' })
-      host.sessionStatus.record({ status: 'error', message: '编译失败' })
+    const opened = newWindow()
+    const host = makeHost(undefined, opened)
+    vi.mocked(host.requestOpenInUi).mockImplementation(async () => {
+      opened.sessionStatus.record({ status: 'compiling', message: '' })
+      opened.sessionStatus.record({ status: 'error', message: '编译失败' })
+      return opened
     })
     const { call } = captureTools(host)
 
@@ -124,6 +192,16 @@ describe('project_open', () => {
     expect(result.isError).toBe(true)
     expect(result.content[0]!.text).toContain('编译失败')
     expect(result.content[0]!.text).toContain('compile_logs')
+  })
+
+  it('surfaces a failure to open the window instead of waiting out the timeout', async () => {
+    const host = makeHost()
+    vi.mocked(host.requestOpenInUi).mockRejectedValue(new Error('编辑器服务端口被占用'))
+    const { call } = captureTools(host)
+
+    const result = await call('project_open', { path: '/proj/demo', timeoutMs: 1000 })
+    expect(result.isError).toBe(true)
+    expect(result.content[0]!.text).toContain('编辑器服务端口被占用')
   })
 
   it('rejects an invalid project dir without pushing the renderer', async () => {
@@ -153,13 +231,15 @@ describe('project_open', () => {
   })
 
   it('reuses the registered project name instead of re-adding a known dir', async () => {
+    const opened = newWindow()
     const host = makeHost({
       hasProject: vi.fn(async () => true),
       listProjects: vi.fn(async () => [{ name: '我的小程序', path: '/proj/demo' }]),
-    })
-    vi.mocked(host.requestOpenInUi).mockImplementation(() => {
-      host.sessionStatus.record({ status: 'compiling', message: '' })
-      host.sessionStatus.record({ status: 'ready', message: '' })
+    }, opened)
+    vi.mocked(host.requestOpenInUi).mockImplementation(async () => {
+      opened.sessionStatus.record({ status: 'compiling', message: '' })
+      opened.sessionStatus.record({ status: 'ready', message: '' })
+      return opened
     })
     const { call } = captureTools(host)
 
@@ -179,7 +259,10 @@ describe('project_close', () => {
 
     const result = await call('project_close')
     expect(host.workspace.closeProject).toHaveBeenCalledTimes(1)
-    expect(host.requestNavigateBack).toHaveBeenCalledTimes(1)
+    expect(
+      host.closeWindow,
+      'the target window must actually close — tearing the session down without it leaves the project window on screen with a dead session',
+    ).toHaveBeenCalledTimes(1)
     expect(parse(result)).toMatchObject({ closed: true })
   })
 

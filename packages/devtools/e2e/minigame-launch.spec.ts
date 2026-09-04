@@ -27,8 +27,12 @@ interface OpenProjectResult {
 }
 
 test.describe('mini-game project support', () => {
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow).catch(() => {})
+  // Most tests below drive `ProjectChannel.Open` directly (list window's own
+  // WorkbenchContext, no real workbench window); the last test opens through
+  // the UI (a real workbench BrowserWindow). Cover both close paths.
+  test.afterEach(async ({ mainWindow, electronApp }) => {
+    await ipcInvoke(mainWindow, ProjectChannel.Close).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await ipcInvoke(mainWindow, ProjectsChannel.Remove, MINI_GAME_DIR).catch(() => {})
   })
 
@@ -54,12 +58,15 @@ test.describe('mini-game project support', () => {
     expect(result.success, `open failed: ${result.error}`).toBe(true)
   })
 
-  test('opening the project in the UI renders a real game canvas', async ({ electronApp, mainWindow }) => {
+  // `mainWindow` is requested but unused: acquiring it is what health-checks
+  // the app and relaunches a dead one, and that has to happen before this test
+  // drives the UI, not when `afterEach` first asks for it.
+  test('opening the project in the UI renders a real game canvas', async ({ electronApp, mainWindow: _mainWindow }) => {
     await installConsoleCollector(electronApp)
     // The project-list grid is filtered by category (default '小程序'); a
     // mini-game project's card only renders once '小游戏' is selected.
     await selectProjectCategoryInUI(electronApp, 'minigame')
-    await openProjectInUI(mainWindow, MINI_GAME_DIR)
+    await openProjectInUI(electronApp, MINI_GAME_DIR)
 
     const hasGameCanvas = await evalInWebContentsByUrl<boolean>(
       electronApp,

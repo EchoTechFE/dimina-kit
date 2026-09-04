@@ -25,15 +25,19 @@ import {
  * file location is stable regardless of which cwd Playwright is launched
  * from.
  */
-test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdown, pane toggle)', async ({ mainWindow }) => {
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await waitForEditorReady(mainWindow)
+test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdown, pane toggle)', async ({ electronApp }) => {
+  // The workbench window only exists once the project is open, so it is taken
+  // from `openProjectInUI`'s return value rather than the `workbench` fixture
+  // (which resolves before the test body runs and would time out waiting for a
+  // window nothing has asked for yet).
+  const workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await waitForEditorReady(workbench)
 
   // 1. The toolbar header band must not host any tab switcher: the old
   //    right-pane DevTools/WXML/AppData/Storage tabs are gone. Every remaining
   //    `[role="tab"]` is a DOCK tab and therefore lives inside a
   //    `[data-deck-group]`; none stray into the toolbar/header.
-  const stragglingTabs = await mainWindow.$$eval(
+  const stragglingTabs = await workbench.$$eval(
     '[role="tab"]',
     (els) =>
       els
@@ -45,7 +49,7 @@ test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdo
   // The dock tablist is EXACTLY the five debug panels (simulator + editor are
   // tabless structural panels) — assert the precise set so a stray tab can't slip
   // back in unnoticed.
-  const dockTabIds = await mainWindow.$$eval('[data-deck-tab]', (els) =>
+  const dockTabIds = await workbench.$$eval('[data-deck-tab]', (els) =>
     els.map((el) => el.getAttribute('data-deck-tab')),
   )
   expect([...dockTabIds].sort(), 'the dock tablist must be exactly the five debug tabs').toEqual(
@@ -53,11 +57,11 @@ test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdo
   )
 
   // 2. Compile-mode dropdown trigger exists in the toolbar.
-  const compileBtn = mainWindow.getByRole('button', { name: /普通编译/ })
+  const compileBtn = workbench.getByRole('button', { name: /普通编译/ })
   await expect(compileBtn).toBeVisible()
 
   // 3. Section visibility toggles live in a labelled toolbar group.
-  const visibilityGroup = mainWindow.getByRole('group', { name: '面板可见性' })
+  const visibilityGroup = workbench.getByRole('group', { name: '面板可见性' })
   await expect(visibilityGroup).toBeVisible()
   await expect(visibilityGroup.getByRole('button', { name: /^(隐藏|显示)模拟器$/ })).toBeVisible()
   await expect(visibilityGroup.getByRole('button', { name: /^(隐藏|显示)编辑器$/ })).toBeVisible()
@@ -72,7 +76,7 @@ test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdo
   // Toolbar controls need their own interaction surfaces: --qd-muted is the
   // same color as the light toolbar chrome, so the generic ghost hover is
   // invisible here. Verify the settled hover paint differs from the row.
-  const alignmentToggle = mainWindow.getByTestId('layout-toolbar-alignment-toggle')
+  const alignmentToggle = workbench.getByTestId('layout-toolbar-alignment-toggle')
   const toolbarColor = await alignmentToggle.evaluate((node) =>
     getComputedStyle(node.closest('.bg-surface-2')!).backgroundColor,
   )
@@ -80,23 +84,27 @@ test('toolbar: refactored visual layout (no right-pane tabs, compile-mode dropdo
   await expect.poll(() => alignmentToggle.evaluate((node) =>
     getComputedStyle(node).backgroundColor,
   )).not.toBe(toolbarColor)
-  await mainWindow.mouse.move(1, 1)
+  await workbench.mouse.move(1, 1)
 
   // Screenshot — resolve test-results relative to THIS spec file so the
   // output lands inside packages/devtools/test-results regardless of cwd.
   const here = path.dirname(fileURLToPath(import.meta.url))
   const outDir = path.resolve(here, '..', 'test-results')
   if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true })
-  await mainWindow.screenshot({ path: path.join(outDir, 'toolbar-final.png') })
+  await workbench.screenshot({ path: path.join(outDir, 'toolbar-final.png') })
 })
 
-test('toolbar: native tooltip measures content and survives a second hover', async ({ mainWindow, electronApp }) => {
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await waitForEditorReady(mainWindow)
+test('toolbar: native tooltip measures content and survives a second hover', async ({ electronApp }) => {
+  const workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await waitForEditorReady(workbench)
 
+  // The toolbar buttons under test ('重新编译'/'设置') live in the workbench
+  // window's own renderer — the tooltip WCV attaches there too, so the
+  // measured surface must be found on `entries/workbench`, not the project
+  // list's `entries/main`.
   const surfaceState = () => electronApp.evaluate(({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows().find((candidate) =>
-      candidate.webContents.getURL().includes('entries/main'),
+      candidate.webContents.getURL().includes('entries/workbench'),
     )
     if (!win) return null
     for (const child of win.contentView.children) {
@@ -109,19 +117,19 @@ test('toolbar: native tooltip measures content and survives a second hover', asy
     return null
   })
 
-  await mainWindow.getByRole('button', { name: '重新编译' }).hover()
+  await workbench.getByRole('button', { name: '重新编译' }).hover()
   const firstText = await pollUntil(
     () => evalInWebContentsByUrl<string>(electronApp, 'entries/tooltip', 'document.body.innerText'),
     (text) => text.trim() === '重新编译',
     10_000,
   )
   const firstBounds = await pollUntil(surfaceState, (bounds) => bounds !== null, 10_000)
-  expect(firstBounds, 'the measured tooltip must attach to the main window').not.toBeNull()
+  expect(firstBounds, 'the measured tooltip must attach to the workbench window').not.toBeNull()
   expect(firstText.trim()).toBe('重新编译')
   expect(firstBounds!.width).toBeGreaterThan(20)
   expect(firstBounds!.width).toBeLessThan(160)
 
-  await mainWindow.getByRole('button', { name: '设置' }).hover()
+  await workbench.getByRole('button', { name: '设置' }).hover()
   const secondText = await pollUntil(
     () => evalInWebContentsByUrl<string>(electronApp, 'entries/tooltip', 'document.body.innerText'),
     (text) => text.trim() === '设置',
@@ -131,10 +139,10 @@ test('toolbar: native tooltip measures content and survives a second hover', asy
   expect(secondText.trim()).toBe('设置')
   expect(secondBounds!.width).toBeLessThan(firstBounds!.width)
 
-  await mainWindow.mouse.move(1, 1)
+  await workbench.mouse.move(1, 1)
   await pollUntil(surfaceState, (bounds) => bounds === null, 10_000)
 })
 
-test.afterEach(async ({ mainWindow }) => {
-  await closeProject(mainWindow)
+test.afterEach(async ({ electronApp }) => {
+  await closeProject(electronApp)
 })

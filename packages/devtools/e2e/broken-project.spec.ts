@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { test, expect } from './fixtures'
-import { ipcInvoke, closeProject, DEMO_APP_DIR } from './helpers'
+import { ipcInvoke, DEMO_APP_DIR } from './helpers'
 import { ProjectChannel } from '../src/shared/ipc-channels'
 
 interface OpenProjectResult {
@@ -123,7 +123,11 @@ test.describe('devkit dev server does not serve HTML for missing asset paths', (
         `server returned HTML SPA fallback (status=${res.status}) for a JSON asset path; first 80 chars: ${JSON.stringify(body.slice(0, 80))}`,
       ).toBe(false)
     } finally {
-      await closeProject(mainWindow)
+      // These tests drive `ProjectChannel.Open` directly, so the session lives
+      // in the list window's own WorkbenchContext (no real workbench window is
+      // ever spawned) — close it via the same channel rather than
+      // `closeProject`, which only tears down real workbench BrowserWindows.
+      await ipcInvoke(mainWindow, ProjectChannel.Close).catch(() => {})
     }
   })
 
@@ -143,7 +147,11 @@ test.describe('devkit dev server does not serve HTML for missing asset paths', (
       const looksLikeHtml = /^\s*<!doctype\s+html/i.test(body) || /^\s*<html/i.test(body)
       expect(looksLikeHtml && res.status === 200).toBe(false)
     } finally {
-      await closeProject(mainWindow)
+      // These tests drive `ProjectChannel.Open` directly, so the session lives
+      // in the list window's own WorkbenchContext (no real workbench window is
+      // ever spawned) — close it via the same channel rather than
+      // `closeProject`, which only tears down real workbench BrowserWindows.
+      await ipcInvoke(mainWindow, ProjectChannel.Close).catch(() => {})
     }
   })
 })

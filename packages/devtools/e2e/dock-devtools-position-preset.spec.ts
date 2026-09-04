@@ -42,12 +42,12 @@ import {
 } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR, findMainWindow } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let electronApp: ElectronApplication
-let mainWindow: PwPage
+let workbench: PwPage
 
 test.beforeAll(async () => {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
@@ -61,18 +61,16 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await findMainWindow(electronApp)
-  await mainWindow.waitForLoadState('domcontentloaded')
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) { win.setPosition(-2000, -2000); win.blur() }
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await mainWindow.waitForSelector('[data-deck-group]', { timeout: 15000 })
+  workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await workbench.waitForSelector('[data-deck-group]', { timeout: 15000 })
 })
 
 test.afterAll(async () => {
-  try { await closeProject(mainWindow) } catch { /* best effort */ }
+  try { await closeProject(electronApp) } catch { /* best effort */ }
   await electronApp.close()
 })
 
@@ -97,10 +95,10 @@ async function editorWidth(page: PwPage): Promise<number> {
 const MIN_HEALTHY_EDITOR_WIDTH = 50
 
 test('[needs-real-electron] Bug #3: rightOfSimulator -> belowSimulator does not collapse the editor width', async () => {
-  await clickPreset(mainWindow, 'rightOfSimulator')
-  await clickPreset(mainWindow, 'belowSimulator')
+  await clickPreset(workbench, 'rightOfSimulator')
+  await clickPreset(workbench, 'belowSimulator')
 
-  const w = await editorWidth(mainWindow)
+  const w = await editorWidth(workbench)
   expect(
     w,
     `editor width after rightOfSimulator->belowSimulator must stay healthy (got ${w}px — a collapse to a few px is Bug #3)`,
@@ -108,18 +106,18 @@ test('[needs-real-electron] Bug #3: rightOfSimulator -> belowSimulator does not 
 })
 
 test('[regress] inEditor -> belowSimulator keeps the editor visible (no root child-count change; must stay healthy)', async () => {
-  await clickPreset(mainWindow, 'inEditor')
-  await clickPreset(mainWindow, 'belowSimulator')
+  await clickPreset(workbench, 'inEditor')
+  await clickPreset(workbench, 'belowSimulator')
 
-  const w = await editorWidth(mainWindow)
+  const w = await editorWidth(workbench)
   expect(w).toBeGreaterThan(MIN_HEALTHY_EDITOR_WIDTH)
 })
 
 test('[regress] inEditor <-> rightOfSimulator keeps the editor visible in both directions (neither pins a nested split)', async () => {
-  await clickPreset(mainWindow, 'inEditor')
-  await clickPreset(mainWindow, 'rightOfSimulator')
-  expect(await editorWidth(mainWindow)).toBeGreaterThan(MIN_HEALTHY_EDITOR_WIDTH)
+  await clickPreset(workbench, 'inEditor')
+  await clickPreset(workbench, 'rightOfSimulator')
+  expect(await editorWidth(workbench)).toBeGreaterThan(MIN_HEALTHY_EDITOR_WIDTH)
 
-  await clickPreset(mainWindow, 'inEditor')
-  expect(await editorWidth(mainWindow)).toBeGreaterThan(MIN_HEALTHY_EDITOR_WIDTH)
+  await clickPreset(workbench, 'inEditor')
+  expect(await editorWidth(workbench)).toBeGreaterThan(MIN_HEALTHY_EDITOR_WIDTH)
 })

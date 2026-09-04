@@ -41,7 +41,7 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import type { ElectronApplication } from '@playwright/test'
 import { test, expect } from './fixtures'
-import { DEMO_APP_DIR, openProjectInUI, pollUntil } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil } from './helpers'
 import { runInWorkbench, attachWorkbenchAndWaitReady } from './workbench-probe'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -135,13 +135,39 @@ async function listWorkbenchTabPaths(electronApp: ElectronApplication): Promise<
 test.describe('embedded workbench: project switch discards stale restored tabs', () => {
   test.setTimeout(300_000)
 
+  // The spec ends on the tabbar app's window, and a workbench window left open
+  // outlives the file into later specs in the same worker: helpers that pick
+  // "the first simulator" or "the first workbench" would then read this
+  // project instead of theirs. Both projects are named because a failure
+  // partway through can leave either one — or both — still open; naming one
+  // that is already closed matches no window and does nothing.
+  //
+  // A close that fails is reported, not swallowed: `closeProject` only throws
+  // when a window it targeted is STILL open 30s later, which is precisely the
+  // leak this hook exists to prevent. Both are attempted before anything is
+  // raised, so a stuck demo-app window cannot leave the tabbar one behind too.
+  test.afterEach(async ({ electronApp }) => {
+    const failures: unknown[] = []
+    for (const projectDir of [DEMO_APP_DIR, TABBAR_APP_DIR]) {
+      try {
+        await closeProject(electronApp, { projectDir })
+      } catch (err) {
+        failures.push(err)
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(failures.map((err) => (err instanceof Error ? err.message : String(err))).join('; '))
+    }
+  })
+
   test('a tab persisted by the previous project must not strand a not-found editor after switching', async ({
-    mainWindow,
     electronApp,
   }) => {
-    // 1) Open the demo app and bring the embedded workbench up.
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 60_000 })
-    const status = await attachWorkbenchAndWaitReady(mainWindow, electronApp)
+    // 1) Open the demo app and bring the embedded workbench up. `openProjectInUI`
+    // opens its own workbench window (it never reuses/replaces another
+    // project's) and returns that window's Page directly.
+    const workbench1 = await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 60_000 })
+    const status = await attachWorkbenchAndWaitReady(workbench1, electronApp)
     expect(status, 'workbench must reach a ready status for the first project').toMatch(
       /workbench-ready|exthost-alive/,
     )
@@ -185,13 +211,20 @@ test.describe('embedded workbench: project switch discards stale restored tabs',
       "the demo app's open tab must reach its own WORKSPACE-scope storage — otherwise the switch below proves nothing",
     ).toContain('storage-test')
 
-    // 4) Switch to a project that does NOT contain that file. This destroys the
-    // workbench WebContentsView and boots a fresh one, which restores whatever
-    // its own workspace id points at — a DIFFERENT bucket, because the id is
-    // derived from the miniapp rather than from the shared mirror root.
+    // 4) Switch to a project that does NOT contain that file. Under the
+    // per-project workbench window model, "switching" means closing the demo
+    // app's window (there is no more in-place replace) before opening the
+    // next one — otherwise both windows' embedded workbench WCVs would coexist
+    // and `runInWorkbench`'s app-wide first-match probe could hit either one,
+    // making every assertion below nondeterministic. Closing first also
+    // matches the docstring's premise: the OLD WebContentsView is destroyed
+    // and a fresh one boots, restoring whatever its own workspace id points at
+    // — a DIFFERENT bucket, because the id is derived from the miniapp rather
+    // than from the shared mirror root.
     const idBefore = await runInWorkbench<string | null>(electronApp, WORKSPACE_ID_EXPR)
-    await openProjectInUI(mainWindow, TABBAR_APP_DIR, { waitMs: 60_000 })
-    const status2 = await attachWorkbenchAndWaitReady(mainWindow, electronApp)
+    await closeProject(electronApp, { projectDir: DEMO_APP_DIR })
+    const workbench2 = await openProjectInUI(electronApp, TABBAR_APP_DIR, { waitMs: 60_000 })
+    const status2 = await attachWorkbenchAndWaitReady(workbench2, electronApp)
     expect(status2, 'workbench must reach a ready status after switching projects').toMatch(
       /workbench-ready|exthost-alive/,
     )

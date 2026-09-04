@@ -95,6 +95,9 @@ vi.mock('./exec.js', async () => {
 
 const getSimulatorMock = vi.mocked(getSimulator)
 
+/** The `WorkbenchContext` shape `getCtx()` resolves to inside the server. */
+type CtxStub = ReturnType<Parameters<typeof startAutomationServer>[0]>
+
 function makeCtx(senderPolicy: (s: unknown) => boolean = () => true) {
   return {
     senderPolicy,
@@ -104,8 +107,14 @@ function makeCtx(senderPolicy: (s: unknown) => boolean = () => true) {
     // so the sim stub's `once('destroyed')` / `isDestroyed()` drive it faithfully.
     connections: createConnectionRegistry(),
     views: { getSimulatorWebContentsId: () => 1 },
+    // A connection pins the window it drives and checks that window is still
+    // alive before every use (see connection-target.ts).
+    windows: { mainWindow: { isDestroyed: () => false } },
     workspace: { hasActiveSession: () => true },
-  } as unknown as Parameters<typeof startAutomationServer>[0]
+    // `ensureConsoleSub` reads this every time it (re-)subscribes; undefined
+    // is a legal ctx (no forwarder yet) and must not throw.
+    consoleForwarder: { subscribe: vi.fn(() => ({ dispose: vi.fn() })) },
+  } as unknown as CtxStub
 }
 
 function makeSim() {
@@ -154,7 +163,7 @@ describe('startAutomationServer lifecycle', () => {
     const policy = vi.fn(() => true)
     const ctx = makeCtx(policy)
 
-    const server = await startAutomationServer(ctx, 0)
+    const server = await startAutomationServer(() => ctx, ctx, 0)
 
     expect(ipcMainStub.handle).toHaveBeenCalledWith(AutomationChannel.GetPort, expect.any(Function))
     // The handler stored is the IpcRegistry guard, not the raw () => currentPort.
@@ -174,7 +183,7 @@ describe('startAutomationServer lifecycle', () => {
   it('rejects callers when senderPolicy returns false', async () => {
     const policy = vi.fn(() => false)
     const ctx = makeCtx(policy)
-    const server = await startAutomationServer(ctx, 0)
+    const server = await startAutomationServer(() => ctx, ctx, 0)
 
     const guarded = guardedFns.get(AutomationChannel.GetPort)!
     // The IpcRegistry sender gate now surfaces as a rejected promise (the
@@ -191,7 +200,7 @@ describe('startAutomationServer lifecycle', () => {
     const sim = makeSim()
     getSimulatorMock.mockReturnValue(sim as unknown as ReturnType<typeof getSimulator>)
 
-    const server = await startAutomationServer(ctx, 0)
+    const server = await startAutomationServer(() => ctx, ctx, 0)
 
     // Simulate a ws connection arriving — that calls setupConsoleForwarding.
     const wss = wssStub.created[0]!
@@ -228,7 +237,7 @@ describe('startAutomationServer lifecycle', () => {
     const sim = makeSim()
     getSimulatorMock.mockReturnValue(sim as unknown as ReturnType<typeof getSimulator>)
 
-    const server = await startAutomationServer(ctx, 0)
+    const server = await startAutomationServer(() => ctx, ctx, 0)
 
     const wss = wssStub.created[0]!
     wss.emit('connection', { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn(), on: vi.fn() })
@@ -254,7 +263,7 @@ describe('startAutomationServer lifecycle', () => {
     const sim = makeSim()
     getSimulatorMock.mockReturnValue(sim as unknown as ReturnType<typeof getSimulator>)
 
-    const server = await startAutomationServer(ctx, 0)
+    const server = await startAutomationServer(() => ctx, ctx, 0)
 
     const wss = wssStub.created[0]!
     wss.emit('connection', { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn(), on: vi.fn() })
@@ -271,5 +280,28 @@ describe('startAutomationServer lifecycle', () => {
 
     server.close()
     expect(sim.removeListener).not.toHaveBeenCalled()
+  })
+
+  it('unsubscribes from the window\'s ConsoleForwarder when the connection closes', async () => {
+    const ctx = makeCtx()
+    const server = await startAutomationServer(() => ctx, ctx, 0)
+
+    const wss = wssStub.created[0]!
+    const ws = { readyState: 1, OPEN: 1, send: vi.fn(), close: vi.fn(), on: vi.fn() }
+    wss.emit('connection', ws)
+
+    const subscribe = (ctx.consoleForwarder as unknown as { subscribe: ReturnType<typeof vi.fn> }).subscribe
+    expect(subscribe).toHaveBeenCalledTimes(1)
+    const unsubscribe = (subscribe.mock.results[0]!.value as { dispose: ReturnType<typeof vi.fn> }).dispose
+
+    const onClose = ws.on.mock.calls.find(([event]) => event === 'close')?.[1] as () => void
+    expect(onClose, 'connection handler must register a close listener').toBeTypeOf('function')
+    onClose()
+
+    // A late console entry from the window must not fire at a client that is
+    // already gone.
+    expect(unsubscribe).toHaveBeenCalledTimes(1)
+
+    server.close()
   })
 })

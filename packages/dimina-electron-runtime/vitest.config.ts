@@ -19,5 +19,25 @@ export default defineConfig({
     // Without this a component suite leaves its trees in the document and the
     // next `screen.getBy*` finds several matches instead of one.
     globals: true,
+    coverage: {
+      provider: 'v8',
+      reporter: ['text', 'text-summary', 'html', 'json-summary'],
+      reportsDirectory: './coverage',
+      // Pin the denominator to all of `src/**`, not to whatever the run
+      // happened to load. Without this, v8 only counts files an executed test
+      // imported, so the first test written for a large module drops the
+      // package's coverage by pulling that module and its whole import graph
+      // into the denominator at once — the metric would punish adding tests.
+      include: ['src/**/*.{ts,tsx}'],
+      exclude: [
+        '**/*.test.{ts,tsx}',
+        '**/__test-stubs__/**',
+        // Imports vitest and drives the ws contract suites; it ships under
+        // src/ but is test scaffolding, not runtime code.
+        'src/main/services/native-websocket/contract-harness.ts',
+        '**/*.config.*',
+        '**/*.d.ts',
+      ],
+    },
   },
 })

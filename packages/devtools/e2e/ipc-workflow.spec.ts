@@ -3,8 +3,15 @@ import { DEMO_APP_DIR, ipcInvoke, addProject, closeProject } from './helpers'
 import { ProjectsChannel, ProjectChannel } from '../src/shared/ipc-channels'
 
 test.describe('IPC + Project Workflow', () => {
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow).catch(() => {})
+  // These tests drive `ProjectChannel.Open/Close` directly (not through the
+  // project-card click), so they never spawn a real workbench BrowserWindow —
+  // the session lives in the calling (list) window's own WorkbenchContext.
+  // Close it the same way; `closeProject(electronApp)` only tears down real
+  // workbench windows and would be a no-op here. It's still called as a
+  // belt-and-suspenders in case a later test starts opening through the UI.
+  test.afterEach(async ({ mainWindow, electronApp }) => {
+    await ipcInvoke(mainWindow, ProjectChannel.Close).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await ipcInvoke(mainWindow, ProjectsChannel.Remove, DEMO_APP_DIR).catch(() => {})
   })
 
@@ -66,6 +73,6 @@ test.describe('IPC + Project Workflow', () => {
     expect(typeof result).toBe('object')
 
     // Close the project so teardown doesn't hang
-    await closeProject(mainWindow)
+    await ipcInvoke(mainWindow, ProjectChannel.Close)
   })
 })

@@ -167,7 +167,10 @@ function emitOn(channel: string, sender: unknown, payload: unknown): void {
 /** Build a WorkbenchContext with an event-emitting mainWindow. */
 function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc; mainWindow: ReturnType<typeof stubs.makeEmitter> } {
   const simulatorWc = stubs.makeWebContents()
-  const mainWindow = stubs.makeEmitter()
+  // Stands in for a BrowserWindow, so it answers `isDestroyed` as well as
+  // emitting: the router asks whether its window is alive before claiming a
+  // sender.
+  const mainWindow = Object.assign(stubs.makeEmitter(), { isDestroyed: () => false })
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     connections: createConnectionRegistry(),

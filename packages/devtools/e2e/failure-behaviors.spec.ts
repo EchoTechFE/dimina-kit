@@ -106,7 +106,7 @@ test.describe('launch page fallback (bridge-router resolveRootPagePath)', () => 
    * required because `DEMO_APP_DIR` is a per-worker copy reused by every
    * other spec in this worker.
    */
-  async function openWithGhostStartPage(ghostPage: string): Promise<{ restore(): Promise<void> }> {
+  async function openWithGhostStartPage(ghostPage: string): Promise<{ workbench: PwPage; restore(): Promise<void> }> {
     await addProject(mainWindow, DEMO_APP_DIR)
     const original = await ipcInvoke<CompileConfigLike>(mainWindow, ProjectChannel.GetCompileConfig, DEMO_APP_DIR)
     await ipcInvoke(mainWindow, ProjectChannel.SaveCompileConfig, DEMO_APP_DIR, {
@@ -114,11 +114,12 @@ test.describe('launch page fallback (bridge-router resolveRootPagePath)', () => 
       scene: original.scene ?? 1001,
       queryParams: original.queryParams ?? [],
     })
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20000 })
+    const workbench = await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 20000 })
     return {
+      workbench,
       restore: async () => {
-        await ipcInvoke(mainWindow, ProjectChannel.SaveCompileConfig, DEMO_APP_DIR, original).catch(() => {})
-        await closeProject(mainWindow).catch(() => {})
+        await ipcInvoke(workbench, ProjectChannel.SaveCompileConfig, DEMO_APP_DIR, original).catch(() => {})
+        await closeProject(electronApp, { projectDir: DEMO_APP_DIR }).catch(() => {})
       },
     }
   }
@@ -183,7 +184,7 @@ test.describe('launch page fallback (bridge-router resolveRootPagePath)', () => 
       // SAME payload — a combination the real pipeline never actually
       // produces. This assertion pins that documented contract and is
       // expected to fail against current wiring (see spec file header).
-      const banner = mainWindow.locator('[data-testid="sim-fallback-banner"]')
+      const banner = session.workbench.locator('[data-testid="sim-fallback-banner"]')
       await banner.waitFor({ timeout: 15000 })
       const bannerText = await banner.innerText()
       expect(bannerText, 'banner must name the requested (missing) page').toContain(GHOST_PAGE)
@@ -198,11 +199,11 @@ test.describe('service-host crash surfaces a runtime error overlay', () => {
   test.setTimeout(60_000)
 
   test.afterEach(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
   })
 
   test('service-host render-process-gone shows [data-testid="sim-runtime-error"]', async () => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20000 })
+    const workbench = await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 20000 })
     await waitSimulatorReady(electronApp)
 
     const crashed = await electronApp.evaluate(({ webContents }) => {
@@ -213,7 +214,7 @@ test.describe('service-host crash surfaces a runtime error overlay', () => {
     })
     expect(crashed, 'expected a live service-host webContents (service.html) to crash').toBe(true)
 
-    const overlay = mainWindow.locator('[data-testid="sim-runtime-error"]')
+    const overlay = workbench.locator('[data-testid="sim-runtime-error"]')
     await overlay.waitFor({ timeout: 15000 })
     const overlayText = await overlay.innerText()
     expect(overlayText, 'overlay must tell the user the app crashed').toContain('崩溃')
@@ -224,11 +225,11 @@ test.describe('navigateTo a page absent from the compiled manifest', () => {
   test.setTimeout(60_000)
 
   test.afterEach(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
   })
 
   test('rejects via its fail callback with a descriptive errMsg', async () => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20000 })
+    await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 20000 })
     await waitSimulatorReady(electronApp)
 
     const ghostTarget = 'pages/e2e-ghost-nav-target/e2e-ghost-nav-target'

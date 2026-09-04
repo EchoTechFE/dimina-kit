@@ -116,14 +116,14 @@ async function clickHomeButton(): Promise<boolean> {
  * leaks into the shared worker-scoped Electron instance other specs use.
  */
 async function openDemoAppAt(startPage: string): Promise<void> {
-  await closeProject(mainWindow).catch(() => {})
+  await closeProject(electronApp).catch(() => {})
   await addProject(mainWindow, DEMO_APP_DIR)
   await ipcInvoke(mainWindow, ProjectChannel.SaveCompileConfig, DEMO_APP_DIR, {
     startPage,
     scene: DEFAULT_SCENE,
     queryParams: [],
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20000 })
+  await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 20000 })
   await waitForSimulatorWebview(electronApp)
   await pollUntil(
     () => evalInSimulator<boolean>(electronApp, `(() => !!document.querySelector('.device-shell-root'))()`).catch(() => false),
@@ -184,7 +184,7 @@ test.describe('native-host nav-bar home button (switchTab branch)', () => {
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 

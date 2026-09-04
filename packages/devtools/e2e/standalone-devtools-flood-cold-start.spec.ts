@@ -2,7 +2,7 @@ import { test, expect, _electron, type ElectronApplication, type Page as PwPage 
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
-import { addProject, waitForSimulatorWebview, closeProject, ipcInvoke, pollUntil, evalInSimulator, findMainWindow } from './helpers'
+import { addProject, waitForSimulatorWebview, closeProject, ipcInvoke, pollUntil, evalInSimulator, findMainWindow, findWorkbenchWindow } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 import { INTERNAL_LOG_WRAPPER_MARK } from '../src/main/services/views/console-filter'
 import { FRONTEND_BOOTSTRAP_PROBE_SCRIPT } from '../src/main/services/views/frontend-bootstrap-gate'
@@ -168,7 +168,7 @@ test.describe('Floating internal DevTools window — cold start + log flood', ()
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 
@@ -189,7 +189,10 @@ test.describe('Floating internal DevTools window — cold start + log flood', ()
     await projectPathLabel.waitFor()
     await projectPathLabel.locator('..').click()
 
-    const debugButton = mainWindow.getByTestId('sim-open-internal-devtools')
+    // The click above opens the project in its OWN workbench window (list
+    // window stays put) — the debug button lives in that new window, not here.
+    const workbench = await findWorkbenchWindow(electronApp, { projectDir: FIXTURE_DIR, timeoutMs: 15000 })
+    const debugButton = workbench.getByTestId('sim-open-internal-devtools')
     await debugButton.waitFor({ timeout: 15000 })
     // Fire immediately — the right panel's own service-host attach (which
     // depends on compile finishing) has certainly not happened yet.

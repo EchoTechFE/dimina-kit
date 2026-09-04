@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { ProjectListScreen } from '@/modules/main/features/project-list/project-list-screen'
-import { ProjectRuntime } from '@/modules/main/features/project-runtime/project-runtime'
 import {
   addProject,
   chooseProjectDirectory,
@@ -10,12 +9,12 @@ import {
   getThumbnail,
   listProjects,
   listTemplates,
-  notifyWindowScreen,
   onProjectCreateSubmitted,
   onWindowNavigateBack,
   onWindowOpenProject,
   openCreateProjectDialog,
   openEditProjectDialog,
+  openProjectWindow,
   removeProject,
   showProjectCreateDialog,
   updateProject,
@@ -23,17 +22,12 @@ import {
 import { ProjectEditDialog } from '@/shared/components/project-edit-dialog'
 import type { Project, ProjectPatch } from '@/shared/types'
 
-const DEFAULT_APP_NAME = 'Dimina DevTools'
-
 export default function Main() {
-  const [page, setPage] = useState('list')
-  const [currentProject, setCurrentProject] = useState<Project | null>(null)
   const [projectList, setProjectList] = useState<Project[]>([])
   const [thumbnails, setThumbnails] = useState<Record<string, string | null>>({})
   const [editingProject, setEditingProject] = useState<Project | null>(null)
   const [savingEdit, setSavingEdit] = useState(false)
   const [editError, setEditError] = useState<string | null>(null)
-  const [appName, setAppName] = useState(DEFAULT_APP_NAME)
 
   async function loadProjects() {
     setProjectList(await listProjects())
@@ -44,7 +38,6 @@ export default function Main() {
     getBranding()
       .then((b) => {
         if (b?.appName) {
-          setAppName(b.appName)
           document.title = b.appName
         }
       })
@@ -60,29 +53,21 @@ export default function Main() {
     ).then((entries) => setThumbnails(Object.fromEntries(entries)))
   }, [projectList])
 
-  // Report our top-level screen to main so its window-close decision knows
-  // whether to return to the project list or quit. Fires on entry (including a
-  // failed open, which parks on the project screen) and on every change.
+  // Fired when the user asks to come back to the project list (菜单「打开项目」)
+  // so the list reflects anything that changed while they were in a workbench
+  // window (e.g. lastOpened).
   useEffect(() => {
-    notifyWindowScreen(page === 'project' ? 'project' : 'list')
-  }, [page])
-
-  useEffect(() => {
-    const off = onWindowNavigateBack(() => {
-      document.title = appName
-      setPage('list')
-      setCurrentProject(null)
+    return onWindowNavigateBack(() => {
       listProjects().then(setProjectList)
     })
-    return off
-  }, [appName])
+  }, [])
 
-  // Main-pushed open (MCP project_open): same path as a user click — mounting
-  // ProjectRuntime (keyed by path) is what compiles and attaches the simulator.
+  // Main-pushed open (MCP project_open): same path as a user click — asking
+  // main to spawn a workbench window is what compiles and attaches the
+  // simulator.
   useEffect(() => {
     return onWindowOpenProject((p) => {
-      setCurrentProject({ name: p.name, path: p.path })
-      setPage('project')
+      openProjectWindow({ name: p.name, path: p.path })
     })
   }, [])
 
@@ -251,35 +236,28 @@ export default function Main() {
   }
 
   function handleOpen(p: Project) {
-    setCurrentProject(p)
-    setPage('project')
-  }
-
-  if (page === 'list') {
-    return (
-      <>
-        <ProjectListScreen
-          projects={projectList}
-          onAdd={handleAdd}
-          onCreate={handleCreate}
-          onOpen={handleOpen}
-          onEdit={handleEdit}
-          onRemove={handleRemove}
-          thumbnails={thumbnails}
-        />
-        <ProjectEditDialog
-          open={editingProject !== null}
-          project={editingProject}
-          error={editError}
-          submitting={savingEdit}
-          onSubmit={handleEditSubmit}
-          onCancel={handleEditCancel}
-        />
-      </>
-    )
+    openProjectWindow(p)
   }
 
   return (
-    <ProjectRuntime key={currentProject?.path} project={currentProject!} />
+    <>
+      <ProjectListScreen
+        projects={projectList}
+        onAdd={handleAdd}
+        onCreate={handleCreate}
+        onOpen={handleOpen}
+        onEdit={handleEdit}
+        onRemove={handleRemove}
+        thumbnails={thumbnails}
+      />
+      <ProjectEditDialog
+        open={editingProject !== null}
+        project={editingProject}
+        error={editError}
+        submitting={savingEdit}
+        onSubmit={handleEditSubmit}
+        onCancel={handleEditCancel}
+      />
+    </>
   )
 }

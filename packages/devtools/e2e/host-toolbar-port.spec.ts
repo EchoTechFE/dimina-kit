@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, findMainWindow } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
@@ -25,7 +25,7 @@ const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
  *    (the session preload runs there too — guard zero-footprint, R2 surface).
  *
  * Mirrors host-toolbar.spec.ts: boot `host-toolbar-entry.js`, open the demo
- * project, then drive `instance.context.views.hostToolbar` from the MAIN
+ * project, then drive the OPEN project's own `hostToolbar` from the MAIN
  * process via `electronApp.evaluate`.
  */
 
@@ -36,8 +36,12 @@ type ToolbarPortSurface = {
   onMessage(channel: string, handler: (payload: unknown) => void): { dispose(): void }
   webContents: { isDestroyed(): boolean; executeJavaScript(code: string): Promise<unknown> } | null
 }
+// `instance.context` is the PROJECT-LIST window's own context — every window
+// gets its own `WorkbenchContext`/`ViewManager`, so this spec (which drives
+// the OPEN project's toolbar) reaches it through `instance.projectWindows()`,
+// same as host-toolbar.spec.ts.
 type E2eGlobals = {
-  __e2eHostToolbarInstance: { context: { views: { hostToolbar: ToolbarPortSurface } } }
+  __e2eHostToolbarInstance: { projectWindows(): Array<{ context: { views: { hostToolbar: ToolbarPortSurface } } }> }
   __e2ePortPings?: unknown[]
 }
 
@@ -46,7 +50,7 @@ test.describe('Host toolbar: gated MessagePort narrow channel (R2)', () => {
   test.describe.configure({ mode: 'serial' })
 
   let electronApp: ElectronApplication
-  let mainWindow: Page
+  let workbench: Page
 
   test.beforeAll(async () => {
     const entryPath = path.resolve(__dirname, 'host-toolbar-entry.js')
@@ -57,18 +61,15 @@ test.describe('Host toolbar: gated MessagePort narrow channel (R2)', () => {
         NODE_ENV: 'test',
       },
     })
-    mainWindow = await findMainWindow(electronApp)
-    await mainWindow.waitForLoadState('domcontentloaded')
-
-    // The toolbar placeholder/anchor mounts with an open project; load toolbar
-    // content only after this so the R1 height loop and the R2 handshake both
-    // run against a mounted layout.
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20_000 })
+    // The toolbar placeholder/anchor mounts with an open project; `openProjectInUI`
+    // opens its own workbench window and returns that window's Page directly,
+    // so the R1 height loop and the R2 handshake both run against a mounted layout.
+    workbench = await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 20_000 })
   })
 
   test.afterAll(async () => {
-    if (mainWindow && !mainWindow.isClosed()) {
-      await closeProject(mainWindow).catch(() => {})
+    if (workbench && !workbench.isClosed()) {
+      await closeProject(electronApp).catch(() => {})
     }
     await Promise.race([
       electronApp?.close().catch(() => {}),
@@ -87,7 +88,7 @@ test.describe('Host toolbar: gated MessagePort narrow channel (R2)', () => {
   const inToolbarPage = (code: string) =>
     electronApp.evaluate(async (_electronMods, expr) => {
       const g = globalThis as unknown as E2eGlobals
-      const wc = g.__e2eHostToolbarInstance.context.views.hostToolbar.webContents
+      const wc = g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar.webContents
       if (!wc || wc.isDestroyed()) return null
       return wc.executeJavaScript(expr)
     }, code)
@@ -96,7 +97,7 @@ test.describe('Host toolbar: gated MessagePort narrow channel (R2)', () => {
     // send() with no toolbar view at all: false, and it must not conjure one.
     const early = await electronApp.evaluate(() => {
       const g = globalThis as unknown as E2eGlobals
-      const toolbar = g.__e2eHostToolbarInstance.context.views.hostToolbar
+      const toolbar = g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar
       return { ok: toolbar.send('e2e:host', { too: 'early' }), created: toolbar.webContents !== null }
     })
     expect(early.ok).toBe(false)
@@ -107,7 +108,7 @@ test.describe('Host toolbar: gated MessagePort narrow channel (R2)', () => {
     await electronApp.evaluate(() => {
       const g = globalThis as unknown as E2eGlobals
       g.__e2ePortPings = []
-      g.__e2eHostToolbarInstance.context.views.hostToolbar.onMessage('e2e:ping', (payload) => {
+      g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar.onMessage('e2e:ping', (payload) => {
         g.__e2ePortPings!.push(payload)
       })
     })
@@ -116,7 +117,7 @@ test.describe('Host toolbar: gated MessagePort narrow channel (R2)', () => {
     // so this delivery proves the preload pending queue end to end.
     await electronApp.evaluate((_electronMods, file) => {
       const g = globalThis as unknown as E2eGlobals
-      return g.__e2eHostToolbarInstance.context.views.hostToolbar.loadFile(file)
+      return g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar.loadFile(file)
     }, path.join(FIXTURES, 'toolbar-port.html'))
 
     const pings = await pollUntil(hostPings, (v) => v.length >= 1, 30_000, 300)
@@ -131,7 +132,7 @@ test.describe('Host toolbar: gated MessagePort narrow channel (R2)', () => {
     await pollUntil(
       () => electronApp.evaluate(() => {
         const g = globalThis as unknown as E2eGlobals
-        return g.__e2eHostToolbarInstance.context.views.hostToolbar.send('e2e:host', { round: 1 })
+        return g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar.send('e2e:host', { round: 1 })
       }),
       (ok) => ok === true,
       30_000,
@@ -168,7 +169,7 @@ test.describe('Host toolbar: gated MessagePort narrow channel (R2)', () => {
     await pollUntil(
       () => electronApp.evaluate(() => {
         const g = globalThis as unknown as E2eGlobals
-        return g.__e2eHostToolbarInstance.context.views.hostToolbar.send('e2e:host', { round: 2 })
+        return g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar.send('e2e:host', { round: 2 })
       }),
       (ok) => ok === true,
       30_000,
@@ -188,7 +189,7 @@ test.describe('Host toolbar: gated MessagePort narrow channel (R2)', () => {
     // guard must keep the R2 bridge out of every non-toolbar renderer. An
     // implementation that exposes unconditionally fails here (and trips the
     // /toolbar/i sweep in host-toolbar.spec.ts as well).
-    const leak = await mainWindow.evaluate(
+    const leak = await workbench.evaluate(
       () => typeof (window as unknown as { diminaHostToolbar?: unknown }).diminaHostToolbar,
     )
     expect(leak).toBe('undefined')

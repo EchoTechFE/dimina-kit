@@ -33,10 +33,13 @@ const CORS_OVERRIDE_HEADERS: ReadonlySet<string> = new Set([
 
 /** Apply the simulator runtime's referer + CORS webRequest policy to one
  * session. Each session installs its own listeners (a webRequest listener is
- * per-session), so this runs once per partition. */
-function applySimulatorWebRequestPolicy(simulatorSession: Session): void {
+ * per-session), so this runs once per partition. `partition` scopes the
+ * Referer lookup to THIS session's project — see referer.ts's module doc for
+ * why a single shared value would let concurrently open projects clobber
+ * each other's Referer. */
+function applySimulatorWebRequestPolicy(simulatorSession: Session, partition: string): void {
   simulatorSession.webRequest.onBeforeSendHeaders((details, callback) => {
-    const forcedReferer = getSimulatorServicewechatReferer()
+    const forcedReferer = getSimulatorServicewechatReferer(partition)
     if (forcedReferer) {
       details.requestHeaders['Referer'] = forcedReferer
     }
@@ -86,10 +89,10 @@ function clearSimulatorWebRequestPolicy(simulatorSession: Session): void {
 export function setupSimulatorSessionPolicy(): Disposable {
   const configured = new Set<Session>()
   let unregister: (() => void) | null = null
-  function install(sess: Session): void {
+  function install(sess: Session, partition: string): void {
     if (configured.has(sess)) return
     configured.add(sess)
-    applySimulatorWebRequestPolicy(sess)
+    applySimulatorWebRequestPolicy(sess, partition)
   }
 
   const cleanup = (): void => {
@@ -101,10 +104,10 @@ export function setupSimulatorSessionPolicy(): Disposable {
 
   try {
     // Shared fallback session (pre-warm pool + unknown-appId path).
-    install(session.fromPartition(SHARED_MINIAPP_PARTITION))
+    install(session.fromPartition(SHARED_MINIAPP_PARTITION), SHARED_MINIAPP_PARTITION)
     // Every per-project miniapp partition session (current + future) gets the
     // same referer/CORS policy so isolated projects load resources identically.
-    unregister = registerMiniappSessionConfigurator((sess) => install(sess))
+    unregister = registerMiniappSessionConfigurator((sess, partition) => install(sess, partition))
   } catch (error) {
     cleanup()
     throw error

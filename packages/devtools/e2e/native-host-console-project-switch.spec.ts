@@ -169,13 +169,18 @@ test.describe('Right-panel Console keeps working after switching projects', () =
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 
   test('a log in project A is visible, then a log in project B (after a real close+reopen) is visible too', async () => {
     // ── Project A ────────────────────────────────────────────────────────
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 60_000 })
+    // Each project now opens in its own workbench window; the returned page
+    // is that window. The console assertions below still go through
+    // `electronApp.evaluate` (the panel is a separate devtools:// webContents,
+    // not part of the workbench window's own DOM) — `workbenchA` is kept to
+    // prove the window itself is really gone once `closeProject` runs.
+    const workbenchA = await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 60_000 })
     await waitForSimulatorWebview(electronApp)
     await pollUntil(
       () => evalInSimulator<boolean>(electronApp, `(() => !!document.querySelector('.device-shell-root'))()`).catch(() => false),
@@ -207,8 +212,9 @@ test.describe('Right-panel Console keeps working after switching projects', () =
     }
 
     // ── Switch to project B: a REAL close, not just the back-button path ──
-    await closeProject(mainWindow)
-    await openProjectInUI(mainWindow, PROJECT_B_DIR, { waitMs: 60_000 })
+    await closeProject(electronApp, { projectDir: DEMO_APP_DIR })
+    expect(workbenchA.isClosed(), 'project A\'s workbench window should be gone after closeProject').toBe(true)
+    const workbenchB = await openProjectInUI(electronApp, PROJECT_B_DIR, { waitMs: 60_000 })
     await waitForSimulatorWebview(electronApp)
     await pollUntil(
       () => evalInSimulator<boolean>(electronApp, `(() => !!document.querySelector('.device-shell-root'))()`).catch(() => false),
@@ -227,6 +233,7 @@ test.describe('Right-panel Console keeps working after switching projects', () =
       45000, 500,
     )
     expect(countB, 'a log made in project B\'s (new) service host should be visible in the (rebuilt) right-panel Console after switching').toBeGreaterThanOrEqual(1)
+    expect(workbenchB.isClosed(), 'project B\'s own workbench window should still be open').toBe(false)
 
     const selectedTabForB = await readSelectedTabText()
     if (selectedTabForB !== null) {

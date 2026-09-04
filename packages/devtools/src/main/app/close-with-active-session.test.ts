@@ -1,17 +1,19 @@
 /**
- * Behavior tests for the main BrowserWindow's `close` event while a project
+ * Behavior tests for a workbench window's `close` event while its project
  * session is active.
  *
  * Contract under test:
- *  - `event.preventDefault()` is called (the window stays open).
+ *  - `event.preventDefault()` is called, so teardown finishes before the
+ *    window goes away.
  *  - The project session is torn down — `workspace.hasActiveSession()` is
  *    false afterwards.
- *  - The renderer is notified via the `window:navigateBack` channel
- *    (i.e. `mainWindow.webContents.send('window:navigateBack')` is called).
- *  - Every IPC handler that was registered at setup time is STILL registered
- *    afterwards. The regression we guard against: a previous implementation
- *    disposed the whole IPC registry on close, leaving the renderer alive
- *    with no handlers behind it (the Import button silently broke).
+ *  - That one window is destroyed; the project-list window and the
+ *    application survive.
+ *  - Every IPC handler the application and the list window were serving
+ *    beforehand is STILL registered afterwards. The regression we guard
+ *    against: a previous implementation disposed the whole IPC registry on
+ *    close, leaving a live renderer with no handlers behind it (the Import
+ *    button silently broke).
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 
@@ -187,6 +189,8 @@ vi.mock('electron', () => {
   class BrowserWindow {
     private em = stubs.makeEmitter()
     destroyed = false
+    visible = true
+    minimized = false
     webContents = new WebContents()
     contentView: View | WebContentsView = new WebContentsView()
     on = this.em.on.bind(this.em)
@@ -198,9 +202,14 @@ vi.mock('electron', () => {
     getContentSize = () => [1280, 980]
     setIcon = vi.fn()
     setTitle = vi.fn()
-    show = vi.fn()
+    show = vi.fn(() => { this.visible = true })
     showInactive = vi.fn()
     focus = vi.fn()
+    hide = vi.fn(() => { this.visible = false })
+    isVisible = () => this.visible
+    minimize = vi.fn(() => { this.minimized = true })
+    isMinimized = () => this.minimized
+    restore = vi.fn(() => { this.minimized = false })
     close = vi.fn()
     destroy = vi.fn(() => {
       this.destroyed = true
@@ -372,7 +381,7 @@ vi.mock('@dimina-kit/devkit', () => ({
 }))
 
 // ── Lazy imports ────────────────────────────────────────────────────────
-import { WindowChannel, ProjectsChannel } from '../../shared/ipc-channels.js'
+import { ProjectsChannel } from '../../shared/ipc-channels.js'
 let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
@@ -382,22 +391,41 @@ beforeEach(async () => {
   ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
 
-describe('mainWindow close while a project session is active', () => {
-  it('calls event.preventDefault, tears down the session, and notifies window:navigateBack', async () => {
+type Instance = Awaited<ReturnType<typeof createDevtoolsRuntime>>
+type ProjectWindow = ReturnType<Instance['projectWindows']>[number]
+
+/** Opens `dir` in its own workbench window and returns that window's record. */
+async function openWorkbenchWindow(instance: Instance, dir: string): Promise<ProjectWindow> {
+  await instance.openProjectWindow({ path: dir })
+  const [projectWindow] = instance.projectWindows()
+  expect(projectWindow, 'openProjectWindow must publish the window it opened').toBeTruthy()
+  return projectWindow!
+}
+
+function emitClose(win: unknown, fakeEvent: unknown) {
+  ;(win as { emit: (event: string, ...args: unknown[]) => void }).emit('close', fakeEvent)
+}
+
+describe('workbench window close while its project session is active', () => {
+  it('calls event.preventDefault, tears down the session, and destroys that window only', async () => {
     const projectDir = '/tmp/projActive'
     stubs.projectsWithAppJson.add(projectDir)
     stubs.setProjectsJson(JSON.stringify([]))
 
     const instance = await createDevtoolsRuntime({})
+    const projectWindow = await openWorkbenchWindow(instance, projectDir)
 
-    // Open a project directly through the workspace service. Bypasses the
-    // IPC layer because what we want to set up is "a session exists".
-    const openResult = await instance.context.workspace.openProject(projectDir)
+    // Open the project directly through the window's workspace service.
+    // Bypasses the IPC layer because what we want to set up is "a session
+    // exists behind this window".
+    const openResult = await projectWindow.context.workspace.openProject(projectDir)
     expect(openResult.success).toBe(true)
-    expect(instance.context.workspace.hasActiveSession()).toBe(true)
+    expect(projectWindow.context.workspace.hasActiveSession()).toBe(true)
 
-    const sendSpy = vi.mocked(instance.mainWindow.webContents.send)
-    sendSpy.mockClear()
+    const destroySpy = vi.mocked(projectWindow.window.destroy)
+    const listDestroySpy = vi.mocked(instance.mainWindow.destroy)
+    destroySpy.mockClear()
+    listDestroySpy.mockClear()
 
     // Build a fake close event that records preventDefault calls.
     let prevented = 0
@@ -408,46 +436,40 @@ describe('mainWindow close while a project session is active', () => {
     }
 
     // Fire the close event the same way Electron would.
-    ;(instance.mainWindow as unknown as {
-      emit: (event: string, ...args: unknown[]) => void
-    }).emit('close', fakeEvent)
+    emitClose(projectWindow.window, fakeEvent)
 
     // The close handler is fire-and-forget (returns void); wait for the
-    // full sequence (session teardown + renderer notification) to settle.
+    // full sequence (session teardown, then the window going away) to settle.
     await vi.waitFor(
       () => {
-        expect(instance.context.workspace.hasActiveSession()).toBe(false)
-        const calls = sendSpy.mock.calls.filter(
-          (call) => call[0] === WindowChannel.NavigateBack,
-        )
-        expect(calls.length).toBeGreaterThanOrEqual(1)
+        expect(projectWindow.context.workspace.hasActiveSession()).toBe(false)
+        expect(destroySpy).toHaveBeenCalledTimes(1)
       },
       { timeout: 2000 },
     )
 
     expect(prevented).toBe(1)
-
-    // The renderer should have been told to navigate back to the project list.
-    const navigateBackCalls = sendSpy.mock.calls.filter(
-      (call) => call[0] === WindowChannel.NavigateBack,
-    )
-    expect(navigateBackCalls).toHaveLength(1)
+    expect(
+      listDestroySpy,
+      'closing one project must not take the project list down with it',
+    ).not.toHaveBeenCalled()
+    expect(instance.mainWindow.isDestroyed()).toBe(false)
 
     await instance.dispose()
   })
 
-  it('does NOT unregister IPC handlers — every channel registered at setup time is still active afterwards', async () => {
+  it('does NOT unregister the app-level IPC handlers — every channel the list window was served by is still active afterwards', async () => {
     const projectDir = '/tmp/projActiveKeepHandlers'
     stubs.projectsWithAppJson.add(projectDir)
     stubs.setProjectsJson(JSON.stringify([]))
 
     const instance = await createDevtoolsRuntime({})
-    await instance.context.workspace.openProject(projectDir)
-    expect(instance.context.workspace.hasActiveSession()).toBe(true)
 
-    // Snapshot the live handler set at setup time. We include the critical
-    // channels by name explicitly so a regression that drops *only one* still
-    // fails this test, plus a broader "every channel that was registered".
+    // Snapshot the live handler set BEFORE any workbench window exists: this
+    // is exactly the surface the application and the project-list window own,
+    // and all of it must outlive a workbench window's close. We include the
+    // critical channels by name explicitly so a regression that drops *only
+    // one* still fails this test.
     const liveBefore = new Set(stubs.handlers.keys())
     const criticalChannels = [
       ProjectsChannel.List,
@@ -461,28 +483,35 @@ describe('mainWindow close while a project session is active', () => {
       ).toBe(true)
     }
 
+    const projectWindow = await openWorkbenchWindow(instance, projectDir)
+    await projectWindow.context.workspace.openProject(projectDir)
+    expect(projectWindow.context.workspace.hasActiveSession()).toBe(true)
+
     const removeHandlerCallsBefore = stubs.removeHandlerCalls.length
+    const destroySpy = vi.mocked(projectWindow.window.destroy)
+    destroySpy.mockClear()
 
     // Fire the close event.
     const fakeEvent = { preventDefault: () => {} }
-    ;(instance.mainWindow as unknown as {
-      emit: (event: string, ...args: unknown[]) => void
-    }).emit('close', fakeEvent)
+    emitClose(projectWindow.window, fakeEvent)
 
-    // Wait for the close handler to fully resolve (session teardown is async).
+    // Wait for the close handler to fully resolve (session teardown is async,
+    // and the window is destroyed only once it finishes).
     await vi.waitFor(
       () => {
-        expect(instance.context.workspace.hasActiveSession()).toBe(false)
+        expect(projectWindow.context.workspace.hasActiveSession()).toBe(false)
+        expect(destroySpy).toHaveBeenCalledTimes(1)
       },
       { timeout: 2000 },
     )
 
-    // Every previously-live channel must still be live.
+    // Every channel that was live before the workbench window existed must
+    // still be live.
     const liveAfter = new Set(stubs.handlers.keys())
     for (const ch of liveBefore) {
       expect(
         liveAfter.has(ch),
-        `expected channel '${ch}' to remain registered after close event`,
+        `expected channel '${ch}' to remain registered after a workbench window closed`,
       ).toBe(true)
     }
 
@@ -506,11 +535,11 @@ describe('mainWindow close while a project session is active', () => {
  * LEAK-PROOFING WAVE (项目关闭时保证编译子进程同步关闭) — app/registry
  * teardown conduction.
  *
- * `instance.dispose()` (the path hosts and tests run at app shutdown,
- * backing `disposeContext`) must tear down the ACTIVE SESSION, not just the
- * IPC registry. The session's close() is the only hop that reaches devkit
- * and kills the forked compile worker — an app teardown that skips it leaks
- * one compiler process per shutdown-with-open-project.
+ * `instance.dispose()` (the path hosts and tests run at app shutdown) must
+ * tear down every open workbench window's ACTIVE SESSION, not just the IPC
+ * registry. The session's close() is the only hop that reaches devkit and
+ * kills the forked compile worker — an app teardown that skips it leaks one
+ * compiler process per shutdown-with-open-project.
  *
  * Workspace-level conduction (closeProject → session.close, open-switch,
  * rejecting close) is pinned in
@@ -518,15 +547,16 @@ describe('mainWindow close while a project session is active', () => {
  * pins the one hop above it: dispose → closeProject → session.close.
  */
 describe('instance.dispose() while a project session is active (app teardown leak guard)', () => {
-  it('dispose() closes the active devkit session exactly once and clears it', async () => {
+  it('dispose() closes the workbench window\'s active devkit session exactly once and clears it', async () => {
     const projectDir = '/tmp/projDisposeActive'
     stubs.projectsWithAppJson.add(projectDir)
     stubs.setProjectsJson(JSON.stringify([]))
 
     const instance = await createDevtoolsRuntime({})
-    const openResult = await instance.context.workspace.openProject(projectDir)
+    const projectWindow = await openWorkbenchWindow(instance, projectDir)
+    const openResult = await projectWindow.context.workspace.openProject(projectDir)
     expect(openResult.success).toBe(true)
-    expect(instance.context.workspace.hasActiveSession()).toBe(true)
+    expect(projectWindow.context.workspace.hasActiveSession()).toBe(true)
     // The open itself must not have closed anything (a fresh service's
     // pre-open disposeSession is a no-op) — baseline for the pin below.
     expect(devkitStubs.sessionClose).not.toHaveBeenCalled()
@@ -538,7 +568,7 @@ describe('instance.dispose() while a project session is active (app teardown lea
       'instance.dispose() must close the active session — this is the hop that kills the forked '
       + 'compile worker; disposing only the IPC registry leaks one compiler process per app shutdown',
     ).toHaveBeenCalledTimes(1)
-    expect(instance.context.workspace.hasActiveSession()).toBe(false)
+    expect(projectWindow.context.workspace.hasActiveSession()).toBe(false)
   })
 
   it('dispose() with no active session does not invent a session close (and stays idempotent after a real one)', async () => {
@@ -547,7 +577,8 @@ describe('instance.dispose() while a project session is active (app teardown lea
     stubs.setProjectsJson(JSON.stringify([]))
 
     const instance = await createDevtoolsRuntime({})
-    await instance.context.workspace.openProject(projectDir)
+    const projectWindow = await openWorkbenchWindow(instance, projectDir)
+    await projectWindow.context.workspace.openProject(projectDir)
 
     await instance.dispose()
     expect(devkitStubs.sessionClose).toHaveBeenCalledTimes(1)

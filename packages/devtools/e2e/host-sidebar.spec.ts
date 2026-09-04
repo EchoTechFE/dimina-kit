@@ -13,10 +13,9 @@ const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-sidebar')
  *
  * `[data-area="host-sidebar"]` (project-list-screen.tsx) mounts at app boot,
  * before any project is opened — the OPPOSITE screen-scoping from the toolbar
- * (which only mounts once a project is open). Entering a project unmounts
- * ProjectListScreen, whose placement publisher flushes an empty snapshot on
- * dispose — the same detach mechanism host-toolbar.spec.ts exercises on
- * project CLOSE, here exercised on project OPEN.
+ * (which only mounts once a project is open). A project opens in its own
+ * window, so the list page underneath never unmounts: the sidebar strip stays
+ * the list window's, which is the ownership the lifecycle test below pins.
  *
  * Electron e2e; runs on local macOS without extra setup (NODE_ENV=test,
  * off-screen windows).
@@ -161,44 +160,49 @@ test.describe('Host sidebar: session-resident width advertiser (R1, inline axis)
     expect(leaks).toEqual([])
   })
 
-  test('entering a project detaches the sidebar WCV; returning to the list re-attaches it', async () => {
-    /** Is the sidebar WCV currently among any window's contentView children? */
-    const sidebarAttached = () => electronApp.evaluate(({ BrowserWindow }) => {
+  test('the sidebar WCV stays owned by the list window across a project opening and closing', async () => {
+    /** The sidebar WCV's id and the entry html of the window hosting it, or
+     * null when no window has it as a contentView child. */
+    const sidebarHost = () => electronApp.evaluate(({ BrowserWindow }) => {
       const g = globalThis as unknown as {
         __e2eHostSidebarInstance: {
           context: { views: { hostSidebar: { webContents: { id: number; isDestroyed(): boolean } | null } } }
         }
       }
       const wc = g.__e2eHostSidebarInstance.context.views.hostSidebar.webContents
-      if (!wc || wc.isDestroyed()) return false
-      return BrowserWindow.getAllWindows().some((win) => {
+      if (!wc || wc.isDestroyed()) return null
+      for (const win of BrowserWindow.getAllWindows()) {
         const children = win.contentView.children as Array<{ webContents?: { id: number } }>
-        return children.some((v) => v.webContents?.id === wc.id)
-      })
+        if (children.some((v) => v.webContents?.id === wc.id)) {
+          return { wcId: wc.id, hostUrl: win.webContents.getURL() }
+        }
+      }
+      return null
     })
 
-    // Meaningfulness guard: the strip really is attached on the list page
-    // (from the 88px reload above) before we navigate away.
-    expect(await sidebarAttached()).toBe(true)
+    // Meaningfulness guard: the strip really is attached to the list window
+    // (from the 88px reload above) before a project window exists.
+    const onList = await sidebarHost()
+    expect(onList?.hostUrl, 'the sidebar starts out inside the project-list window').toContain('entries/main')
 
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20_000 })
+    await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 20_000 })
 
-    const detachedInProject = await pollUntil(
-      sidebarAttached,
-      (attached) => attached === false,
-      15_000,
-      300,
-    )
-    expect(detachedInProject).toBe(false)
+    // The project now lives in its own window, so the list window keeps its
+    // sidebar rather than handing it over: the strip must never end up
+    // painting inside the workbench, and must not be rebuilt behind the
+    // project's back either — a rebuilt WCV would silently drop the host
+    // preload and the width the list page advertised. Both are absence
+    // claims, so they get a settling window first: a wrong re-parent or
+    // rebuild would land in the moments after the project window appears.
+    await new Promise((resolve) => setTimeout(resolve, 2_000))
+    const withProject = await sidebarHost()
+    expect(withProject?.hostUrl, 'a project window must not take the list window\'s sidebar').toContain('entries/main')
+    expect(withProject?.wcId, 'opening a project must not rebuild the sidebar WCV').toBe(onList?.wcId)
 
-    await closeProject(mainWindow)
+    await closeProject(electronApp)
 
-    const reattachedOnList = await pollUntil(
-      sidebarAttached,
-      (attached) => attached === true,
-      15_000,
-      300,
-    )
-    expect(reattachedOnList).toBe(true)
+    const afterClose = await pollUntil(sidebarHost, (host) => host !== null, 15_000, 300)
+    expect(afterClose?.hostUrl).toContain('entries/main')
+    expect(afterClose?.wcId, 'closing a project must not rebuild the sidebar WCV').toBe(onList?.wcId)
   })
 })

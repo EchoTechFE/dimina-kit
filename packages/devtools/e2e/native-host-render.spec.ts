@@ -44,6 +44,7 @@ const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 
 let electronApp: ElectronApplication
 let mainWindow: PwPage
+let workbench: PwPage
 let autoPort = 0
 
 // One-shot JSON-RPC call to the miniprogram-automator WebSocket server. Drives
@@ -115,12 +116,12 @@ test.describe('native-host render path e2e', () => {
       100,
     ) as number
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    workbench = await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 
@@ -139,7 +140,7 @@ test.describe('native-host render path e2e', () => {
     // The WXML service pulls the tree from the active render guest via the
     // injected inspector; it's ready once the page DOM (its Vue tree) mounts.
     const tree = await pollUntil(
-      () => ipcInvoke<{ tagName?: string } | null>(mainWindow, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
+      () => ipcInvoke<{ tagName?: string } | null>(workbench, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
       (t) => !!t && typeof t.tagName === 'string',
       30000,
       400,
@@ -150,7 +151,7 @@ test.describe('native-host render path e2e', () => {
 
   test('AppData panel is populated from the service→render setData tap', async () => {
     const snap = await pollUntil(
-      () => ipcInvoke<{ bridges?: unknown[] } | null>(mainWindow, SimulatorAppDataChannel.GetSnapshot).catch(() => null),
+      () => ipcInvoke<{ bridges?: unknown[] } | null>(workbench, SimulatorAppDataChannel.GetSnapshot).catch(() => null),
       (s) => !!s && Array.isArray(s.bridges) && s.bridges.length >= 1,
       30000,
       400,
@@ -162,15 +163,15 @@ test.describe('native-host render path e2e', () => {
   })
 
   test('Storage panel reads/writes the service-host store', async () => {
-    const prefix = await ipcInvoke<string>(mainWindow, SimulatorStorageChannel.GetActivePrefix)
+    const prefix = await ipcInvoke<string>(workbench, SimulatorStorageChannel.GetActivePrefix)
     expect(prefix, 'active storage prefix should resolve under native-host').toBeTruthy()
     const key = `${prefix}__e2e_native_storage`
 
-    const set = await ipcInvoke<{ ok: boolean }>(mainWindow, SimulatorStorageChannel.Set, { key, value: 'native-1' })
+    const set = await ipcInvoke<{ ok: boolean }>(workbench, SimulatorStorageChannel.Set, { key, value: 'native-1' })
     expect(set?.ok, 'Set should succeed against the service-host store').toBe(true)
 
     const items = await pollUntil(
-      () => ipcInvoke<Array<{ key: string; value: string }>>(mainWindow, SimulatorStorageChannel.GetSnapshot).catch(() => []),
+      () => ipcInvoke<Array<{ key: string; value: string }>>(workbench, SimulatorStorageChannel.GetSnapshot).catch(() => []),
       (arr) => Array.isArray(arr) && arr.some((it) => it.key === key && it.value === 'native-1'),
       10000,
       300,
@@ -191,7 +192,7 @@ test.describe('native-host render path e2e', () => {
     // highlight until one maps to a real, laid-out element.
     const tree = await pollUntil(
       () => ipcInvoke<{ tagName?: string; sid?: string; children?: unknown[] } | null>(
-        mainWindow, SimulatorWxmlChannel.GetSnapshot,
+        workbench, SimulatorWxmlChannel.GetSnapshot,
       ).catch(() => null),
       (t) => !!t && typeof t.tagName === 'string',
       30000,
@@ -209,13 +210,13 @@ test.describe('native-host render path e2e', () => {
     let hit: { rect?: { width?: number } } | null = null
     for (const sid of sids.slice(0, 30)) {
       const r = await ipcInvoke<{ rect?: { width?: number } } | null>(
-        mainWindow, SimulatorElementChannel.Inspect, sid,
+        workbench, SimulatorElementChannel.Inspect, sid,
       ).catch(() => null)
       if (r && r.rect) { hit = r; break }
     }
     expect(hit, 'at least one sid should highlight a real element via the render inspector').toBeTruthy()
     expect(typeof hit!.rect!.width).toBe('number')
-    await ipcInvoke(mainWindow, SimulatorElementChannel.Clear).catch(() => {})
+    await ipcInvoke(workbench, SimulatorElementChannel.Clear).catch(() => {})
   })
 
   test('App.getCurrentPage + Page.getElement/Element.tap reach the render guest', async () => {
@@ -283,9 +284,9 @@ test.describe('native-host render path e2e', () => {
 
     let zoom = await pollUntil(zoomOf, settled, 8000, 300).catch(() => null)
     if (!settled(zoom)) {
-      const toggle = mainWindow.locator('[data-testid="layout-toolbar-toggle-simulator"]')
+      const toggle = workbench.locator('[data-testid="layout-toolbar-toggle-simulator"]')
       await toggle.click()
-      await mainWindow.waitForTimeout(500)
+      await workbench.waitForTimeout(500)
       await toggle.click()
       zoom = await pollUntil(zoomOf, settled, 8000, 300).catch(() => null)
     }

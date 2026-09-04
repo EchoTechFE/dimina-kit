@@ -52,12 +52,12 @@ import {
 } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR, findMainWindow } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let electronApp: ElectronApplication
-let mainWindow: PwPage
+let workbench: PwPage
 
 test.beforeAll(async () => {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
@@ -71,19 +71,17 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await findMainWindow(electronApp)
-  await mainWindow.waitForLoadState('domcontentloaded')
   // Offscreen + blur so the spec never steals focus (real pointer drags below).
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) { win.setPosition(-2000, -2000); win.blur() }
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await mainWindow.waitForSelector('[data-deck-group]', { timeout: 15000 })
+  workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await workbench.waitForSelector('[data-deck-group]', { timeout: 15000 })
 })
 
 test.afterAll(async () => {
-  try { await closeProject(mainWindow) } catch { /* best effort */ }
+  try { await closeProject(electronApp) } catch { /* best effort */ }
   await electronApp.close()
 })
 
@@ -185,10 +183,10 @@ function topShare(sizes: number[]): number {
 test('[needs-real-electron] R1: a sub-0.5% real splitter drag PERSISTS to the model (v3 normalizes it above FLEX_RATIO_TOLERANCE)', async () => {
   // col-main is the column split [editor | debug], both flexible. Reset to a
   // clean 50/50 so the small drag's flexible delta is unambiguous.
-  await applyLayout(mainWindow, 'col-main', [50, 50])
-  await mainWindow.waitForTimeout(300)
+  await applyLayout(workbench, 'col-main', [50, 50])
+  await workbench.waitForTimeout(300)
 
-  const before = await splitInfo(mainWindow, 'col-main')
+  const before = await splitInfo(workbench, 'col-main')
   expect(before, 'col-main must render with a resize handle').not.toBeNull()
   expect(before!.handle, 'col-main must expose a [data-deck-resize-handle]').not.toBeNull()
   expect(before!.axis).toBe('h')
@@ -202,10 +200,10 @@ test('[needs-real-electron] R1: a sub-0.5% real splitter drag PERSISTS to the mo
   const dy = 3 // observed: container ~908px → 0.5% ≈ 4.5px, so 3px is sub-0.5%
   expect(dy, `the drag (${dy}px) must be under 0.5% of the container (${halfPctPx.toFixed(2)}px) to exercise the epsilon`).toBeLessThan(halfPctPx)
 
-  await dragHandle(mainWindow, 'col-main', [{ dx: 0, dy }])
-  await mainWindow.waitForTimeout(400)
+  await dragHandle(workbench, 'col-main', [{ dx: 0, dy }])
+  await workbench.waitForTimeout(400)
 
-  const after = await splitInfo(mainWindow, 'col-main')
+  const after = await splitInfo(workbench, 'col-main')
 
   // SANITY: the real pointer drag DID move the VISIBLE split — rrp committed the
   // small move (so this is a genuine completed user drag, not a no-op gesture).
@@ -255,7 +253,7 @@ test('[needs-real-electron] R2: a fixed-px split does NOT corrupt the flexible c
   // is also 100 ⇒ 100==100 within `FLEX_RATIO_TOLERANCE` ⇒ the echo (and any
   // ratio-preserving spontaneous re-measure) is SKIPPED ⇒ the raw seed weight 1
   // is never overwritten.
-  const root = await mainWindow.evaluate(() => {
+  const root = await workbench.evaluate(() => {
     const s = document.querySelector('[data-deck-split="dock-root"]')
     if (!s) return null
     return {
@@ -311,18 +309,18 @@ test('[needs-real-electron] R3: a drag that returns to origin does NOT freeze la
   // (≈)its origin (net-zero change), but with no gate flag there is nothing left
   // armed — so a later programmatic `setSizes` syncs the visible split
   // immediately.
-  await applyLayout(mainWindow, 'col-main', [50, 50])
-  await mainWindow.waitForTimeout(300)
+  await applyLayout(workbench, 'col-main', [50, 50])
+  await workbench.waitForTimeout(300)
 
-  const before = await splitInfo(mainWindow, 'col-main')
+  const before = await splitInfo(workbench, 'col-main')
   expect(before!.handle, 'col-main must expose a handle').not.toBeNull()
   const beforeTop = before!.sizes[0]!
 
   // Real pointer drag AWAY (+80px) then BACK to the exact origin, then release.
-  await dragHandle(mainWindow, 'col-main', [{ dx: 0, dy: 80 }, { dx: 0, dy: 0 }])
-  await mainWindow.waitForTimeout(400)
+  await dragHandle(workbench, 'col-main', [{ dx: 0, dy: 80 }, { dx: 0, dy: 0 }])
+  await workbench.waitForTimeout(400)
 
-  const afterDrag = await splitInfo(mainWindow, 'col-main')
+  const afterDrag = await splitInfo(workbench, 'col-main')
   // The drag returned to origin: the visible split is back where it started.
   expect(
     Math.abs(afterDrag!.sizes[0]! - beforeTop),
@@ -330,10 +328,10 @@ test('[needs-real-electron] R3: a drag that returns to origin does NOT freeze la
   ).toBeLessThanOrEqual(4)
 
   // Now drive a PROGRAMMATIC setSizes to a dramatically different ratio.
-  await applyLayout(mainWindow, 'col-main', [10, 90])
-  await mainWindow.waitForTimeout(500)
+  await applyLayout(workbench, 'col-main', [10, 90])
+  await workbench.waitForTimeout(500)
 
-  const afterProg = await splitInfo(mainWindow, 'col-main')
+  const afterProg = await splitInfo(workbench, 'col-main')
   // The model + mirror update regardless (setSizes mutates the model).
   expect(afterProg!.sizesAttr, 'the programmatic setSizes lands in the model').toBe('10,90')
 

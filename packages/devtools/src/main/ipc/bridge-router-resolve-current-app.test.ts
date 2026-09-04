@@ -175,7 +175,7 @@ function makeCtxNoWorkspaceSession(): { ctx: WorkbenchContext; simulatorWc: Mock
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
-    windows: { mainWindow: { webContents: simulatorWc } },
+    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
     // No active workspace session: resolveCurrentApp's workspace branch is skipped.
     workspace: { getSession: () => null, getProjectPath: () => '' },
     connections: createConnectionRegistry(),
@@ -210,7 +210,7 @@ function makeCtxWithIsClosing(closing: boolean): { ctx: WorkbenchContext; simula
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
-    windows: { mainWindow: { webContents: simulatorWc } },
+    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
     workspace: { getSession: () => null, getProjectPath: () => '', isClosing: () => closing },
     connections: createConnectionRegistry(),
     appData: undefined,

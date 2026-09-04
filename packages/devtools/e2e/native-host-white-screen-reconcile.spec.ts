@@ -48,6 +48,7 @@ const CYCLE = [
 
 let electronApp: ElectronApplication
 let mainWindow: PwPage
+let workbench: PwPage
 
 async function selectDevice(win: PwPage, deviceName: string): Promise<void> {
   const sel = win.locator('select', { has: win.locator(`option[value="${deviceName}"]`) }).first()
@@ -97,7 +98,7 @@ test.describe('native-host white-screen reconcile e2e', () => {
       100,
     )
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    workbench = await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
 
     await pollUntil(
@@ -112,7 +113,7 @@ test.describe('native-host white-screen reconcile e2e', () => {
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 
@@ -121,7 +122,7 @@ test.describe('native-host white-screen reconcile e2e', () => {
     // previous sentinel window may still be open — the conditions that used to
     // strand the view detached.
     for (let i = 0; i < 16; i++) {
-      await selectDevice(mainWindow, CYCLE[i % CYCLE.length]!.name)
+      await selectDevice(workbench, CYCLE[i % CYCLE.length]!.name)
       await new Promise((r) => setTimeout(r, 120))
     }
     // Let the last relayout settle.

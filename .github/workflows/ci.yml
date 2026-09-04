@@ -203,8 +203,23 @@ jobs:
           command: check
           comment: 'false'
 
+      # `pawl guard` reads `Pawl-Accept:` trailers from the commits between the
+      # base and HEAD, which is how a deliberately accepted regression (a
+      # changed measurement definition, say) is authorized. actions/checkout
+      # fetches refs/pull/N/merge at depth 1, so HEAD is a grafted merge commit
+      # with no parents: the only commit in range is the merge commit GitHub
+      # generated, whose message carries no trailer, and an authorized
+      # regression is reported as unauthorized. Deepening past this PR's own
+      # commits puts them back in range.
       - name: Anti-regression baseline guard
         if: github.event_name == 'pull_request'
+        env:
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+          MERGE_REF: refs/pull/${{ github.event.pull_request.number }}/merge
         run: |
+          set -euo pipefail
+          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+            git fetch --deepen="$((PR_COMMITS + 1))" origin "$MERGE_REF"
+          fi
           git fetch --depth=1 origin "$GITHUB_BASE_REF"
           pawl guard FETCH_HEAD

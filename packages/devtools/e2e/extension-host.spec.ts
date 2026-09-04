@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, evalInSimulator, ipcInvoke, findMainWindow } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, evalInSimulator, ipcInvoke } from './helpers'
 import { SimulatorCustomApiChannel } from '../src/shared/ipc-channels'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -29,7 +29,7 @@ test.describe('Extension host (createWorkbenchApp onSetup)', () => {
   test.describe.configure({ mode: 'serial' })
 
   let electronApp: ElectronApplication
-  let mainWindow: Page
+  let workbench: Page
 
   test.beforeAll(async () => {
     const entryPath = path.resolve(__dirname, 'extension-host-entry.js')
@@ -40,19 +40,18 @@ test.describe('Extension host (createWorkbenchApp onSetup)', () => {
         NODE_ENV: 'test',
       },
     })
-    mainWindow = await findMainWindow(electronApp)
-    await mainWindow.waitForLoadState('domcontentloaded')
 
-    // The toolbar only renders once a project is open.
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20_000 })
+    // The toolbar only renders once a project is open. `openProjectInUI` opens
+    // its own workbench window and returns that window's Page directly.
+    workbench = await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 20_000 })
   })
 
   test.afterAll(async () => {
     // Close the project first: this detaches the CDP debugger that
     // setupSimulatorStorage attached to the simulator <webview>. Leaving it
     // attached makes `electronApp.close()` hang past the hook timeout.
-    if (mainWindow && !mainWindow.isClosed()) {
-      await closeProject(mainWindow).catch(() => {})
+    if (workbench && !workbench.isClosed()) {
+      await closeProject(electronApp).catch(() => {})
     }
     // Hard cap on close() — never let a stuck Electron exit blow the hook
     // timeout; the OS reaps the orphan process either way.
@@ -68,7 +67,7 @@ test.describe('Extension host (createWorkbenchApp onSetup)', () => {
     // project-toolbar.tsx renders its main row at the fixed HEADER_H constant
     // (40px) and no longer fetches a height over IPC. A 72px reading means
     // the legacy config→IPC→renderer plumbing has come back.
-    const measure = () => mainWindow.evaluate(() => {
+    const measure = () => workbench.evaluate(() => {
       // The header is the toolbar row holding the "普通编译" compile button.
       const buttons = Array.from(document.querySelectorAll('button'))
       const compileBtn = buttons.find((b) => (b.textContent || '').includes('普通编译'))
@@ -133,7 +132,7 @@ test.describe('Extension host (createWorkbenchApp onSetup)', () => {
 
     const result = await pollUntil(
       () => ipcInvoke<unknown>(
-        mainWindow,
+        workbench,
         SimulatorCustomApiChannel.Invoke,
         'e2eEcho',
         { ping: 'e2e' },

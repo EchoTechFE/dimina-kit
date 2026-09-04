@@ -196,7 +196,7 @@ function makeCtx(opts?: { getProjectPath?: () => string }): {
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
-    windows: { mainWindow: { webContents: simulatorWc } },
+    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
     workspace,
     connections: createConnectionRegistry(),
   } as unknown as WorkbenchContext

@@ -48,6 +48,7 @@ import { z } from 'zod'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
+import { toIpcContextSource, type IpcInput } from '../utils/ipc-context-source.js'
 import { validate } from '../utils/ipc-schema.js'
 import { ProjectFsChannel } from '../../shared/ipc-channels.js'
 import { WATCH_IGNORE_DIRS } from '@dimina-kit/devkit/watch-ignore'
@@ -600,42 +601,45 @@ async function listFiles(root: string, rootArg: string): Promise<string[]> {
  * Register the project-fs IPC channels. Call once during workbench setup;
  * the returned Disposable removes every channel (park on `ctx.registry`).
  */
-export function registerProjectFsIpc(
-  ctx: Pick<WorkbenchContext, 'workspace' | 'senderPolicy'>,
-): Disposable {
-  const getRoot = () => ctx.workspace.getProjectPath()
-  const getLastClosedRoot = () => ctx.workspace.getLastClosedProjectPath()
-  return new IpcRegistry(ctx.senderPolicy)
-    .handle(ProjectFsChannel.GetRoot, () => getRoot())
-    .handle(ProjectFsChannel.ReadFile, (_event, ...args: unknown[]) => {
+type ProjectFsIpcCtx = Pick<WorkbenchContext, 'workspace' | 'senderPolicy'>
+
+export function registerProjectFsIpc(input: IpcInput<ProjectFsIpcCtx>): Disposable {
+  // Roots are read per call from the CALLING window's workspace: each window
+  // has its own open project, so a captured root would sandbox one window's
+  // file access against another's project.
+  const getRoot = (ctx: ProjectFsIpcCtx) => ctx.workspace.getProjectPath()
+  const getLastClosedRoot = (ctx: ProjectFsIpcCtx) => ctx.workspace.getLastClosedProjectPath()
+  return new IpcRegistry(toIpcContextSource(input))
+    .handleRouted(ProjectFsChannel.GetRoot, (ctx) => getRoot(ctx))
+    .handleRouted(ProjectFsChannel.ReadFile, (ctx, _event, ...args: unknown[]) => {
       const [p] = validate(ProjectFsChannel.ReadFile, ReadFileSchema, args)
       // Reads stay scoped to the CURRENT root only — never widen the read
       // surface to the last-closed project.
-      return readFile(getRoot(), p)
+      return readFile(getRoot(ctx), p)
     })
-    .handle(ProjectFsChannel.WriteFile, (_event, ...args: unknown[]) => {
+    .handleRouted(ProjectFsChannel.WriteFile, (ctx, _event, ...args: unknown[]) => {
       const [p, content] = validate(ProjectFsChannel.WriteFile, WriteFileSchema, args)
       // Accept a write under the current OR the just-closed project root (the
       // latter rescues an in-flight teardown flush after `closeProject`). The
       // selected root then runs the FULL sandbox (realpath containment +
       // ancestor guard + O_NOFOLLOW) inside `writeFile`, so the boundary is
       // never relaxed — only WHICH root is considered.
-      const root = pickWriteRoot(p, { current: getRoot(), lastClosed: getLastClosedRoot() })
+      const root = pickWriteRoot(p, { current: getRoot(ctx), lastClosed: getLastClosedRoot(ctx) })
       return writeFile(root, p, content)
     })
-    .handleSync(ProjectFsChannel.WriteFileSync, (_event, ...args: unknown[]) => {
+    .handleSyncRouted(ProjectFsChannel.WriteFileSync, (ctx, _event, ...args: unknown[]) => {
       // Synchronous twin of WriteFile for the editor's beforeunload flush. Same
       // root selection + same sandbox (`writeFileSync` mirrors `writeFile`); the
       // only difference is the blocking transport. Returns `{ ok: true }`; any
       // throw is converted to `{ ok: false, code, message }` by `handleSync`.
       const [p, content] = validate(ProjectFsChannel.WriteFileSync, WriteFileSchema, args)
-      const root = pickWriteRoot(p, { current: getRoot(), lastClosed: getLastClosedRoot() })
+      const root = pickWriteRoot(p, { current: getRoot(ctx), lastClosed: getLastClosedRoot(ctx) })
       writeFileSync(root, p, content)
       return { ok: true }
     })
-    .handle(ProjectFsChannel.ListFiles, (_event, ...args: unknown[]) => {
+    .handleRouted(ProjectFsChannel.ListFiles, (ctx, _event, ...args: unknown[]) => {
       const [p] = validate(ProjectFsChannel.ListFiles, ListFilesSchema, args)
-      return listFiles(getRoot(), p)
+      return listFiles(getRoot(ctx), p)
     })
 }
 

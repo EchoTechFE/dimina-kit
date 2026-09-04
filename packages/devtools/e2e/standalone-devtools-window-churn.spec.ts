@@ -8,33 +8,38 @@ import { FRONTEND_BOOTSTRAP_PROBE_SCRIPT } from '../src/main/services/views/fron
 
 /**
  * Real-Electron extreme-journey coverage for the independent floating
- * internal (app-wide) DevTools window (`internal-devtools-window/index.ts`)
- * and its unfiltered console mirror (`global-console-mirror.ts`) — the
- * standalone-app-cdp split. `internal-devtools-window.spec.ts` already covers
- * the single-click open/reuse/hide contract in isolation; this spec drives
- * the SAME window through button-mashing, open/close churn, and project /
- * main-window lifecycle transitions happening WHILE it stays open, to falsify
+ * internal DevTools window (`internal-devtools-window/index.ts`), owned by the
+ * project window it debugs, and its unfiltered console mirror
+ * (`global-console-mirror.ts`) — the standalone-app-cdp split.
+ * `internal-devtools-window.spec.ts` already covers the single-click
+ * open/reuse/hide contract in isolation; this spec drives the SAME window
+ * through button-mashing, open/close churn, and project /
+ * window lifecycle transitions happening WHILE it stays open, to falsify
  * the class of bug this design is most exposed to: a duplicate BrowserWindow,
  * a lost or duplicated mirrored console entry, or a mirror left wired to a
  * torn-down service host after the project underneath it churns.
  *
- * All tests in this file share ONE opened project and (from the first test
- * onward) one floating window instance — later tests build on the window
- * state the earlier ones left behind, matching this suite's existing
- * `test.describe.configure({ mode: 'serial' })` convention.
+ * Tests build on the window state the earlier ones left behind, matching this
+ * suite's existing `test.describe.configure({ mode: 'serial' })` convention:
+ * one floating instance runs from the first test through the click storm and
+ * the open/close churn, and the project close/reopen test then proves the
+ * instance is owned by its project window — destroyed with it, rebuilt on the
+ * next one, never duplicated.
  */
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 
 let electronApp: ElectronApplication
 let mainWindow: PwPage
+let workbench: PwPage
 
 type FrontendKind = 'floating' | 'right'
 
 /** Resolve a `devtools://` front-end wc by which BrowserWindow owns it — the
  * floating window's title contains '调试' (see internal-devtools-window/index.ts's
- * `'全局调试'` title); the right-panel front-end is hosted inside the main
- * window (title 'Dimina DevTools', never '调试'). Never via
+ * `'全局调试'` title); the right-panel front-end is hosted inside the project
+ * window itself, whose title is the project's name and never contains '调试'.
+ * Never via
  * `devToolsWebContents`/`isDevToolsOpened()` — both read `null` for a
  * `setDevToolsWebContents`-based external front-end regardless of whether it
  * is genuinely attached (see console-filter-live.spec.ts's header comment for
@@ -133,6 +138,14 @@ async function windowCount(): Promise<number> {
   return electronApp.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length)
 }
 
+/** How many floating debug windows exist right now — the orphan check: a
+ * project window that goes away must take its floating window with it, and a
+ * reopened project must not stack a second one next to a survivor. */
+async function floatingWindowCount(): Promise<number> {
+  return electronApp.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().filter((x) => x.getTitle().includes('调试')).length)
+}
+
 async function floatingVisible(): Promise<boolean | null> {
   return electronApp.evaluate(({ BrowserWindow }) => {
     const w = BrowserWindow.getAllWindows().find((x) => x.getTitle().includes('调试'))
@@ -152,7 +165,7 @@ async function closeFloatingNatively(): Promise<void> {
 }
 
 async function openFloatingViaButton(): Promise<void> {
-  await mainWindow.getByTestId('sim-open-internal-devtools').click()
+  await workbench.getByTestId('sim-open-internal-devtools').click()
 }
 
 async function waitForSimulatorSettled(timeoutMs = 45000): Promise<void> {
@@ -194,12 +207,12 @@ test.describe('Floating internal DevTools window — extreme journeys', () => {
       10000, 100,
     )
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    workbench = await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorSettled()
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 
@@ -210,7 +223,7 @@ test.describe('Floating internal DevTools window — extreme journeys', () => {
     // whole loop runs in well under 200ms, tighter than an actual human could
     // click, and stronger stress than 10 sequential Playwright `.click()`
     // calls (each of which pays its own actionability wait).
-    await mainWindow.evaluate(() => {
+    await workbench.evaluate(() => {
       const btn = document.querySelector('[data-testid="sim-open-internal-devtools"]') as HTMLElement | null
       if (!btn) throw new Error('debug button not found in the simulator toolbar')
       for (let i = 0; i < 10; i++) btn.click()
@@ -264,15 +277,24 @@ test.describe('Floating internal DevTools window — extreme journeys', () => {
     }
   })
 
-  test('closing and reopening the project keeps the floating mirror wired to the NEW service host', async () => {
+  test('the floating window reopened after a project close/reopen mirrors the NEW service host', async () => {
     test.setTimeout(180_000)
     expect(await floatingVisible(), 'precondition: floating window is open from the previous test').toBe(true)
 
-    await closeProject(mainWindow)
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    await closeProject(electronApp)
+    // The floating window debugs one project window's renderer and is owned by
+    // that window's context, so closing the project destroys it. What must not
+    // survive is an orphan still mirroring a service host that is gone.
+    await pollUntil(() => floatingWindowCount(), (n) => n === 0, 30000, 300)
+    expect(await floatingWindowCount(), 'closing the project must leave no floating window behind').toBe(0)
+
+    workbench = await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorSettled()
 
-    expect(await floatingVisible(), 'the floating window must survive project close/reopen (never destroyed)').toBe(true)
+    await openFloatingViaButton()
+    await pollUntil(() => floatingVisible(), (v) => v === true, 15000, 200)
+    expect(await floatingWindowCount(), 'the reopened project must own exactly one floating window').toBe(1)
+    await pollUntil(() => isFrontendBootstrapped('floating'), (ok) => ok === true, 30000, 300)
 
     const rand = `${process.pid}_${Date.now()}`
     const token = `REOPEN_${rand}`
@@ -291,19 +313,19 @@ test.describe('Floating internal DevTools window — extreme journeys', () => {
     expect(floatingCount, 'the new session token must reach the floating window Console').toBeGreaterThanOrEqual(1)
   })
 
-  test('hiding the main window during a log does not drop the entry from the floating console', async () => {
+  test('hiding the workbench window during a log does not drop the entry from the floating console', async () => {
     test.setTimeout(90_000)
     expect(await floatingVisible(), 'precondition: floating window is open from the previous test').toBe(true)
 
-    const mainWindowHandle = await electronApp.browserWindow(mainWindow)
-    await mainWindowHandle.evaluate((win) => win.hide())
+    const workbenchHandle = await electronApp.browserWindow(workbench)
+    await workbenchHandle.evaluate((win) => win.hide())
 
     const rand = `${process.pid}_${Date.now()}`
     const token = `HIDDEN_MAIN_${rand}`
     try {
       await logInServiceHost(token)
     } finally {
-      await mainWindowHandle.evaluate((win) => win.show())
+      await workbenchHandle.evaluate((win) => win.show())
     }
 
     const count = await pollUntil(() => countVisibleToken('floating', token).catch(() => -1), (n) => n >= 1, 20000, 300)

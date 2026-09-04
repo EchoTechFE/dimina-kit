@@ -28,6 +28,7 @@ const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 
 let electronApp: ElectronApplication
 let mainWindow: PwPage
+let workbench: PwPage
 
 /**
  * Resolve the STANDALONE debug window's own DevTools front-end wc. Opening
@@ -183,7 +184,7 @@ test.describe('Standalone debug window Console survives a close/reopen cycle', (
       10000, 100,
     )
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    workbench = await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
     await pollUntil(
       () => evalInSimulator<boolean>(electronApp, `(() => !!document.querySelector('.device-shell-root'))()`).catch(() => false),
@@ -192,7 +193,7 @@ test.describe('Standalone debug window Console survives a close/reopen cycle', (
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 
@@ -201,7 +202,7 @@ test.describe('Standalone debug window Console survives a close/reopen cycle', (
     // only reach the panel via the mirror's buffered replay, not live mirroring.
     await logInServiceHost(tokenT1)
 
-    await mainWindow.getByTestId('sim-open-internal-devtools').click()
+    await workbench.getByTestId('sim-open-internal-devtools').click()
     await waitInternalDevtoolsConsoleReady()
 
     const count = await pollUntil(
@@ -227,7 +228,7 @@ test.describe('Standalone debug window Console survives a close/reopen cycle', (
     // replay-on-reopen path, exactly like T1 did on first open.
     await logInServiceHost(tokenT2)
 
-    await mainWindow.getByTestId('sim-open-internal-devtools').click()
+    await workbench.getByTestId('sim-open-internal-devtools').click()
     await pollUntil(
       () => isInternalDevtoolsWindowVisible(),
       (visible) => visible === true,

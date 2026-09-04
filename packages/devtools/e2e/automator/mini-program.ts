@@ -20,16 +20,17 @@ import {
 
 export class MiniProgram {
   readonly electronApp: ElectronApplication
-  readonly mainWindow: PwPage
+  /** The project's own workbench window (each open project gets one). */
+  readonly workbench: PwPage
   readonly projectPath: string
 
   constructor(
     electronApp: ElectronApplication,
-    mainWindow: PwPage,
+    workbench: PwPage,
     projectPath: string,
   ) {
     this.electronApp = electronApp
-    this.mainWindow = mainWindow
+    this.workbench = workbench
     this.projectPath = projectPath
   }
 
@@ -51,7 +52,7 @@ export class MiniProgram {
   /** Get the current active page. */
   async currentPage(): Promise<Page> {
     const pagePath = await this.currentPagePath()
-    return new Page(this.electronApp, this.mainWindow, pagePath)
+    return new Page(this.electronApp, this.workbench, pagePath)
   }
 
   /**
@@ -179,7 +180,7 @@ export class MiniProgram {
     )
 
     // Final settle for late wx:for / setData renders inside the new page
-    await this.mainWindow.waitForTimeout(500)
+    await this.workbench.waitForTimeout(500)
     return this.currentPage()
   }
 
@@ -215,7 +216,7 @@ export class MiniProgram {
     )
 
     // Wait for content to render
-    await this.mainWindow.waitForTimeout(2000)
+    await this.workbench.waitForTimeout(2000)
     return this.currentPage()
   }
 
@@ -227,7 +228,7 @@ export class MiniProgram {
   /** Navigate back by going to history.back(). */
   async navigateBack(): Promise<Page> {
     await evalInSimulator(this.electronApp, `history.back()`)
-    await this.mainWindow.waitForTimeout(1500)
+    await this.workbench.waitForTimeout(1500)
     return this.currentPage()
   }
 
@@ -325,7 +326,7 @@ export class MiniProgram {
 
   /** Invoke a devtools IPC handler from the renderer process. */
   async ipcInvoke<T = unknown>(channel: string, ...args: unknown[]): Promise<T> {
-    return ipcInvoke<T>(this.mainWindow, channel, ...args)
+    return ipcInvoke<T>(this.workbench, channel, ...args)
   }
 
   // ── Screenshot ──────────────────────────────────────────────────────
@@ -346,12 +347,12 @@ export class MiniProgram {
 
   /** Wait for a specific amount of time. */
   async waitFor(ms: number): Promise<void> {
-    await this.mainWindow.waitForTimeout(ms)
+    await this.workbench.waitForTimeout(ms)
   }
 
   /** Close the mini program and the devtools app. */
   async close(): Promise<void> {
-    await closeProject(this.mainWindow).catch(() => {})
+    await closeProject(this.electronApp, { projectDir: this.projectPath }).catch(() => {})
     await this.electronApp.close().catch(() => {})
   }
 }

@@ -14,6 +14,7 @@ import { diskMirrorSource } from './workspace/disk-workspace-source'
 import { walAuditSource } from './workspace/wal-audit'
 import type { WalAuditDegradation, WalAuditSurface } from './workspace/wal-audit'
 import type { CustomFileTypes } from './file-type-associations'
+import { HOST_BASE_URL } from './host-base-url.js'
 
 declare global {
   interface Window {
@@ -70,7 +71,7 @@ async function awaitProjectWorkspaceId(): Promise<string | undefined> {
   window.__WB_STATUS = 'awaiting-project'
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
-      const res = await fetch('/__project')
+      const res = await fetch(`${HOST_BASE_URL}__project`)
       if (res.ok) {
         const { workspaceId } = (await res.json()) as { workspaceId?: string | null }
         if (workspaceId) return workspaceId
@@ -92,7 +93,7 @@ async function awaitProjectWorkspaceId(): Promise<string | undefined> {
  */
 async function loadFileTypes(): Promise<CustomFileTypes | undefined> {
   try {
-    const res = await fetch('/__filetypes')
+    const res = await fetch(`${HOST_BASE_URL}__filetypes`)
     if (!res.ok) return undefined
     return (await res.json()) as CustomFileTypes
   } catch {
@@ -128,22 +129,28 @@ async function applyDiskChangeToEditor(rel: string, content: Uint8Array | null):
 
 async function boot(): Promise<void> {
   const container = document.getElementById('workbench')!
-  // The page is served from the COI server root, so its origin is the fs bridge base.
-  const fsBaseUrl = location.origin + '/'
-
-  const workspace = walAuditSource(diskMirrorSource({ fsBaseUrl }), {
-    fsBaseUrl,
-    applyToEditor: applyDiskChangeToEditor,
-    onDegraded: (d) => {
-      ;(window.__WB_SYNC_DEGRADATIONS ??= []).push(d)
-    },
-  })
+  // This window's slice of the shared COI host — see host-base-url.ts.
+  const fsBaseUrl = HOST_BASE_URL
 
   // Both are host lookups the boot cannot start without (the workspace identity
   // is fixed when the monaco services initialize, and the associations go into
   // the very first user config) — run them concurrently so the slow one, not
   // their sum, gates the editor.
   const [workspaceId, fileTypes] = await Promise.all([awaitProjectWorkspaceId(), loadFileTypes()])
+
+  // Built AFTER the identity resolves because the ledger is named after it.
+  // Every project window shares one origin, so the OPFS directory, the
+  // cross-window `BroadcastChannel` and the single-writer lock fs-core derives
+  // from `projectId` would otherwise be the SAME for two different projects
+  // open side by side — two windows writing one ledger about different trees.
+  const workspace = walAuditSource(diskMirrorSource({ fsBaseUrl }), {
+    fsBaseUrl,
+    projectId: workspaceId,
+    applyToEditor: applyDiskChangeToEditor,
+    onDegraded: (d) => {
+      ;(window.__WB_SYNC_DEGRADATIONS ??= []).push(d)
+    },
+  })
 
   const handle = await bootWorkbench({
     container,

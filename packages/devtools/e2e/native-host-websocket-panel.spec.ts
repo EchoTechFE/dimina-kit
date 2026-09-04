@@ -43,7 +43,7 @@ const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 
 interface AppHandle {
   app: ElectronApplication
-  win: PwPage
+  workbench: PwPage
 }
 
 /** One recorded `Network.webSocket*` CDP event from the front-end realm. */
@@ -120,8 +120,8 @@ async function bootApp(): Promise<AppHandle> {
       DIMINA_E2E_USER_DATA_DIR: userDataDir,
     },
   })
-  const win = await findMainWindow(app)
-  await win.waitForLoadState('domcontentloaded')
+  const mainWin = await findMainWindow(app)
+  await mainWin.waitForLoadState('domcontentloaded')
 
   await app.evaluate(async ({ BrowserWindow }) => {
     const window = BrowserWindow.getAllWindows()[0]
@@ -137,7 +137,7 @@ async function bootApp(): Promise<AppHandle> {
     }
   })
 
-  await openProjectInUI(win, FIXTURE_DIR, { waitMs: 20_000 })
+  const workbench = await openProjectInUI(app, FIXTURE_DIR, { waitMs: 20_000 })
   await waitForSimulatorWebview(app)
   await pollUntil(
     () => evalInWebContentsByUrl<boolean>(
@@ -149,12 +149,12 @@ async function bootApp(): Promise<AppHandle> {
     20_000,
     500,
   )
-  return { app, win }
+  return { app, workbench }
 }
 
 async function shutdownApp(handle: AppHandle | undefined): Promise<void> {
   if (!handle) return
-  await closeProject(handle.win).catch(() => {})
+  await closeProject(handle.app).catch(() => {})
   await handle.app.close().catch(() => {})
 }
 
@@ -428,7 +428,7 @@ test.describe('native-host DevTools Network panel shows real wx.connectSocket co
 
     // After the terminal closed, a settle window produces no further events
     // for this requestId (the id mapping is released at closed).
-    await handle!.win.waitForTimeout(300)
+    await handle!.workbench.waitForTimeout(300)
     const settled = await readRecorder(app)
     firstLogLength = eventsFor(settled, firstRequestId).length
     expect(firstLogLength).toBe(EXPECTED_METHOD_SEQUENCE.length)

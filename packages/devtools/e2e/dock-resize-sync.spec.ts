@@ -43,12 +43,12 @@ import {
 } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR, findMainWindow } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let electronApp: ElectronApplication
-let mainWindow: PwPage
+let workbench: PwPage
 
 test.beforeAll(async () => {
   const appPath = path.resolve(__dirname, 'electron-entry.js')
@@ -62,19 +62,17 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await findMainWindow(electronApp)
-  await mainWindow.waitForLoadState('domcontentloaded')
   // Offscreen + blur so the spec never steals focus.
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) { win.setPosition(-2000, -2000); win.blur() }
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await mainWindow.waitForSelector('[data-deck-group]', { timeout: 15000 })
+  workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await workbench.waitForSelector('[data-deck-group]', { timeout: 15000 })
 })
 
 test.afterAll(async () => {
-  try { await closeProject(mainWindow) } catch { /* best effort */ }
+  try { await closeProject(electronApp) } catch { /* best effort */ }
   await electronApp.close()
 })
 
@@ -133,7 +131,7 @@ test('[needs-real-electron] M1: a programmatic setSizes moves the VISIBLE split 
   // assert the visible heights follow.
   const split = 'col-main'
 
-  const before = await panelSizes(mainWindow, split)
+  const before = await panelSizes(workbench, split)
   expect(before, `the ${split} split must render with two flexible panels`).not.toBeNull()
   expect(before!.axis).toBe('h')
   expect(before!.sizes.length, 'col-main must have exactly two stacked panels').toBe(2)
@@ -143,13 +141,13 @@ test('[needs-real-electron] M1: a programmatic setSizes moves the VISIBLE split 
 
   // Drive a PROGRAMMATIC setSizes to invert the ratio dramatically: shrink the
   // editor (top) to a small share, grow the debug group (bottom).
-  const applied = await applyLayout(mainWindow, split, [10, 90])
+  const applied = await applyLayout(workbench, split, [10, 90])
   expect(applied, 'the __deckApplyLayout write-back seam must be reachable on col-main').toBe(true)
-  await mainWindow.waitForTimeout(400)
+  await workbench.waitForTimeout(400)
 
   // The model + mirror update on HEAD already — assert them so a regression that
   // breaks the model write itself is also caught.
-  const after = await panelSizes(mainWindow, split)
+  const after = await panelSizes(workbench, split)
   expect(after, 'col-main must still render after setSizes').not.toBeNull()
   expect(after!.sizesAttr, 'data-deck-sizes must mirror the new model weights').toBe('10,90')
 
@@ -189,14 +187,14 @@ test('[regress] M1-regress: a user resize round-trips view→model (write-back n
   const split = 'col-main'
 
   // Restore to a known starting ratio first.
-  await applyLayout(mainWindow, split, [60, 40])
-  await mainWindow.waitForTimeout(300)
+  await applyLayout(workbench, split, [60, 40])
+  await workbench.waitForTimeout(300)
 
-  const applied = await applyLayout(mainWindow, split, [40, 60])
+  const applied = await applyLayout(workbench, split, [40, 60])
   expect(applied).toBe(true)
-  await mainWindow.waitForTimeout(400)
+  await workbench.waitForTimeout(400)
 
-  const after = await panelSizes(mainWindow, split)
+  const after = await panelSizes(workbench, split)
   // The user write-back lands in the model/mirror (true on HEAD; must stay true).
   expect(after!.sizesAttr, 'the user write-back must land in the model/mirror').toBe('40,60')
 })
@@ -208,10 +206,10 @@ test('[regress] M1-regress: a user resize round-trips view→model (write-back n
 test('[needs-real-electron] M1: the visible split settles at the user-written ratio (RED on HEAD)', async () => {
   const split = 'col-main'
 
-  await applyLayout(mainWindow, split, [40, 60])
-  await mainWindow.waitForTimeout(400)
+  await applyLayout(workbench, split, [40, 60])
+  await workbench.waitForTimeout(400)
 
-  const after = await panelSizes(mainWindow, split)
+  const after = await panelSizes(workbench, split)
   expect(after!.sizesAttr).toBe('40,60')
 
   const top = after!.sizes[0]!
@@ -234,7 +232,7 @@ test('[needs-real-electron] M1-fixed-px: a programmatic setSizes on flexible wei
   // weights must leave the simulator at its EXACT pixel width — the constraint is
   // not absorbed into the flexible percentage pool. Real pixels only: jsdom can't
   // convert the px lock without a measured container (see the unit spec header).
-  const simBefore = await mainWindow.evaluate(() => {
+  const simBefore = await workbench.evaluate(() => {
     const el = document.querySelector('[data-area="native-simulator"]')
     return el ? Math.round(el.getBoundingClientRect().width) : 0
   })
@@ -243,7 +241,7 @@ test('[needs-real-electron] M1-fixed-px: a programmatic setSizes on flexible wei
   // The root split holds [g-sim(fixed) | col-main(flexible)]. Drive a setSizes that
   // changes the FLEXIBLE sibling's weight; the fixed sim slot weight is carried
   // through unchanged by setSizes. We pass a full-length weights array.
-  const rootInfo = await mainWindow.evaluate(() => {
+  const rootInfo = await workbench.evaluate(() => {
     const split = document.querySelector('[data-deck-split="dock-root"]')
     return split ? { sizes: split.getAttribute('data-deck-sizes') } : null
   })
@@ -252,13 +250,13 @@ test('[needs-real-electron] M1-fixed-px: a programmatic setSizes on flexible wei
   expect(rootWeights.length, 'root split has two children (sim | main)').toBe(2)
 
   // Keep child0 (sim) weight, change child1 (main) weight.
-  const applied = await applyLayout(mainWindow, 'dock-root', [rootWeights[0]!, rootWeights[1]! * 2])
+  const applied = await applyLayout(workbench, 'dock-root', [rootWeights[0]!, rootWeights[1]! * 2])
   expect(applied).toBe(true)
-  await mainWindow.waitForTimeout(400)
+  await workbench.waitForTimeout(400)
 
   // [needs-real-electron] the simulator's pinned pixel width is UNCHANGED — the
   // fixed-px constraint was not disturbed by the flexible-weights setSizes.
-  const simAfter = await mainWindow.evaluate(() => {
+  const simAfter = await workbench.evaluate(() => {
     const el = document.querySelector('[data-area="native-simulator"]')
     return el ? Math.round(el.getBoundingClientRect().width) : 0
   })

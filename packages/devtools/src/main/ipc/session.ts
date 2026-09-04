@@ -14,18 +14,21 @@ import type { WorkbenchModule } from '../services/module.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
+import { toIpcContextSource, type IpcInput } from '../utils/ipc-context-source.js'
 
-export function registerSessionIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'senderPolicy'>): Disposable {
-  return new IpcRegistry(ctx.senderPolicy)
-    .handle(ProjectChannel.Open, (_, ...args: unknown[]) => {
+type SessionIpcCtx = Pick<WorkbenchContext, 'workspace' | 'senderPolicy'>
+
+export function registerSessionIpc(input: IpcInput<SessionIpcCtx>): Disposable {
+  return new IpcRegistry(toIpcContextSource(input))
+    .handleRouted(ProjectChannel.Open, (ctx, _e, ...args: unknown[]) => {
       const [projectPath] = validate(ProjectChannel.Open, ProjectOpenSchema, args)
       return ctx.workspace.openProject(projectPath)
     })
-    .handle(ProjectChannel.GetPages, (_, ...args: unknown[]) => {
+    .handleRouted(ProjectChannel.GetPages, (ctx, _e, ...args: unknown[]) => {
       const [projectPath] = validate(ProjectChannel.GetPages, ProjectGetPagesSchema, args)
       return ctx.workspace.getProjectPages(projectPath)
     })
-    .handle(ProjectChannel.GetCompileConfig, (_, ...args: unknown[]) => {
+    .handleRouted(ProjectChannel.GetCompileConfig, (ctx, _e, ...args: unknown[]) => {
       const [projectPath] = validate(
         ProjectChannel.GetCompileConfig,
         ProjectGetCompileConfigSchema,
@@ -33,7 +36,7 @@ export function registerSessionIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'se
       )
       return ctx.workspace.getCompileConfig(projectPath)
     })
-    .handle(ProjectChannel.SaveCompileConfig, (_, ...args: unknown[]) => {
+    .handleRouted(ProjectChannel.SaveCompileConfig, (ctx, _e, ...args: unknown[]) => {
       const [projectPath, config] = validate(
         ProjectChannel.SaveCompileConfig,
         ProjectSaveCompileConfigSchema,
@@ -41,10 +44,10 @@ export function registerSessionIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'se
       )
       return ctx.workspace.saveCompileConfig(projectPath, config as CompileConfig)
     })
-    .handle(ProjectChannel.Close, () => {
+    .handleRouted(ProjectChannel.Close, (ctx) => {
       return ctx.workspace.closeProject()
     })
-    .handle(ProjectChannel.Rebuild, async () => {
+    .handleRouted(ProjectChannel.Rebuild, async (ctx) => {
       const session = ctx.workspace.getSession()
       if (!session) throw new Error('project:rebuild — no active project session')
       // A host CompilationAdapter predating session.rebuild must not break:
@@ -53,7 +56,7 @@ export function registerSessionIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'se
       await session.rebuild()
       return { supported: true }
     })
-    .handle(ProjectChannel.CaptureThumbnail, (_, ...args: unknown[]) => {
+    .handleRouted(ProjectChannel.CaptureThumbnail, (ctx, _e, ...args: unknown[]) => {
       const [projectPath] = validate(
         ProjectChannel.CaptureThumbnail,
         ProjectCaptureThumbnailSchema,
@@ -61,7 +64,7 @@ export function registerSessionIpc(ctx: Pick<WorkbenchContext, 'workspace' | 'se
       )
       return ctx.workspace.captureThumbnail(projectPath)
     })
-    .handle(ProjectChannel.GetThumbnail, (_, ...args: unknown[]) => {
+    .handleRouted(ProjectChannel.GetThumbnail, (ctx, _e, ...args: unknown[]) => {
       const [projectPath] = validate(
         ProjectChannel.GetThumbnail,
         ProjectGetThumbnailSchema,

@@ -146,15 +146,21 @@ import type { SyncStorageChange } from '../../shared/ipc-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { RenderEvent } from './bridge-router.js'
-import { installBridgeRouter } from './bridge-router.js'
+
+// Imported per test after `vi.resetModules()`: the ipc mux keeps module-level
+// channel registries, so a stale instance would keep channels registered that
+// this file's fresh `ipcMain` stub no longer knows about.
+let installBridgeRouter: typeof import('./bridge-router.js').installBridgeRouter
 
 type AnyFn = (...args: unknown[]) => unknown
 type MockWc = ReturnType<typeof stubs.makeWebContents>
 
 const APP_ID = 'demo-app'
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules()
   stubs.reset()
+  ;({ installBridgeRouter } = await import('./bridge-router.js'))
 })
 
 afterEach(() => {
@@ -174,7 +180,7 @@ function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
     registry: { add: (_fn: AnyFn) => {} },
     connections: createConnectionRegistry(),
     simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
-    windows: { mainWindow: { webContents: simulatorWc } },
+    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
     workspace: { getSession: () => undefined },
     onServiceStorageChanged: vi.fn(),
   } as unknown as WorkbenchContext

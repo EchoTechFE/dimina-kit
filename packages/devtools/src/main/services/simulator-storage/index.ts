@@ -20,7 +20,7 @@
  *     flowing until they close it.
  */
 
-import { app, webContents as wcStatic, type WebContents } from 'electron'
+import { app, webContents as wcStatic, type BrowserWindow, type WebContents } from 'electron'
 import { DisposableRegistry, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import {
   SimulatorElementChannel,
@@ -35,6 +35,7 @@ import type { BridgeRouterHandle } from '../../ipc/bridge-router.js'
 import type { RenderInspector } from '../render-inspect/index.js'
 import { decodeStorageValue, encodeStorageValue, serviceStorage } from './service-storage-ops.js'
 import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
+import { windowHostsWebContents } from './window-scope.js'
 
 /**
  * Runtime async-storage handler (native-host). bridge-router routes async
@@ -74,6 +75,17 @@ function isSimulatorWebview(wc: WebContents): boolean {
   if (wc.isDestroyed()) return false
   if (wc.getType() !== 'webview') return false
   return wc.getURL().includes('simulator.html')
+}
+
+/**
+ * `win` undefined means no owning window was configured — the legacy
+ * unscoped behavior, kept so single-window callers/tests that don't pass
+ * `window` keep compiling and behaving unchanged. Every production call
+ * site (window-runtime-services.ts) always passes its window.
+ */
+function belongsToWindow(win: BrowserWindow | undefined, wc: WebContents): boolean {
+  if (!win) return true
+  return windowHostsWebContents(win, wc)
 }
 
 function safeOff(target: { isDestroyed?: () => boolean; removeListener: (event: string, fn: (...args: unknown[]) => void) => unknown }, event: string, fn: (...args: unknown[]) => void): void {
@@ -130,6 +142,17 @@ export interface SimulatorStorageOptions {
    * compile and behave unchanged, just without cross-module session sharing.
    */
   broker?: CdpSessionBroker
+  /**
+   * Owning window (typically `mainWindow`). Scopes every simulator-webview
+   * discovery path (initial scan, `web-contents-created`, lazy re-find) to
+   * webviews that live inside THIS window — required in a multi-window
+   * workbench, where `webContents`/`app.on('web-contents-created')` are
+   * process-global and would otherwise let one window's instance attach to
+   * (and read/write through) another window's simulator. Optional so
+   * existing single-window callers/tests compile and keep their prior
+   * unscoped behavior.
+   */
+  window?: BrowserWindow
 }
 
 export function setupSimulatorStorage(
@@ -279,7 +302,7 @@ export function setupSimulatorStorage(
    */
   async function ensureAttached(): Promise<void> {
     if (attachedWc && !attachedWc.isDestroyed()) return
-    const sim = findSimulatorWebContents()
+    const sim = findSimulatorWebContents(options.window)
     if (!sim) return
     await attachToSim(sim)
   }
@@ -470,7 +493,7 @@ export function setupSimulatorStorage(
   // Attach to any simulator webview that already exists (project may have
   // been opened before this function runs).
   for (const wc of wcStatic.getAllWebContents()) {
-    if (isSimulatorWebview(wc)) {
+    if (isSimulatorWebview(wc) && belongsToWindow(options.window, wc)) {
       void attachToSim(wc)
       break
     }
@@ -486,7 +509,7 @@ export function setupSimulatorStorage(
     wcSubs.set(wc, sub)
 
     const onFinishLoad = () => {
-      if (isSimulatorWebview(wc)) void attachToSim(wc)
+      if (isSimulatorWebview(wc) && belongsToWindow(options.window, wc)) void attachToSim(wc)
     }
     wc.on('did-finish-load', onFinishLoad)
     sub.add(() => safeOff(wc as unknown as Parameters<typeof safeOff>[0], 'did-finish-load', onFinishLoad as (...args: unknown[]) => void))
@@ -532,7 +555,7 @@ export function setupSimulatorStorage(
       if (!wc) return null
       return options.renderInspector.highlight(wc, sid)
     }
-    const sim = findSimulatorWebContents()
+    const sim = findSimulatorWebContents(options.window)
     if (!sim) return null
     try {
       const result = (await sim.executeJavaScript(
@@ -551,7 +574,7 @@ export function setupSimulatorStorage(
       if (wc) await options.renderInspector.unhighlight(wc)
       return
     }
-    const sim = findSimulatorWebContents()
+    const sim = findSimulatorWebContents(options.window)
     if (!sim) return
     try {
       await sim.executeJavaScript(
@@ -677,9 +700,12 @@ export function setupSimulatorStorage(
 // bridge via executeJavaScript. Looked up independently from `attachedWc` so
 // it keeps working when the user opens Chrome DevTools and the storage
 // debugger detaches (debugger.attach is mutually exclusive with F12).
-function findSimulatorWebContents(): WebContents | null {
+// Scoped to `win` for the same reason as the attach paths above — an
+// unscoped scan would resolve to whichever window's simulator comes first
+// in the process-global registry, not necessarily this instance's own.
+function findSimulatorWebContents(win: BrowserWindow | undefined): WebContents | null {
   for (const wc of wcStatic.getAllWebContents()) {
-    if (isSimulatorWebview(wc)) return wc
+    if (isSimulatorWebview(wc) && belongsToWindow(win, wc)) return wc
   }
   return null
 }

@@ -11,10 +11,13 @@
  * The "root is missing" warning exists for downstream authors who forgot the
  * element entirely, so it must not fire on the healthy async-mount path — a
  * warning printed on every normal load is noise that trains its readers to
- * ignore it. It is therefore withheld until the document has finished loading
- * (`window.load`, a real event rather than a guessed delay) with the root
- * still absent; the observer stays armed either way, so a root that mounts
- * even later is still picked up.
+ * ignore it. Two conditions gate it, both signals rather than guessed delays:
+ * the document must be one the host actually loaded content into (not the
+ * view's own blank document), and it must have finished loading AND run out of
+ * pending work (`window.load`, then an idle callback — a framework's first
+ * commit is normal-priority work, so it always lands before idle). The
+ * observer stays armed either way, so a root that mounts even later is still
+ * picked up.
  */
 export function whenSlotRootReady(
   selector: string,
@@ -22,6 +25,13 @@ export function whenSlotRootReady(
   install: (root: HTMLElement) => void,
 ): void {
   function attempt(): void {
+    // The slot's WebContentsView holds its own empty document until the host
+    // loads content into it, and this preload runs there too. That document
+    // has no author: a missing root in it is not a mistake anyone made, and
+    // warning about it fires on every app start. The observer below still gets
+    // armed, so content that does arrive is picked up.
+    const authored = location.href !== 'about:blank' && location.href !== ''
+
     const root = document.querySelector<HTMLElement>(selector)
     if (root) {
       install(root)
@@ -38,11 +48,29 @@ export function whenSlotRootReady(
     })
     observer.observe(document.documentElement, { childList: true, subtree: true })
 
+    // Re-queries rather than trusting `installed`: the observer delivers on a
+    // microtask, so a root that is already in the DOM may not have been
+    // installed yet — it is present either way, which is what the warning is
+    // about.
     const warnIfStillMissing = (): void => {
-      if (!installed) console.warn(missingWarning)
+      if (installed || !authored || document.querySelector(selector)) return
+      console.warn(missingWarning)
     }
-    if (document.readyState === 'complete') warnIfStillMissing()
-    else window.addEventListener('load', warnIfStillMissing, { once: true })
+
+    // `load` alone is too early a verdict: a concurrent React root commits its
+    // first render on a scheduler task that can land after it, and the warning
+    // would then race the healthy mount it is supposed to ignore. Idle
+    // callbacks run only once the main thread has no pending work of that
+    // kind, so a root still absent then is genuinely absent. The timeout is
+    // the cap for a page that never goes idle, not the mechanism.
+    const decide = (): void => {
+      const idle = (globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number })
+        .requestIdleCallback
+      if (typeof idle === 'function') idle(warnIfStillMissing, { timeout: 5_000 })
+      else warnIfStillMissing()
+    }
+    if (document.readyState === 'complete') decide()
+    else window.addEventListener('load', decide, { once: true })
   }
 
   if (document.readyState === 'loading') {

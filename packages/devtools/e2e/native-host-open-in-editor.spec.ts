@@ -80,6 +80,7 @@ const EXCLUDED_REL = 'common.js'
 
 let electronApp: ElectronApplication
 let mainWindow: PwPage
+let workbench: PwPage
 
 /**
  * The service-host spawn URL carries the authoritative routing context the main
@@ -294,7 +295,7 @@ test.describe('native-host: console source link click opens the file in Monaco',
       100,
     )
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    workbench = await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
 
     // DeviceShell + at least one page guest must exist so the service host is
@@ -323,11 +324,11 @@ test.describe('native-host: console source link click opens the file in Monaco',
       300,
     )
 
-    await armEditorOpenSink(mainWindow)
+    await armEditorOpenSink(workbench)
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 
@@ -372,7 +373,7 @@ test.describe('native-host: console source link click opens the file in Monaco',
     const ctx = await readServiceContext(electronApp)
     expect(ctx).not.toBeNull()
     await armSentinelSink(electronApp)
-    await armEditorOpenSink(mainWindow)
+    await armEditorOpenSink(workbench)
 
     // Project-source click WITH a navigable href: a green result proves the
     // interceptor's preventDefault actually suppressed the default navigation.
@@ -385,7 +386,7 @@ test.describe('native-host: console source link click opens the file in Monaco',
     ).toBe(true)
 
     const payloads = await pollUntil(
-      () => readEditorOpenSink(mainWindow),
+      () => readEditorOpenSink(workbench),
       (ps) => ps.some((p) => p.path === SOURCE_REL),
       12000,
       200,
@@ -426,7 +427,7 @@ test.describe('native-host: console source link click opens the file in Monaco',
     // NEGATIVE: now click a build-chunk (common.js) with NO href (an unclaimed
     // click must not navigate + tear down the host wc).
     await armSentinelSink(electronApp)
-    await armEditorOpenSink(mainWindow)
+    await armEditorOpenSink(workbench)
     const url = resourceUrl(ctx!, EXCLUDED_REL)
     const click = await clickDevtoolsLink(electronApp, url, 3, false)
     expect(click.dispatched, `click should dispatch: ${click.reason}`).toBe(true)
@@ -449,7 +450,7 @@ test.describe('native-host: console source link click opens the file in Monaco',
       `common.js must not emit a sentinel (front-end excludeBuildChunk); sink=${JSON.stringify(sink)}`,
     ).toBeFalsy()
 
-    const payloads = await readEditorOpenSink(mainWindow)
+    const payloads = await readEditorOpenSink(workbench)
     const leakedOpen = payloads.find((p) => p.path === EXCLUDED_REL || p.path.endsWith('/common.js'))
     expect(
       leakedOpen,
@@ -469,7 +470,7 @@ test.describe('native-host: console source link click opens the file in Monaco',
     //   by Layer 2 (editor:openFile payload) instead.
     const ctx = await readServiceContext(electronApp)
     expect(ctx).not.toBeNull()
-    await armEditorOpenSink(mainWindow)
+    await armEditorOpenSink(workbench)
 
     const url = resourceUrl(ctx!, SOURCE_REL)
     const click = await clickDevtoolsLink(electronApp, url, 8, true)
@@ -477,7 +478,7 @@ test.describe('native-host: console source link click opens the file in Monaco',
 
     // (a) precondition: the open IPC reaches the renderer.
     const payloads = await pollUntil(
-      () => readEditorOpenSink(mainWindow),
+      () => readEditorOpenSink(workbench),
       (ps) => ps.some((p) => p.path === SOURCE_REL && p.line === 8),
       12000,
       200,
@@ -498,7 +499,7 @@ test.describe('native-host: console source link click opens the file in Monaco',
     //
     // If the editor panel does not render in this headless native-host harness,
     // degrade to the IPC precondition above and record why.
-    const editorMounted = await mainWindow
+    const editorMounted = await workbench
       .waitForSelector('[data-area="editor"] .monaco-editor', { timeout: 15000 })
       .then(() => true)
       .catch(() => false)
@@ -516,7 +517,7 @@ test.describe('native-host: console source link click opens the file in Monaco',
     // few distinctive tokens so line virtualization (only viewport lines paint)
     // can't flake the assertion as long as the model is open at the top.
     const editorText = await pollUntil(
-      () => mainWindow.evaluate(() => {
+      () => workbench.evaluate(() => {
         const el = document.querySelector('[data-area="editor"] .monaco-editor .view-lines')
         return el ? (el.textContent || '') : ''
       }),

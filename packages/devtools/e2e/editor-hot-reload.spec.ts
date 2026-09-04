@@ -81,11 +81,11 @@ async function waitForRenderText(
  * spec exercises the real user flow, not a filesystem shortcut.
  */
 async function saveViaMonacoPath(
-  mainWindow: import('@playwright/test').Page,
+  workbench: import('@playwright/test').Page,
   absPath: string,
   content: string,
 ): Promise<void> {
-  await ipcInvoke(mainWindow, ProjectFsChannel.WriteFile, absPath, content)
+  await ipcInvoke(workbench, ProjectFsChannel.WriteFile, absPath, content)
 }
 
 /**
@@ -94,7 +94,7 @@ async function saveViaMonacoPath(
  * fully-compiled output. Best-effort — never throws.
  */
 async function settleAfterRestore(
-  mainWindow: import('@playwright/test').Page,
+  workbench: import('@playwright/test').Page,
 ): Promise<void> {
   // The restore write itself triggers one watcher rebuild (~1-2s compile).
   // Wait for that rebuild to actually start (toolbar leaves the settled "完成"
@@ -102,7 +102,7 @@ async function settleAfterRestore(
   // then wait for it to settle back to "…完成". This replaces a blind 8s sleep
   // with condition-based waits — the common case finishes in ~2-3s.
   const compileStatus = () =>
-    mainWindow.evaluate(() => {
+    workbench.evaluate(() => {
       const els = document.querySelectorAll('[class*="truncate"]')
       for (const el of els) {
         const t = el.textContent || ''
@@ -134,8 +134,8 @@ const HOT_RELOAD_WINDOW_MS = 20_000
 test.describe('Editor hot reload (save → rebuild → simulator refresh)', () => {
   test.setTimeout(150_000)
 
-  test.beforeEach(async ({ mainWindow, electronApp }) => {
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 30000 })
+  test.beforeEach(async ({ electronApp }) => {
+    await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 30000 })
     // Baseline: the home page must actually be rendering before we mutate
     // sources — otherwise a missing marker would just mean "never rendered".
     const baseline = await waitForRenderText(
@@ -148,12 +148,12 @@ test.describe('Editor hot reload (save → rebuild → simulator refresh)', () =
     )
   })
 
-  test.afterEach(async ({ mainWindow }) => {
-    await closeProject(mainWindow)
+  test.afterEach(async ({ electronApp }) => {
+    await closeProject(electronApp)
   })
 
   test('saving index.wxml via the Monaco write path refreshes the simulator with the new text', async ({
-    mainWindow,
+    workbench,
     electronApp,
   }) => {
     const wxmlPath = path.join(DEMO_APP_DIR, 'pages', 'index', 'index.wxml')
@@ -164,7 +164,7 @@ test.describe('Editor hot reload (save → rebuild → simulator refresh)', () =
       const mutated = original.replace('DevTools 功能测试', `DevTools 功能测试 ${marker}`)
       expect(mutated, 'marker substitution target must exist in index.wxml').not.toBe(original)
 
-      await saveViaMonacoPath(mainWindow, wxmlPath, mutated)
+      await saveViaMonacoPath(workbench, wxmlPath, mutated)
       // Sanity: the Monaco write path actually landed on disk (this part has
       // always worked — the regression is strictly downstream).
       expect(fs.readFileSync(wxmlPath, 'utf8')).toContain(marker)
@@ -182,12 +182,12 @@ test.describe('Editor hot reload (save → rebuild → simulator refresh)', () =
       ).toContain(marker)
     } finally {
       fs.writeFileSync(wxmlPath, original, 'utf8')
-      await settleAfterRestore(mainWindow)
+      await settleAfterRestore(workbench)
     }
   })
 
   test('saving index.js data via the Monaco write path refreshes the simulator with the new data', async ({
-    mainWindow,
+    workbench,
     electronApp,
   }) => {
     const jsPath = path.join(DEMO_APP_DIR, 'pages', 'index', 'index.js')
@@ -200,7 +200,7 @@ test.describe('Editor hot reload (save → rebuild → simulator refresh)', () =
       const mutated = original.replace("'Storage 存储测试'", `'Storage ${marker}'`)
       expect(mutated, 'marker substitution target must exist in index.js').not.toBe(original)
 
-      await saveViaMonacoPath(mainWindow, jsPath, mutated)
+      await saveViaMonacoPath(workbench, jsPath, mutated)
       expect(fs.readFileSync(jsPath, 'utf8')).toContain(marker)
 
       const text = await waitForRenderText(
@@ -214,7 +214,7 @@ test.describe('Editor hot reload (save → rebuild → simulator refresh)', () =
       ).toContain(marker)
     } finally {
       fs.writeFileSync(jsPath, original, 'utf8')
-      await settleAfterRestore(mainWindow)
+      await settleAfterRestore(workbench)
     }
   })
 })

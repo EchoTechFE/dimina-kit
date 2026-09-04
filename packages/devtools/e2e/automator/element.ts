@@ -26,18 +26,19 @@ function inIframe(expression: string): string {
 
 export class Element {
   readonly electronApp: ElectronApplication
-  readonly mainWindow: PwPage
+  /** The project's own workbench window (each open project gets one). */
+  readonly workbench: PwPage
   readonly selector: string
   readonly index: number
 
   constructor(
     electronApp: ElectronApplication,
-    mainWindow: PwPage,
+    workbench: PwPage,
     selector: string,
     index: number,
   ) {
     this.electronApp = electronApp
-    this.mainWindow = mainWindow
+    this.workbench = workbench
     this.selector = selector
     this.index = index
   }
@@ -238,7 +239,7 @@ export class Element {
     )
     if (!exists) return null
     const combinedSelector = `${this.selector} ${childSelector}`
-    return new Element(this.electronApp, this.mainWindow, combinedSelector, 0)
+    return new Element(this.electronApp, this.workbench, combinedSelector, 0)
   }
 
   /** Find all child elements matching a selector. */
@@ -254,7 +255,7 @@ export class Element {
     const combinedSelector = `${this.selector} ${childSelector}`
     const elements: Element[] = []
     for (let i = 0; i < count; i++) {
-      elements.push(new Element(this.electronApp, this.mainWindow, combinedSelector, i))
+      elements.push(new Element(this.electronApp, this.workbench, combinedSelector, i))
     }
     return elements
   }

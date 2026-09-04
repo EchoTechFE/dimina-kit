@@ -12,7 +12,7 @@ import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
 import { MiniProgram } from './mini-program'
-import { openProjectInUI, waitForSimulatorWebview } from '../helpers'
+import { findMainWindow, openProjectInUI, waitForSimulatorWebview } from '../helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -73,9 +73,10 @@ export class Automator {
       },
     })
 
-    // Wait for the main window
-    const mainWindow = await electronApp.firstWindow()
-    await mainWindow.waitForLoadState('domcontentloaded')
+    // Wait for the project-list window before we can move it off-screen and
+    // open a project into its own workbench window.
+    const listWindow = await findMainWindow(electronApp)
+    await listWindow.waitForLoadState('domcontentloaded')
 
     // Move off-screen so it doesn't steal focus
     await electronApp.evaluate(async ({ BrowserWindow }) => {
@@ -92,8 +93,8 @@ export class Automator {
       }
     })
 
-    // Open the project
-    await openProjectInUI(mainWindow, projectPath, {
+    // Open the project — this opens (and returns) the project's own workbench window.
+    const workbench = await openProjectInUI(electronApp, projectPath, {
       waitMs: compileWaitMs,
     })
 
@@ -101,18 +102,18 @@ export class Automator {
       await waitForSimulatorWebview(electronApp)
     }
 
-    return new MiniProgram(electronApp, mainWindow, projectPath)
+    return new MiniProgram(electronApp, workbench, projectPath)
   }
 
   /**
    * Connect to an already-running devtools instance.
-   * Requires electronApp and mainWindow from Playwright fixtures.
+   * Requires electronApp and the project's workbench window from Playwright fixtures.
    */
   static connect(
     electronApp: ElectronApplication,
-    mainWindow: PwPage,
+    workbench: PwPage,
     projectPath: string,
   ): MiniProgram {
-    return new MiniProgram(electronApp, mainWindow, projectPath)
+    return new MiniProgram(electronApp, workbench, projectPath)
   }
 }

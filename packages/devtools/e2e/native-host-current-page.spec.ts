@@ -1,7 +1,7 @@
 /**
- * E2E (native-host only): the devtools main-window simulator-panel bottom
- * toolbar's CURRENT-PAGE path display must UPDATE when the mini-app navigates
- * to a different page.
+ * E2E (native-host only): the devtools project workbench window's
+ * simulator-panel bottom toolbar's CURRENT-PAGE path display must UPDATE
+ * when the mini-app navigates to a different page.
  *
  * Contract being pinned:
  *   Under DIMINA_NATIVE_HOST=1 the mini-app renders in a main-process
@@ -21,7 +21,7 @@
  * from the initial launch URL and never updates on in-app navigation, so after
  * navigating it remains the entry route (pages/home/home).
  *
- * The toolbar text is read from the main window's DOM (the simulator-panel is a
+ * The toolbar text is read from the project workbench window's DOM (the simulator-panel is a
  * renderer React component): the bottom toolbar (`.bg-sim-bottom`) contains a
  * `<span>` with the current page text followed by the `title="复制路径"`
  * button — see
@@ -59,6 +59,7 @@ const TARGET_ROUTE = 'pages/detail/detail'
 
 let electronApp: ElectronApplication
 let mainWindow: PwPage
+let workbench: PwPage
 let autoPort = 0
 
 // One-shot JSON-RPC call to the miniprogram-automator WebSocket server (mirrors
@@ -88,8 +89,8 @@ function wsCall<T = Record<string, unknown>>(
 }
 
 /**
- * Read the simulator-panel bottom-toolbar current-page text from the MAIN
- * window DOM. The toolbar is `.bg-sim-bottom` (see simulator-panel.tsx); the
+ * Read the simulator-panel bottom-toolbar current-page text from the project
+ * workbench window's DOM. The toolbar is `.bg-sim-bottom` (see simulator-panel.tsx); the
  * route lives in its first text-bearing span, directly before the
  * `title="复制路径"` copy button. We read that span's textContent and trim it.
  * Returns '' if the toolbar isn't present yet.
@@ -148,7 +149,7 @@ test.describe('native-host current-page toolbar e2e', () => {
       100,
     ) as number
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    workbench = await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
 
     // DeviceShell mounts only after SimulatorMiniApp.spawn() resolves; poll for
@@ -166,7 +167,7 @@ test.describe('native-host current-page toolbar e2e', () => {
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 
@@ -183,7 +184,7 @@ test.describe('native-host current-page toolbar e2e', () => {
 
     // ── BEFORE: the toolbar shows the entry route. ───────────────────────────
     const before = await pollUntil(
-      () => readToolbarCurrentPage(mainWindow),
+      () => readToolbarCurrentPage(workbench),
       (txt) => txt.includes(ENTRY_ROUTE),
       20000,
       400,
@@ -209,7 +210,7 @@ test.describe('native-host current-page toolbar e2e', () => {
     // route and must no longer be the entry route. THIS is the contract that
     // current code violates under native-host. ──────────────────────────────
     const after = await pollUntil(
-      () => readToolbarCurrentPage(mainWindow),
+      () => readToolbarCurrentPage(workbench),
       (txt) => txt.includes(TARGET_ROUTE),
       15000,
       400,
@@ -233,7 +234,7 @@ test.describe('native-host current-page toolbar e2e', () => {
     // The toolbar must show the FULL route (path + params), like WeChat
     // DevTools' simulator page-path bar — a bare path would hide the params.
     const shown = await pollUntil(
-      () => readToolbarCurrentPage(mainWindow),
+      () => readToolbarCurrentPage(workbench),
       (txt) => txt.includes('pages/detail/detail?from=nav&id=7'),
       15000,
       400,
@@ -249,7 +250,7 @@ test.describe('native-host current-page toolbar e2e', () => {
     // route and the toolbar shows it.
     const QUERIED = 'pages/detail/detail?from=nav&id=7'
     await pollUntil(
-      () => readToolbarCurrentPage(mainWindow),
+      () => readToolbarCurrentPage(workbench),
       (txt) => txt.includes('pages/detail/detail?from=nav'),
       15000,
       400,
@@ -291,7 +292,7 @@ test.describe('native-host current-page toolbar e2e', () => {
 
     try {
       await ipcInvoke(
-        mainWindow,
+        workbench,
         ProjectFsChannel.WriteFile,
         detailWxml,
         original.replace('DETAIL PAGE', marker),
@@ -306,7 +307,7 @@ test.describe('native-host current-page toolbar e2e', () => {
       )
       expect(rendered, 'saved detail.wxml text must appear after the watcher rebuild').toContain(marker)
     } finally {
-      await ipcInvoke(mainWindow, ProjectFsChannel.WriteFile, detailWxml, original).catch(() => {})
+      await ipcInvoke(workbench, ProjectFsChannel.WriteFile, detailWxml, original).catch(() => {})
       // Let the restore-triggered rebuild settle so the next spec opens a
       // clean project (mirrors editor-hot-reload.spec.ts's restore wait).
       await pollUntil(
@@ -320,7 +321,7 @@ test.describe('native-host current-page toolbar e2e', () => {
     // After the rebuild cycle the toolbar must STILL show the queried route —
     // the page AND its params survive the recompile.
     const after = await pollUntil(
-      () => readToolbarCurrentPage(mainWindow),
+      () => readToolbarCurrentPage(workbench),
       (txt) => txt.includes('pages/detail/detail?from=nav&id=7'),
       15000,
       400,

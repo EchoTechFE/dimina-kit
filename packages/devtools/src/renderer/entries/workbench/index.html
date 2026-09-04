@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <!--
+    CSP: deliberately permissive (B5 phase). Inline JS/CSS + eval are kept for
+    dev tooling / nodeIntegration:true; connect-src spans http/ws because
+    automation, MCP, and the simulator dev server all open sockets. Tighten in
+    C-phase once the preload bridge removes the need for `unsafe-*`.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: http: https:; font-src 'self' data:; media-src 'self' blob: http: https:; connect-src 'self' http: https: ws: wss:;" />
+  <title>Dimina DevTools</title>
+  <style>
+    /*
+     * The React tree always occupies the full window. Main-process overlays
+     * (the simulator's Chromium DevTools WebContentsView, the console, and the
+     * workbench editor WebContentsView) are positioned to match measured
+     * placeholder rects inside the React tree (see useViewAnchor /
+     * createPlacementAnchor in project-runtime.tsx).
+     */
+    html, body, #root { margin: 0; padding: 0; }
+    html, body { width: 100vw; height: 100vh; overflow: hidden; }
+    #root {
+      position: fixed;
+      inset: 0;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="./main.tsx"></script>
+</body>
+</html>

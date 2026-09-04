@@ -50,11 +50,16 @@ export async function workbenchStatus(app: ElectronApplication): Promise<string 
  * status. Returns the status so a spec can assert on it.
  */
 export async function attachWorkbenchAndWaitReady(
-  mainWindow: Page,
+  // Named `projectWindow`, not `workbench`, to avoid colliding with this
+  // file's own vocabulary — here "workbench" always means the embedded VS
+  // Code WebContentsView, a different thing from a project's workbench
+  // BrowserWindow. `ViewChannel.WorkbenchBounds` is a project-scoped dock
+  // channel, so this must be the real project workbench window.
+  projectWindow: Page,
   electronApp: ElectronApplication,
   timeoutMs = 90_000,
 ): Promise<string | null> {
-  await ipcInvoke(mainWindow, ViewChannel.WorkbenchBounds, { x: 0, y: 0, width: 900, height: 700 }).catch(() => {})
+  await ipcInvoke(projectWindow, ViewChannel.WorkbenchBounds, { x: 0, y: 0, width: 900, height: 700 }).catch(() => {})
   return pollUntil(
     () => workbenchStatus(electronApp),
     (s) => s === 'workbench-ready' || s === 'exthost-alive',

@@ -40,12 +40,12 @@ test.describe('Extension Panels Data Bridge', () => {
     })
   })
 
-  test('WXML panel renders in main window after tab switch', async ({ mainWindow }) => {
-    await mainWindow.getByRole('tab', { name: 'WXML' }).click()
+  test('WXML panel renders in the workbench window after tab switch', async ({ workbench }) => {
+    await workbench.getByRole('tab', { name: 'WXML' }).click()
     // The WXML panel has no manual refresh button (it's live): it seeds on
     // activation and stays reactive via the render-guest DOM observer. Wait for
     // the panel container, then poll for the tree.
-    await mainWindow.getByTestId('wxml-panel').waitFor({ timeout: 8000 })
+    await workbench.getByTestId('wxml-panel').waitFor({ timeout: 8000 })
 
     // Assert the tree actually renders (not the "等待小程序加载..." empty
     // state). demo-app index.wxml has a <view class="container">, which the
@@ -54,7 +54,7 @@ test.describe('Extension Panels Data Bridge', () => {
     // before the fix, the panel stayed in its empty state because no
     // SimulatorChannel.Wxml events ever reached React state.
     const text = await pollUntil(
-      () => mainWindow.evaluate(() => document.body.innerText),
+      () => workbench.evaluate(() => document.body.innerText),
       (value) => value.includes('container') && !value.includes('等待小程序加载'),
       15000
     )
@@ -63,11 +63,11 @@ test.describe('Extension Panels Data Bridge', () => {
     expect(text).not.toContain('等待小程序加载')
   })
 
-  test('Storage panel renders in main window after tab switch', async ({ mainWindow }) => {
-    await mainWindow.getByRole('tab', { name: 'Storage' }).click()
+  test('Storage panel renders in the workbench window after tab switch', async ({ workbench }) => {
+    await workbench.getByRole('tab', { name: 'Storage' }).click()
     // The Storage panel has no manual refresh button (it's live). Wait for the
     // panel container to mount.
-    await mainWindow.getByTestId('storage-panel').waitFor({ timeout: 8000 })
+    await workbench.getByTestId('storage-panel').waitFor({ timeout: 8000 })
 
     // Under native-host the Storage panel is sourced from the main-process
     // service-host `file://` store (serviceStorage), NOT the simulator
@@ -77,15 +77,15 @@ test.describe('Extension Panels Data Bridge', () => {
     // panel's own write path uses is what lands in the panel. A direct
     // `localStorage.setItem` in the simulator would never reach it.
     //
-    // We must drive `Set` through `mainWindow`'s IPC bridge (the renderer's
-    // sender) — the storage channels are sender-gated to the workbench
-    // policy, so an arbitrary main-process call would be rejected.
-    const prefix = await ipcInvoke<string>(mainWindow, SimulatorStorageChannel.GetActivePrefix)
+    // We must drive `Set` through the workbench window's IPC bridge (the
+    // renderer's sender) — the storage channels are sender-gated to the
+    // workbench policy, so an arbitrary main-process call would be rejected.
+    const prefix = await ipcInvoke<string>(workbench, SimulatorStorageChannel.GetActivePrefix)
     expect(prefix, 'active storage prefix should resolve under native-host').toBeTruthy()
     const key = `${prefix}e2e_storage_key`
 
     const set = await ipcInvoke<{ ok: boolean }>(
-      mainWindow,
+      workbench,
       SimulatorStorageChannel.Set,
       { key, value: 'e2e_storage_value' },
     )
@@ -96,16 +96,16 @@ test.describe('Extension Panels Data Bridge', () => {
     // Assert the key renders in the panel DOM — this catches a regression of
     // the panel never receiving service-host storage data after a tab switch.
     const text = await pollUntil(
-      () => mainWindow.evaluate(() => document.body.innerText),
+      () => workbench.evaluate(() => document.body.innerText),
       (value) => value.includes('e2e_storage_key'),
       15000,
     )
     expect(text).toContain('e2e_storage_key')
   })
 
-  test('AppData panel renders in main window after tab switch', async ({ mainWindow }) => {
-    await mainWindow.getByRole('tab', { name: 'AppData' }).click()
-    const panel = mainWindow.getByTestId('appdata-panel')
+  test('AppData panel renders in the workbench window after tab switch', async ({ workbench }) => {
+    await workbench.getByRole('tab', { name: 'AppData' }).click()
+    const panel = workbench.getByTestId('appdata-panel')
     await panel.waitFor({ timeout: 8000 })
     await expect(panel).toBeVisible()
   })

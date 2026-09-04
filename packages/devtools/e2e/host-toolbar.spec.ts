@@ -1,7 +1,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page } from '@playwright/test'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil, findMainWindow } from './helpers'
+import { DEMO_APP_DIR, openProjectInUI, closeProject, pollUntil } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURES = path.resolve(__dirname, 'fixtures', 'host-toolbar')
@@ -34,7 +34,7 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
   test.describe.configure({ mode: 'serial' })
 
   let electronApp: ElectronApplication
-  let mainWindow: Page
+  let workbench: Page
 
   test.beforeAll(async () => {
     const entryPath = path.resolve(__dirname, 'host-toolbar-entry.js')
@@ -45,18 +45,17 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
         NODE_ENV: 'test',
       },
     })
-    mainWindow = await findMainWindow(electronApp)
-    await mainWindow.waitForLoadState('domcontentloaded')
 
     // The host-toolbar placeholder (and its height listener) only mounts once
     // a project is open — load toolbar content only after this so the
-    // advertise → placeholder loop is deterministic.
-    await openProjectInUI(mainWindow, DEMO_APP_DIR, { waitMs: 20_000 })
+    // advertise → placeholder loop is deterministic. `openProjectInUI` opens
+    // its own workbench window and returns that window's Page directly.
+    workbench = await openProjectInUI(electronApp, DEMO_APP_DIR, { waitMs: 20_000 })
   })
 
   test.afterAll(async () => {
-    if (mainWindow && !mainWindow.isClosed()) {
-      await closeProject(mainWindow).catch(() => {})
+    if (workbench && !workbench.isClosed()) {
+      await closeProject(electronApp).catch(() => {})
     }
     await Promise.race([
       electronApp?.close().catch(() => {}),
@@ -64,8 +63,32 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
     ])
   })
 
-  /** Measured height of the main-window toolbar placeholder (CSS px, rounded). */
-  const placeholderHeight = () => mainWindow.evaluate(() => {
+  /**
+   * `instance.context` (exposed by host-toolbar-entry.js's `onSetup`) is the
+   * PROJECT-LIST window's own context — every window gets its own
+   * `WorkbenchContext`/`ViewManager`, so the list window's `hostToolbar` is a
+   * separate instance from the workbench window's. The `[data-area="host-
+   * toolbar"]` placeholder only mounts in the workbench renderer (ProjectRuntime),
+   * so driving/measuring the toolbar in this spec means reaching the OPEN
+   * project's own window via `instance.projectWindows()`, not `instance.context`.
+   */
+  type HostToolbarWebContents = { id: number; isDestroyed(): boolean } | null
+  interface HostToolbarInstance {
+    projectWindows(): Array<{
+      context: {
+        views: {
+          hostToolbar: {
+            loadFile(p: string): Promise<void>
+            setPreloadPath(p: string | null): void
+            webContents: (HostToolbarWebContents & { executeJavaScript(code: string): Promise<unknown> }) | null
+          }
+        }
+      }
+    }>
+  }
+
+  /** Measured height of the workbench window's toolbar placeholder (CSS px, rounded). */
+  const placeholderHeight = () => workbench.evaluate(() => {
     const el = document.querySelector('[data-area="host-toolbar"]')
     return el ? Math.round(el.getBoundingClientRect().height) : -1
   })
@@ -77,12 +100,8 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
     // 64px placeholder). If the session registration / marker / guard chain
     // is mis-wired, the placeholder stays 0 here.
     await electronApp.evaluate((_electronMods, file) => {
-      const g = globalThis as unknown as {
-        __e2eHostToolbarInstance: {
-          context: { views: { hostToolbar: { loadFile(p: string): Promise<void> } } }
-        }
-      }
-      return g.__e2eHostToolbarInstance.context.views.hostToolbar.loadFile(file)
+      const g = globalThis as unknown as { __e2eHostToolbarInstance: HostToolbarInstance }
+      return g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar.loadFile(file)
     }, path.join(FIXTURES, 'toolbar-64.html'))
 
     const height = await pollUntil(placeholderHeight, (v) => v === 64, 30_000, 300)
@@ -95,22 +114,16 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
     // a preload that does only an unrelated thing (exposes a marker global,
     // installs NO advertiser), and load 88px-tall content.
     await electronApp.evaluate((_electronMods) => {
-      const g = globalThis as unknown as {
-        __e2eHostToolbarInstance: {
-          context: { views: { hostToolbar: { webContents: { isDestroyed(): boolean; close(): void } | null } } }
-        }
-      }
-      const wc = g.__e2eHostToolbarInstance.context.views.hostToolbar.webContents
-      if (wc && !wc.isDestroyed()) wc.close()
+      const g = globalThis as unknown as { __e2eHostToolbarInstance: HostToolbarInstance }
+      const wc = g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar.webContents
+      if (wc && !wc.isDestroyed()) (wc as unknown as { close(): void }).close()
     })
     // Wait until the old webContents is fully gone (the control surface
     // reports null) so the next loadFile lazily rebuilds the view.
     await pollUntil(
       () => electronApp.evaluate((_electronMods) => {
-        const g = globalThis as unknown as {
-          __e2eHostToolbarInstance: { context: { views: { hostToolbar: { webContents: unknown } } } }
-        }
-        return g.__e2eHostToolbarInstance.context.views.hostToolbar.webContents === null
+        const g = globalThis as unknown as { __e2eHostToolbarInstance: HostToolbarInstance }
+        return g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar.webContents === null
       }),
       (gone) => gone === true,
       10_000,
@@ -118,19 +131,8 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
     )
 
     await electronApp.evaluate((_electronMods, args) => {
-      const g = globalThis as unknown as {
-        __e2eHostToolbarInstance: {
-          context: {
-            views: {
-              hostToolbar: {
-                setPreloadPath(p: string | null): void
-                loadFile(p: string): Promise<void>
-              }
-            }
-          }
-        }
-      }
-      const toolbar = g.__e2eHostToolbarInstance.context.views.hostToolbar
+      const g = globalThis as unknown as { __e2eHostToolbarInstance: HostToolbarInstance }
+      const toolbar = g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar
       toolbar.setPreloadPath(args.preload)
       return toolbar.loadFile(args.file)
     }, {
@@ -145,17 +147,9 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
     const mark = await pollUntil(
       () => electronApp.evaluate(async (_electronMods) => {
         const g = globalThis as unknown as {
-          __e2eHostToolbarInstance: {
-            context: {
-              views: {
-                hostToolbar: {
-                  webContents: { isDestroyed(): boolean; executeJavaScript(code: string): Promise<unknown> } | null
-                }
-              }
-            }
-          }
+          __e2eHostToolbarInstance: HostToolbarInstance
         }
-        const wc = g.__e2eHostToolbarInstance.context.views.hostToolbar.webContents
+        const wc = g.__e2eHostToolbarInstance.projectWindows()[0].context.views.hostToolbar.webContents
         if (!wc || wc.isDestroyed()) return null
         return wc.executeJavaScript('window.__e2eHostPreloadMark ?? null')
       }),
@@ -174,15 +168,16 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
     expect(height).toBe(88)
   })
 
-  test('no leak: the main window main world carries no toolbar-runtime / host-preload globals', async () => {
+  test('no leak: the workbench window main world carries no toolbar-runtime / host-preload globals', async () => {
     // The session preload executes in EVERY defaultSession renderer
-    // (including this main window), but the marker+isMainFrame guard must
-    // make it return before
-    // touching the page: no advertiser globals, and — critically — the
-    // HOST's preload must never be session-registered (an implementation
-    // that "fixes" setPreloadPath by registering the host preload on the
-    // session would leak __e2eHostPreloadMark into every window).
-    const leaks = await mainWindow.evaluate(() =>
+    // (including the workbench window's own top-level frame, which shares
+    // the session with the embedded toolbar WCV), but the marker+isMainFrame
+    // guard must make it return before touching the page: no advertiser
+    // globals, and — critically — the HOST's preload must never be
+    // session-registered (an implementation that "fixes" setPreloadPath by
+    // registering the host preload on the session would leak
+    // __e2eHostPreloadMark into every window).
+    const leaks = await workbench.evaluate(() =>
       Object.getOwnPropertyNames(window).filter((name) =>
         // `window.toolbar` (exact name) is excluded: it is the Web-platform
         // BarProp BUILTIN, an own property of EVERY Chromium window — verified
@@ -205,29 +200,33 @@ test.describe('Host toolbar: session-resident height advertiser (R1)', () => {
     // strip (88px from the test above) remains attached+visible on top of the
     // project-list page, covering its search box until the next project open.
 
-    /** Is the toolbar WCV currently among any window's contentView children? */
-    const toolbarAttached = () => electronApp.evaluate(({ BrowserWindow }) => {
-      const g = globalThis as unknown as {
-        __e2eHostToolbarInstance: {
-          context: { views: { hostToolbar: { webContents: { id: number; isDestroyed(): boolean } | null } } }
-        }
-      }
-      const wc = g.__e2eHostToolbarInstance.context.views.hostToolbar.webContents
-      if (!wc || wc.isDestroyed()) return false
+    // Capture the toolbar WCV's webContents id ONCE, while the project window
+    // is still open — closing the project removes it from
+    // `instance.projectWindows()`, so `context.views.hostToolbar` is only
+    // reachable through the instance BEFORE closeProject runs.
+    const toolbarWcId = await electronApp.evaluate(() => {
+      const g = globalThis as unknown as { __e2eHostToolbarInstance: HostToolbarInstance }
+      const wc = g.__e2eHostToolbarInstance.projectWindows()[0]?.context.views.hostToolbar.webContents
+      return wc && !wc.isDestroyed() ? wc.id : null
+    })
+    expect(toolbarWcId, 'toolbar webContents must exist while the project is open').not.toBeNull()
+
+    /** Is a view with this webContents id among any window's contentView children? */
+    const wcAttached = (wcId: number) => electronApp.evaluate(({ BrowserWindow }, id) => {
       return BrowserWindow.getAllWindows().some((win) => {
         const children = win.contentView.children as Array<{ webContents?: { id: number } }>
-        return children.some((v) => v.webContents?.id === wc.id)
+        return children.some((v) => v.webContents?.id === id)
       })
-    })
+    }, wcId)
 
     // Meaningfulness guard: the strip really is mounted while the project is
     // open — otherwise the post-close assertion would pass vacuously.
-    expect(await toolbarAttached()).toBe(true)
+    expect(await wcAttached(toolbarWcId!)).toBe(true)
 
-    await closeProject(mainWindow)
+    await closeProject(electronApp)
 
     const attachedAfterClose = await pollUntil(
-      toolbarAttached,
+      () => wcAttached(toolbarWcId!),
       (attached) => attached === false,
       15_000,
       300,

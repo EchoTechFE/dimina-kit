@@ -25,13 +25,19 @@ import type { Disposable } from '@dimina-kit/electron-deck/main'
 import type { WorkbenchModule } from '../services/module.js'
 import { validate } from '../utils/ipc-schema.js'
 import { IpcRegistry } from '../utils/ipc-registry.js'
+import { toIpcContextSource, type IpcInput } from '../utils/ipc-context-source.js'
 
-export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notify' | 'workspace' | 'rendererDir' | 'senderPolicy'>): Disposable {
-  return new IpcRegistry(ctx.senderPolicy)
-    .handle(WorkbenchSettingsChannel.Get, () => {
+type SettingsIpcCtx = Pick<
+  WorkbenchContext,
+  'views' | 'notify' | 'workspace' | 'rendererDir' | 'senderPolicy'
+>
+
+export function registerSettingsIpc(input: IpcInput<SettingsIpcCtx>): Disposable {
+  return new IpcRegistry(toIpcContextSource(input))
+    .handleRouted(WorkbenchSettingsChannel.Get, () => {
       return loadWorkbenchSettings()
     })
-    .handle(WorkbenchSettingsChannel.Save, (_, ...args: unknown[]) => {
+    .handleRouted(WorkbenchSettingsChannel.Save, (_ctx, _e, ...args: unknown[]) => {
       const [settings] = validate(
         WorkbenchSettingsChannel.Save,
         WorkbenchSettingsSaveSchema,
@@ -41,7 +47,7 @@ export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notif
       applyTheme((settings.theme as ThemeSource | undefined) ?? 'system')
       return { success: true }
     })
-    .handle(WorkbenchSettingsChannel.SetTheme, (_, ...args: unknown[]) => {
+    .handleRouted(WorkbenchSettingsChannel.SetTheme, (_ctx, _e, ...args: unknown[]) => {
       const [theme] = validate(
         WorkbenchSettingsChannel.SetTheme,
         WorkbenchSettingsSetThemeSchema,
@@ -49,11 +55,11 @@ export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notif
       )
       applyTheme(theme)
     })
-    .handle(WorkbenchSettingsChannel.Restart, () => {
+    .handleRouted(WorkbenchSettingsChannel.Restart, () => {
       app.relaunch()
       app.quit()
     })
-    .handle(WorkbenchSettingsChannel.GetCdpStatus, () => {
+    .handleRouted(WorkbenchSettingsChannel.GetCdpStatus, () => {
       const settings = loadWorkbenchSettings()
       const switchValue = app.commandLine.getSwitchValue('remote-debugging-port')
       const implicitDevDefault = !app.isPackaged && !settings.cdp.enabled && switchValue === String(DEFAULT_CDP_PORT)
@@ -65,7 +71,7 @@ export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notif
         implicitDevDefault,
       }
     })
-    .handle(WorkbenchSettingsChannel.GetMcpStatus, () => {
+    .handleRouted(WorkbenchSettingsChannel.GetMcpStatus, () => {
       const settings = loadWorkbenchSettings()
       const runtime = getMcpStatus()
       return {
@@ -76,7 +82,7 @@ export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notif
         error: runtime.error,
       }
     })
-    .handle(SettingsChannel.SetVisible, async (_, ...args: unknown[]) => {
+    .handleRouted(SettingsChannel.SetVisible, async (ctx, _e, ...args: unknown[]) => {
       const [visible] = validate(SettingsChannel.SetVisible, SettingsSetVisibleSchema, args)
       if (visible) {
         await ctx.views.showSettings()
@@ -90,7 +96,7 @@ export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notif
         ctx.views.hideSettings()
       }
     })
-    .on(SettingsChannel.ConfigChanged, async (_, ...args: unknown[]) => {
+    .onRouted(SettingsChannel.ConfigChanged, async (ctx, _e, ...args: unknown[]) => {
       const [config] = validate(
         SettingsChannel.ConfigChanged,
         SettingsConfigChangedSchema,
@@ -101,7 +107,7 @@ export function registerSettingsIpc(ctx: Pick<WorkbenchContext, 'views' | 'notif
         await ctx.workspace.saveCompileConfig(projectPath, config as CompileConfig)
       }
     })
-    .on(SettingsChannel.ProjectSettingsChanged, (_, ...args: unknown[]) => {
+    .onRouted(SettingsChannel.ProjectSettingsChanged, (ctx, _e, ...args: unknown[]) => {
       const [patch] = validate(
         SettingsChannel.ProjectSettingsChanged,
         SettingsProjectSettingsChangedSchema,

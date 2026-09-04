@@ -1,8 +1,33 @@
-import type { BrowserWindow, WebContentsView } from 'electron'
-import { globalShortcut } from 'electron'
+import type { WebContentsView } from 'electron'
+import { BrowserWindow, globalShortcut } from 'electron'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../../services/workbench-context.js'
 import { DisposableRegistry, type Disposable, toDisposable } from '@dimina-kit/electron-deck/main'
+
+const DEVTOOLS_ACCELERATOR = 'CommandOrControl+Shift+I'
+let devToolsShortcutHolders = 0
+
+/**
+ * Claims a share of the ONE process-wide DevTools accelerator. `globalShortcut`
+ * is a process singleton: a per-window registration is refused for every window
+ * after the first, which would give that first window the shortcut for the
+ * whole app and kill it outright when that window closed. So the accelerator is
+ * registered once, opens whichever window is focused when it is pressed, and is
+ * released only when the last holder lets go — a later window can then claim it
+ * again. `unregisterAll()` in lifecycle stays as a process-exit safety net.
+ */
+function acquireDevToolsShortcut(): Disposable {
+  if (devToolsShortcutHolders === 0) {
+    globalShortcut.register(DEVTOOLS_ACCELERATOR, () => {
+      BrowserWindow.getFocusedWindow()?.webContents.openDevTools({ mode: 'detach' })
+    })
+  }
+  devToolsShortcutHolders += 1
+  return toDisposable(() => {
+    devToolsShortcutHolders -= 1
+    if (devToolsShortcutHolders === 0) globalShortcut.unregister(DEVTOOLS_ACCELERATOR)
+  })
+}
 
 export interface MainWindowEventState {
   context?: WorkbenchContext
@@ -41,18 +66,7 @@ export function wireMainWindowEvents(
     }))
   }
 
-  // DevTools shortcut: scoped to this main window so its disposal is tied
-  // to ctx.registry. `unregisterAll()` in lifecycle remains as a process-exit
-  // safety net.
-  const devToolsAccelerator = 'CommandOrControl+Shift+I'
-  const registered = globalShortcut.register(devToolsAccelerator, () => {
-    win.webContents.openDevTools({ mode: 'detach' })
-  })
-  if (registered) {
-    registry.add(toDisposable(() => {
-      globalShortcut.unregister(devToolsAccelerator)
-    }))
-  }
+  registry.add(acquireDevToolsShortcut())
 
   return registry
 }

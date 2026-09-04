@@ -248,7 +248,11 @@ test.beforeAll(async () => {
     100,
   ) as number
 
-  await openProjectInUI(mainWindow, PROBE_APP_DIR, { waitMs: 8000 })
+  // Return value not captured — everything after this drives the probe purely
+  // through the automation-protocol WebSocket (`miniProgram`/`page`) or scans
+  // `electronApp`'s webContents by URL marker (`trustedClick`), never the
+  // workbench window's own Page.
+  await openProjectInUI(electronApp, PROBE_APP_DIR, { waitMs: 8000 })
   await waitForSimulatorWebview(electronApp)
 
   miniProgram = await automator.connect({ wsEndpoint: `ws://127.0.0.1:${autoPort}` })
@@ -268,7 +272,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   miniProgram?.disconnect()
-  await closeProject(mainWindow).catch(() => {})
+  await closeProject(electronApp).catch(() => {})
   await electronApp?.close().catch(() => {})
 })
 

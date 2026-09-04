@@ -42,12 +42,12 @@ import {
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR, findMainWindow } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 let electronApp: ElectronApplication
-let mainWindow: PwPage
+let workbench: PwPage
 
 const SPEC_USERDATA = 'dock-resize-sync-regressions2'
 
@@ -66,19 +66,17 @@ test.beforeAll(async () => {
     args: [appPath, `--user-data-dir=${userDataDir}`],
     env: { ...process.env, NODE_ENV: 'test' },
   })
-  mainWindow = await findMainWindow(electronApp)
-  await mainWindow.waitForLoadState('domcontentloaded')
   // Offscreen + blur so the spec never steals focus.
   await electronApp.evaluate(async ({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
     if (win) { win.setPosition(-2000, -2000); win.blur() }
   })
-  await openProjectInUI(mainWindow, DEMO_APP_DIR)
-  await mainWindow.waitForSelector('[data-deck-group]', { timeout: 15000 })
+  workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
+  await workbench.waitForSelector('[data-deck-group]', { timeout: 15000 })
 })
 
 test.afterAll(async () => {
-  try { await closeProject(mainWindow) } catch { /* best effort */ }
+  try { await closeProject(electronApp) } catch { /* best effort */ }
   await electronApp.close()
 })
 
@@ -140,11 +138,11 @@ test('[needs-real-electron] R-KB: a keyboard (Arrow-key) resize persists to the 
 
   // Reset to a clean, symmetric [50,50] via the programmatic seam so the start
   // state is deterministic and the keyboard move is unambiguous.
-  const reset = await applyLayout(mainWindow, split, [50, 50])
+  const reset = await applyLayout(workbench, split, [50, 50])
   expect(reset, 'the col-main write-back seam must be reachable to seed [50,50]').toBe(true)
-  await mainWindow.waitForTimeout(400)
+  await workbench.waitForTimeout(400)
 
-  const before = await panelSizes(mainWindow, split)
+  const before = await panelSizes(workbench, split)
   expect(before, `the ${split} split must render with two flexible panels`).not.toBeNull()
   expect(before!.axis).toBe('h')
   expect(before!.sizes.length, 'col-main must have exactly two stacked panels').toBe(2)
@@ -158,7 +156,7 @@ test('[needs-real-electron] R-KB: a keyboard (Arrow-key) resize persists to the 
   // SEPARATOR (rrp's listener reads `e.currentTarget`). For a vertical split
   // ArrowUp shrinks the top panel by 5% per press. We press several times so
   // the move is well above measurement noise.
-  const kb = await mainWindow.evaluate((id) => {
+  const kb = await workbench.evaluate((id) => {
     const splitEl = document.querySelector(`[data-deck-split="${id}"]`)
     if (!splitEl) return { ok: false, why: 'no split element', role: null, tabIndex: null }
     const handle = splitEl.querySelector('[data-deck-resize-handle]') as HTMLElement | null
@@ -184,9 +182,9 @@ test('[needs-real-electron] R-KB: a keyboard (Arrow-key) resize persists to the 
   expect(kb.role, 'rrp resize handle must be role="separator" (keyboard-operable)').toBe('separator')
   expect(kb.tabIndex, 'rrp resize handle must be focusable (tabIndex 0)').toBe(0)
 
-  await mainWindow.waitForTimeout(500)
+  await workbench.waitForTimeout(500)
 
-  const after = await panelSizes(mainWindow, split)
+  const after = await panelSizes(workbench, split)
   expect(after, 'col-main must still render after the keyboard resize').not.toBeNull()
   expect(after!.sizes.length).toBe(2)
 
@@ -260,14 +258,14 @@ test.fixme(
     // whose flexible ratios are unchanged, so v3 SKIPS its write-back.
     const split = 'dock-root'
 
-    const rootBefore = await panelSizes(mainWindow, split)
+    const rootBefore = await panelSizes(workbench, split)
     expect(rootBefore, 'the root split must render').not.toBeNull()
     expect(rootBefore!.sizes.length, 'root split has two children (sim | main)').toBe(2)
     const weightsBefore = rootBefore!.sizesAttr
     expect(weightsBefore, 'root split must mirror its raw weights').toBeTruthy()
 
     // Locate the root split's DIRECT resize handle and its midpoint.
-    const handleBox = await mainWindow.evaluate(() => {
+    const handleBox = await workbench.evaluate(() => {
       const splitEl = document.querySelector('[data-deck-split="dock-root"]')
       if (!splitEl) return null
       const handle = splitEl.querySelector('[data-deck-resize-handle]') as HTMLElement | null
@@ -283,19 +281,19 @@ test.fixme(
     // exactly what rrp listens to (pointerdown/move/up + setPointerCapture).
     const cx = handleBox!.x
     const cy = handleBox!.y
-    await mainWindow.mouse.move(cx, cy)
-    await mainWindow.mouse.down()
-    for (const dx of [15, 30, 45, 60]) await mainWindow.mouse.move(cx + dx, cy, { steps: 4 })
-    await mainWindow.waitForTimeout(50)
-    for (const dx of [45, 30, 15, 0]) await mainWindow.mouse.move(cx + dx, cy, { steps: 4 })
-    await mainWindow.mouse.up()
-    await mainWindow.waitForTimeout(300)
+    await workbench.mouse.move(cx, cy)
+    await workbench.mouse.down()
+    for (const dx of [15, 30, 45, 60]) await workbench.mouse.move(cx + dx, cy, { steps: 4 })
+    await workbench.waitForTimeout(50)
+    for (const dx of [45, 30, 15, 0]) await workbench.mouse.move(cx + dx, cy, { steps: 4 })
+    await workbench.mouse.up()
+    await workbench.waitForTimeout(300)
 
-    const weightsAfterDrag = (await panelSizes(mainWindow, split))!.sizesAttr
+    const weightsAfterDrag = (await panelSizes(workbench, split))!.sizesAttr
 
     // Trigger a SPONTANEOUS re-measure WITHOUT any user resize: change the device
     // so the fixed-px sim leaf re-pins → the root re-measures → `onLayoutChanged`.
-    const changed = await mainWindow.evaluate(() => {
+    const changed = await workbench.evaluate(() => {
       const body = document.querySelector('[data-deck-panel-body="simulator"]')
       const select = body?.querySelector('select') as HTMLSelectElement | null
       if (!select || select.options.length < 2) return null
@@ -306,9 +304,9 @@ test.fixme(
       return { from: cur, to: next, label: select.options[next]!.textContent }
     })
     expect(changed, 'the device <select> must exist with >1 option to trigger a re-measure').not.toBeNull()
-    await mainWindow.waitForTimeout(600)
+    await workbench.waitForTimeout(600)
 
-    const weightsAfterDevice = (await panelSizes(mainWindow, split))!.sizesAttr
+    const weightsAfterDevice = (await panelSizes(workbench, split))!.sizesAttr
 
     // R-LEAK (v3): a re-measure is NOT a user resize, so the root's raw weights
     // must be UNCHANGED. v3's basis-normalized compare skips the ratio-preserving

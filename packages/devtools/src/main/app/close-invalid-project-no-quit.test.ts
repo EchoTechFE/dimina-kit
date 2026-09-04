@@ -1,25 +1,25 @@
 /**
- * WINDOW-CLOSE CONTRACT — closing while the renderer is on the PROJECT screen
- * after a FAILED project open (onClose in app.ts wireAppWindowEvents).
+ * WORKBENCH-WINDOW CLOSE CONTRACT — closing a workbench window after a FAILED
+ * project open (the unconditional-teardown guard in workbench-window.ts).
  *
  * Bug guarded against: the user tries to open a non-existent / invalid
  * mini-program project. `openProject()` fails and no session is ever created
- * (`workspace.hasActiveSession()` stays false throughout). The renderer,
- * however, has already navigated to its in-project screen (it reports this
- * via `WindowChannel.ScreenState` the moment it enters the project route,
- * BEFORE the open call resolves) and shows a "compile failed" error overlay
- * there. The close handler currently keys its preventDefault decision purely
- * off `hasActiveSession()`, so with no session it sees nothing to protect and
- * lets the close pass through — the last window is destroyed, triggering
- * `window-all-closed` → `app.quit()`, and the whole app exits instead of
- * returning the user to the project list.
+ * (`workspace.hasActiveSession()` stays false throughout), yet the window
+ * already owns views, an editor server and IPC registrations. A close handler
+ * that gates its teardown on `hasActiveSession()` sees nothing to protect and
+ * lets the close fall straight through — the window is destroyed with its
+ * resources still live, and back when that was the only window the whole
+ * application went down with it (`window-all-closed` → `app.quit()`).
  *
- * Contract: the close decision must consult the renderer's last-reported
- * screen (`WindowChannel.ScreenState`), not just session presence. Closing
- * while the reported screen is `'project'` must preventDefault and send
- * `WindowChannel.NavigateBack` so the renderer returns to the list, even with
- * no active session. Closing while the reported screen is `'list'` must pass
- * through so the app can quit normally.
+ * Contract: a workbench window's close tears that window down
+ * UNCONDITIONALLY — session or not. Teardown runs, the window is destroyed
+ * only once teardown finishes, and neither the application nor the
+ * project-list window goes with it.
+ *
+ * Window identity is what the contract keys off now: a workbench window IS the
+ * project screen, so main never has to ask a renderer which screen it is on.
+ * The project-list window owns no project and keeps the opposite contract —
+ * its close passes through so the app can quit.
  *
  * Harness (electron + fs + devkit mocks, real createDevtoolsRuntime) lifted
  * from `double-close-quit.test.ts` / `close-with-active-session.test.ts`.
@@ -177,6 +177,8 @@ vi.mock('electron', () => {
   class BrowserWindow {
     private em = stubs.makeEmitter()
     destroyed = false
+    visible = true
+    minimized = false
     webContents = new WebContents()
     contentView: View | WebContentsView = new WebContentsView()
     on = this.em.on.bind(this.em)
@@ -188,9 +190,14 @@ vi.mock('electron', () => {
     getContentSize = () => [1280, 980]
     setIcon = vi.fn()
     setTitle = vi.fn()
-    show = vi.fn()
+    show = vi.fn(() => { this.visible = true })
     showInactive = vi.fn()
     focus = vi.fn()
+    hide = vi.fn(() => { this.visible = false })
+    isVisible = () => this.visible
+    minimize = vi.fn(() => { this.minimized = true })
+    isMinimized = () => this.minimized
+    restore = vi.fn(() => { this.minimized = false })
     close = vi.fn()
     destroy = vi.fn(() => {
       this.destroyed = true
@@ -331,13 +338,6 @@ vi.mock('@dimina-kit/devkit', () => ({
 }))
 
 // ── Lazy imports ────────────────────────────────────────────────────────
-import { WindowChannel } from '../../shared/ipc-channels.js'
-// `WindowChannel` does not yet export a screen-state channel — the renderer
-// has no way to report its current top-level screen to main at all. This is
-// itself part of the guarded gap: main has nothing to consult, so it can only
-// ever key off `hasActiveSession()`. Once the channel is added to
-// `shared/ipc-channels.ts`, this local constant must match its value exactly.
-const SCREEN_STATE_CHANNEL = 'window:screenState'
 let createDevtoolsRuntime: typeof import('./app.js').createDevtoolsRuntime
 
 beforeEach(async () => {
@@ -346,6 +346,9 @@ beforeEach(async () => {
   await import('electron')
   ;({ createDevtoolsRuntime } = await import('./app.js'))
 })
+
+type Instance = Awaited<ReturnType<typeof createDevtoolsRuntime>>
+type ProjectWindow = ReturnType<Instance['projectWindows']>[number]
 
 /** A close event that records how many times preventDefault was called. */
 function makeCloseEvent() {
@@ -358,107 +361,86 @@ function makeCloseEvent() {
   }
 }
 
-function emitClose(instance: Awaited<ReturnType<typeof createDevtoolsRuntime>>, fakeEvent: unknown) {
-  ;(instance.mainWindow as unknown as {
-    emit: (event: string, ...args: unknown[]) => void
-  }).emit('close', fakeEvent)
+function emitClose(win: unknown, fakeEvent: unknown) {
+  ;(win as { emit: (event: string, ...args: unknown[]) => void }).emit('close', fakeEvent)
 }
 
-/**
- * Reports the renderer's current top-level screen via the registered IPC
- * handler, mirroring the renderer calling
- * `ipcRenderer.invoke(SCREEN_STATE_CHANNEL, screen)`. No handler is currently
- * registered for this channel at all — main has no way to learn the
- * renderer's screen — so this is a no-op today. That is itself the gap this
- * file guards: the close decision below falls back to whatever main can
- * currently observe (only `hasActiveSession()`), which is precisely the bug.
- */
-async function reportScreen(
-  instance: Awaited<ReturnType<typeof createDevtoolsRuntime>>,
-  screen: 'project' | 'list',
-) {
-  const handler = stubs.handlers.get(SCREEN_STATE_CHANNEL)
-  // The fake IpcMainInvokeEvent must carry the main window's webContents as its
-  // sender: every renderer→main invoke passes the sender-policy gate, which
-  // trusts the main-window renderer. A bare `{}` has no sender and crashes the
-  // gate before the handler runs.
-  const event = { sender: instance.mainWindow.webContents }
-  await handler?.(event, screen)
+/** Opens `dir` in its own workbench window and returns that window's record. */
+async function openWorkbenchWindow(instance: Instance, dir: string): Promise<ProjectWindow> {
+  await instance.openProjectWindow({ path: dir })
+  const [projectWindow] = instance.projectWindows()
+  expect(projectWindow, 'openProjectWindow must publish the window it opened').toBeTruthy()
+  return projectWindow!
 }
 
-describe('window close after a failed project open (no session, renderer stuck on project screen)', () => {
-  it('preventDefaults the close and navigates the renderer back to the list instead of quitting', async () => {
+describe('workbench window close after a failed project open (no session was ever created)', () => {
+  it('tears the window down anyway, destroys only that window, and never quits the app', async () => {
     // Do NOT add the dir to projectsWithAppJson: openProject() must fail
     // because app.json is missing, exactly like opening a non-existent /
     // invalid mini-program project.
     stubs.setProjectsJson(JSON.stringify([]))
 
     const instance = await createDevtoolsRuntime({})
+    const projectWindow = await openWorkbenchWindow(instance, '/tmp/doesNotExist')
 
-    const openResult = await instance.context.workspace.openProject('/tmp/doesNotExist')
+    const openResult = await projectWindow.context.workspace.openProject('/tmp/doesNotExist')
     expect(openResult.success, 'opening a non-existent project must fail').toBe(false)
     expect(
-      instance.context.workspace.hasActiveSession(),
+      projectWindow.context.workspace.hasActiveSession(),
       'a failed open must leave no active session',
     ).toBe(false)
 
-    // The renderer navigated into the project screen (to show the compile
-    // failed overlay) before the open call resolved.
-    await reportScreen(instance, 'project')
-
+    // `closeProject()` is the teardown hop that must run even with nothing to
+    // close — it is what releases the window's views and editor server.
+    const closeProjectSpy = vi.spyOn(projectWindow.context.workspace, 'closeProject')
     const quitSpy = vi.mocked((await import('electron')).app.quit)
-    const destroySpy = vi.mocked(instance.mainWindow.destroy)
-    const sendSpy = vi.mocked(instance.mainWindow.webContents.send)
+    const listDestroySpy = vi.mocked(instance.mainWindow.destroy)
+    const windowDestroySpy = vi.mocked(projectWindow.window.destroy)
     quitSpy.mockClear()
-    destroySpy.mockClear()
-    sendSpy.mockClear()
+    listDestroySpy.mockClear()
+    windowDestroySpy.mockClear()
 
     const evt = makeCloseEvent()
-    emitClose(instance, evt.event)
+    emitClose(projectWindow.window, evt.event)
 
-    await new Promise((r) => setTimeout(r, 0))
     await vi.waitFor(() => {
-      expect(evt.prevented).toBeGreaterThanOrEqual(1)
-    })
+      expect(windowDestroySpy).toHaveBeenCalledTimes(1)
+    }, { timeout: 2000 })
 
     expect(
       evt.prevented,
-      'closing while stuck on the project screen (even with no session) must preventDefault exactly once',
+      'the close must be held back exactly once so teardown finishes before the window goes',
     ).toBe(1)
-    expect(quitSpy, 'the app must not quit while the renderer is on the project screen').not.toHaveBeenCalled()
-    expect(destroySpy, 'the main window must not be destroyed while the renderer is on the project screen').not.toHaveBeenCalled()
-    expect(instance.mainWindow.isDestroyed()).toBe(false)
-
-    const navigateBackCalls = sendSpy.mock.calls.filter(
-      (c) => c[0] === WindowChannel.NavigateBack,
-    )
     expect(
-      navigateBackCalls.length,
-      'the renderer must be told to navigate back to the project list',
-    ).toBeGreaterThanOrEqual(1)
+      closeProjectSpy,
+      'teardown must run even with no session — that is what releases the views and editor server',
+    ).toHaveBeenCalledTimes(1)
+    expect(quitSpy, 'closing one workbench window must never quit the application').not.toHaveBeenCalled()
+    expect(
+      listDestroySpy,
+      'the project list window must survive a workbench window closing',
+    ).not.toHaveBeenCalled()
+    expect(instance.mainWindow.isDestroyed()).toBe(false)
 
     await instance.dispose()
   })
 })
 
-describe('window close while the renderer is on the project list (no session)', () => {
+describe('project-list window close', () => {
   it('passes the close through so the app can quit', async () => {
     stubs.setProjectsJson(JSON.stringify([]))
 
     const instance = await createDevtoolsRuntime({})
     expect(instance.context.workspace.hasActiveSession()).toBe(false)
 
-    await reportScreen(instance, 'project')
-    await reportScreen(instance, 'list')
-
     const evt = makeCloseEvent()
-    emitClose(instance, evt.event)
+    emitClose(instance.mainWindow, evt.event)
 
     await new Promise((r) => setTimeout(r, 0))
 
     expect(
       evt.prevented,
-      'with the renderer back on the list screen the close must pass through so the app can quit',
+      'the list window owns no project, so its close must pass through and let the app quit',
     ).toBe(0)
 
     await instance.dispose()

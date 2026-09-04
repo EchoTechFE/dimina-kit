@@ -22,7 +22,6 @@ const api = vi.hoisted(() => ({
   listProjects: vi.fn(),
   getThumbnail: vi.fn(),
   getBranding: vi.fn(),
-  notifyWindowScreen: vi.fn(),
   onWindowNavigateBack: vi.fn(() => () => {}),
   onWindowOpenProject: vi.fn(() => () => {}),
   onProjectCreateSubmitted: vi.fn(() => () => {}),
