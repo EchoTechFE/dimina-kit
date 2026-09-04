@@ -2,8 +2,16 @@ import type { OpenProjectOptions } from '@dimina-kit/devkit'
 import type { SimulatorApiHandler } from '../main/services/simulator/custom-apis.js'
 import type { MiniappSessionAppInfo } from '../main/runtime/miniapp-runtime.js'
 import type { ClosingProjectWindow, ProjectWindowConfig, ProjectWindowRef } from './project-window-types.js'
+import type { CompileConfig, CompileMode, CompileModes } from './compile-modes.js'
 
 export type { ClosingProjectWindow, ProjectWindowConfig, ProjectWindowRef }
+
+/**
+ * The compile-mode model lives next to its resolver in `compile-modes.ts` —
+ * the types and the rules that read them stay in one file. Re-exported here
+ * so the existing `shared/types.js` import sites keep working.
+ */
+export type { CompileConfig, CompileMode, CompileModes }
 
 /**
  * The HAND-WRITTEN narrow contract handed to a host `menuBuilder` — the
@@ -111,47 +119,6 @@ export interface WorkbenchConfig {
    * passing it keep compiling; it has no runtime effect.
    */
   headerHeight?: number
-}
-
-/**
- * The launch parameters a compile actually runs with, after resolving the
- * selected compile mode. Derived, never the stored form — see `CompileModes`.
- */
-export interface CompileConfig {
-  startPage: string
-  scene: number
-  queryParams: { key: string; value: string }[]
-}
-
-/**
- * One named compile mode. Field names and shape mirror WeChat DevTools'
- * `project.config.json` → `condition.miniprogram.list[]` entry so the same
- * file round-trips between both tools; `query` is therefore the raw
- * `k=v&k2=v2` string it stores, not parsed pairs.
- *
- * `launchMode` / `partialCompile` are WeChat's own fields. We neither read
- * nor write them, but they ride along on every mode so saving from here
- * never drops what the other tool put in the file.
- */
-export interface CompileMode {
-  name: string
-  pathName: string
-  query: string
-  /** `null` means "unset" — the resolver falls back to `DEFAULT_SCENE`. */
-  scene: number | null
-  launchMode?: unknown
-  partialCompile?: unknown
-}
-
-/**
- * A project's compile modes plus which one is selected. This is the stored
- * form; the effective `CompileConfig` is resolved from it
- * (`resolveCompileConfig` in `shared/compile-modes.ts`).
- */
-export interface CompileModes {
-  /** Index into `list`. `-1` (`NORMAL_COMPILE_INDEX`) selects 普通编译. */
-  current: number
-  list: CompileMode[]
 }
 
 /**

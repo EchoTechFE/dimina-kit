@@ -168,6 +168,120 @@ describe('getCompileModes — 迁移旧版单一 compileConfig（只读）', () 
   })
 })
 
+describe('getCompileModes — condition.miniprogram 已存在但是空列表时，仍要迁移旧版 compileConfig', () => {
+  /**
+   * 微信开发者工具会给任何它打开过的项目写一个空的
+   * `condition.miniprogram: { list: [] }`。旧读法只在这个键完全不存在时才
+   * 迁移，于是任何被微信工具碰过的老项目一读就把用户原来设置的启动页丢了。
+   */
+  function seedEmptyMiniprogramWithLegacyConfig(dir: string): void {
+    writeAppJson(dir, 'pages/index/index')
+    writeJson(path.join(dir, 'project.config.json'), {
+      condition: { miniprogram: { list: [] } },
+    })
+    writeProjectsList([
+      {
+        name: 'legacy',
+        path: dir,
+        compileConfig: {
+          startPage: 'pages/b/b',
+          scene: 1001,
+          queryParams: [{ key: 'id', value: '7' }],
+        },
+      },
+    ])
+  }
+
+  it('迁移出遗留的启动页，current 指向它', () => {
+    const dir = makeProjectDir()
+    seedEmptyMiniprogramWithLegacyConfig(dir)
+
+    const modes = getCompileModes(dir)
+
+    expect(modes.current).toBe(0)
+    expect(modes.list).toEqual([
+      { name: '', pathName: 'pages/b/b', query: 'id=7', scene: 1001 },
+    ])
+  })
+
+  it('迁移是纯读：调用 getCompileModes 前后 project.config.json 内容不变，项目记录里的遗留 compileConfig 也还在', () => {
+    const dir = makeProjectDir()
+    seedEmptyMiniprogramWithLegacyConfig(dir)
+    const configPathBefore = readJson(path.join(dir, 'project.config.json'))
+    const projectsBefore = fs.readFileSync(path.join(userDataDir, 'dimina-projects.json'), 'utf-8')
+
+    getCompileModes(dir)
+
+    expect(
+      readJson(path.join(dir, 'project.config.json')),
+      '读项目不应该改写用户 git 跟踪的 project.config.json',
+    ).toEqual(configPathBefore)
+    expect(
+      fs.readFileSync(path.join(userDataDir, 'dimina-projects.json'), 'utf-8'),
+      '纯读不应该顺手清掉项目记录里的遗留字段',
+    ).toBe(projectsBefore)
+  })
+
+  it('删除不会复活：saveCompileModes 之后项目记录里的遗留 compileConfig 已被清掉，再次读取是空列表', () => {
+    const dir = makeProjectDir()
+    seedEmptyMiniprogramWithLegacyConfig(dir)
+
+    getCompileModes(dir) // 纯读，仅从遗留 compileConfig 派生出这条模式，不写盘
+    saveCompileModes(dir, { current: -1, list: [] }) // 用户把这条模式删了——这一步收口迁移
+
+    const projects = JSON.parse(
+      fs.readFileSync(path.join(userDataDir, 'dimina-projects.json'), 'utf-8'),
+    ) as Array<{ compileConfig?: unknown }>
+    expect(
+      projects[0].compileConfig,
+      'saveCompileModes 必须清掉遗留字段，否则下次读取会拿它重新派生出已删除的模式',
+    ).toBeUndefined()
+    expect(getCompileModes(dir)).toEqual({ current: -1, list: [] })
+  })
+
+  it('遗留配置本身等价于普通编译时不产生任何模式', () => {
+    const dir = makeProjectDir()
+    writeAppJson(dir, 'pages/index/index')
+    writeJson(path.join(dir, 'project.config.json'), {
+      condition: { miniprogram: { list: [] } },
+    })
+    writeProjectsList([
+      {
+        name: 'legacy',
+        path: dir,
+        compileConfig: { startPage: 'pages/index/index', scene: DEFAULT_SCENE, queryParams: [] },
+      },
+    ])
+
+    expect(getCompileModes(dir)).toEqual({ current: -1, list: [] })
+  })
+
+  it('condition.miniprogram 里本来就有条目时，遗留配置不参与，直接返回文件里的列表', () => {
+    const dir = makeProjectDir()
+    writeAppJson(dir, 'pages/index/index')
+    writeJson(path.join(dir, 'project.config.json'), {
+      condition: {
+        miniprogram: {
+          current: 0,
+          list: [{ name: '已有', pathName: 'pages/existing/existing', query: '', scene: null }],
+        },
+      },
+    })
+    writeProjectsList([
+      {
+        name: 'legacy',
+        path: dir,
+        compileConfig: { startPage: 'pages/b/b', scene: 1001, queryParams: [] },
+      },
+    ])
+
+    expect(getCompileModes(dir)).toEqual({
+      current: 0,
+      list: [{ name: '已有', pathName: 'pages/existing/existing', query: '', scene: null }],
+    })
+  })
+})
+
 describe('saveCompileModes — 合并写入 project.config.json', () => {
   it('dirPath 为空串时直接返回，不抛错', () => {
     expect(() => saveCompileModes('', { current: -1, list: [] })).not.toThrow()

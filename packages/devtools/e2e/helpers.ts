@@ -3,7 +3,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { fileURLToPath } from 'url'
-import { ProjectsChannel, ProjectChannel, SimulatorChannel } from '../src/shared/ipc-channels'
+import { ProjectsChannel, SimulatorChannel } from '../src/shared/ipc-channels'
 import { PopoverChannel } from '../src/shared/ipc-channels-overlays'
 import { DMB_PAGEFRAME_DOC_NAME } from '../src/shared/dmb-resource-url'
 

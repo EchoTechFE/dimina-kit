@@ -10,7 +10,47 @@
  */
 
 import { DEFAULT_SCENE } from './constants.js'
-import type { CompileConfig, CompileMode, CompileModes } from './types.js'
+
+/**
+ * The launch parameters a compile actually runs with, after resolving the
+ * selected compile mode. Derived, never the stored form — see `CompileModes`.
+ */
+export interface CompileConfig {
+  startPage: string
+  scene: number
+  queryParams: { key: string; value: string }[]
+}
+
+/**
+ * One named compile mode. Field names and shape mirror WeChat DevTools'
+ * `project.config.json` → `condition.miniprogram.list[]` entry so the same
+ * file round-trips between both tools; `query` is therefore the raw
+ * `k=v&k2=v2` string it stores, not parsed pairs.
+ *
+ * `launchMode` / `partialCompile` are WeChat's own fields. We neither read
+ * nor write them, but they ride along on every mode so saving from here
+ * never drops what the other tool put in the file.
+ */
+export interface CompileMode {
+  name: string
+  pathName: string
+  query: string
+  /** `null` means "unset" — the resolver falls back to `DEFAULT_SCENE`. */
+  scene: number | null
+  launchMode?: unknown
+  partialCompile?: unknown
+}
+
+/**
+ * A project's compile modes plus which one is selected. This is the stored
+ * form; the effective `CompileConfig` is resolved from it
+ * (`resolveCompileConfig` below).
+ */
+export interface CompileModes {
+  /** Index into `list`. `-1` (`NORMAL_COMPILE_INDEX`) selects 普通编译. */
+  current: number
+  list: CompileMode[]
+}
 
 /**
  * `CompileModes.current` value selecting 普通编译 — launch the app's own
@@ -105,18 +145,25 @@ export function compileModeLabel(modes: CompileModes): string {
  */
 export function normalizeCompileModes(raw: unknown): CompileModes {
   if (!isRecord(raw)) return emptyCompileModes()
+  const rawCurrent = Number.isInteger(raw.current)
+    ? (raw.current as number)
+    : NORMAL_COMPILE_INDEX
+  // Dropping a malformed entry shifts every later entry down, so the selection
+  // is remapped while the list is built. Keeping the raw index would select a
+  // DIFFERENT mode than the file did — the file says 首页, the simulator
+  // launches 购物车. A selected entry that is itself dropped falls back to
+  // 普通编译.
   const list: CompileMode[] = []
+  let current = NORMAL_COMPILE_INDEX
   if (Array.isArray(raw.list)) {
-    for (const item of raw.list) {
+    for (const [index, item] of raw.list.entries()) {
       const mode = normalizeCompileMode(item)
-      if (mode) list.push(mode)
+      if (!mode) continue
+      if (index === rawCurrent) current = list.length
+      list.push(mode)
     }
   }
-  const current = Number.isInteger(raw.current) ? (raw.current as number) : NORMAL_COMPILE_INDEX
-  return {
-    current: current >= 0 && current < list.length ? current : NORMAL_COMPILE_INDEX,
-    list,
-  }
+  return { current, list }
 }
 
 /** An empty model — no custom modes, 普通编译 selected. */

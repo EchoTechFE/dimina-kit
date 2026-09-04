@@ -327,9 +327,15 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   // The mode list is the stored form, so an edit is persisted and adopted even
   // when it does not affect what is running (editing a mode other than the
   // selected one). Only a change to the running configuration relaunches.
+  //
+  // Persistence comes FIRST: `compileModes` feeds `compileConfig` and with it
+  // the simulator URL, so adopting a list the save then rejects would leave the
+  // simulator running a configuration that is not on disk and disappears at the
+  // next open. Adopting and relaunching in the same tick also keeps the attach
+  // effect (gated on `compileStatus.status === 'ready'`) from re-attaching at
+  // the new start page before `rebuildProject` has actually rebuilt.
   const applyCompileModes = useCallback(
     async (modes: CompileModes, shouldRelaunch: boolean) => {
-      setCompileModes(modes)
       try {
         await saveCompileModes(projectPath, modes)
       } catch (error) {
@@ -339,6 +345,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
         })
         return
       }
+      setCompileModes(modes)
       if (shouldRelaunch) await relaunch()
     },
     [projectPath, relaunch],

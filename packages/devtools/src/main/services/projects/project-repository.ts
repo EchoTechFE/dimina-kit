@@ -277,10 +277,16 @@ export function updateLastOpened(dirPath: string): void {
 export function getCompileModes(dirPath: string): CompileModes {
   if (!dirPath) return emptyCompileModes()
   const condition = readProjectConfig(dirPath).condition
-  if (isRecord(condition) && condition.miniprogram !== undefined) {
-    return normalizeCompileModes(condition.miniprogram)
-  }
-  return migrateLegacyCompileConfig(dirPath)
+  const stored = isRecord(condition) && condition.miniprogram !== undefined
+    ? normalizeCompileModes(condition.miniprogram)
+    : null
+  // A stored list with entries is the answer — it is the user's own edit. An
+  // EMPTY block is not evidence that the project has no modes: WeChat DevTools
+  // writes `"miniprogram": {"list": []}` into any project it opens, and taking
+  // that as "no modes" would drop the start page a user configured before
+  // compile modes existed.
+  if (stored && stored.list.length > 0) return stored
+  return migrateLegacyCompileConfig(dirPath) ?? stored ?? emptyCompileModes()
 }
 
 /**
@@ -337,19 +343,41 @@ export function saveCompileModes(dirPath: string, modes: CompileModes): void {
       2,
     ),
   )
+  // The user has now said what this project's modes are, so the pre-compile-
+  // modes single config is spent. Retiring it here is what makes deleting a
+  // migrated mode stick: an empty stored list would otherwise be read as
+  // "nothing stored yet" and migrate the old config back.
+  clearLegacyCompileConfig(dirPath)
 }
 
 /**
  * Projects imported before compile modes existed stored one unnamed compile
  * config in the project list file. Surface it as a selected mode rather than
  * silently dropping the user's start page — but only when it asks for
- * something 普通编译 can't already do, so the common case stays an empty
- * list. Read-only: nothing is written until the user edits a mode.
+ * something 普通编译 can't already do, so the common case stays an empty list.
+ * Returns null when there is nothing to migrate.
+ *
+ * Read-only: opening a project must not rewrite the user's git-tracked
+ * project.config.json. The legacy record is retired instead by the first
+ * explicit save (see `saveCompileModes`), which is also what keeps a deleted
+ * mode deleted — without that, an empty stored list would migrate again and
+ * put the mode back.
  */
-function migrateLegacyCompileConfig(dirPath: string): CompileModes {
+function migrateLegacyCompileConfig(dirPath: string): CompileModes | null {
   const legacy = load().find((p) => p.path === dirPath)?.compileConfig
-  if (!legacy) return emptyCompileModes()
-  return compileConfigToModes(legacy, getProjectPages(dirPath).entryPagePath)
+  if (!legacy) return null
+  const modes = compileConfigToModes(legacy, getProjectPages(dirPath).entryPagePath)
+  return modes.list.length > 0 ? modes : null
+}
+
+/** Remove the pre-compile-modes single config from a project record. */
+function clearLegacyCompileConfig(dirPath: string): void {
+  const projects = load()
+  const idx = projects.findIndex((p) => p.path === dirPath)
+  if (idx < 0 || projects[idx].compileConfig === undefined) return
+  const { compileConfig: _legacy, ...rest } = projects[idx]
+  projects[idx] = rest as Project
+  save(projects)
 }
 
 /**
