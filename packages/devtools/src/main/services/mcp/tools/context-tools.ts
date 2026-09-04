@@ -16,6 +16,7 @@ import {
   getClient,
   getNativeOverviewProvider,
   getTargetState,
+  type NativeOverviewProvider,
   type TargetKind,
 } from '../target-manager.js'
 
@@ -182,8 +183,15 @@ export function registerContextTools(server: McpServer): void {
       }
 
       let result
+      // Snapshot the provider in the same tick as `getClient`: both read the
+      // active window live off `resolveActiveOwner()`, and the probe below
+      // awaits a CDP round-trip the user can switch project windows during.
+      // Reading the provider after that await would mix this window's CDP
+      // probe with whichever window is active by the time it resolves.
+      let nativeOverviewProvider: NativeOverviewProvider | null
       try {
         const c = getClient('simulator')
+        nativeOverviewProvider = getNativeOverviewProvider()
         result = await c.Runtime.evaluate({ expression: SIMULATOR_PROBE_EXPR, returnByValue: true })
       } catch {
         const payload = buildDisconnectedOverview('simulator', [...hints, 'simulator disconnected before overview could finish'])
@@ -206,7 +214,6 @@ export function registerContextTools(server: McpServer): void {
         }
       }
 
-      const nativeOverviewProvider = getNativeOverviewProvider()
       if (nativeOverviewProvider) {
         try {
           const nativeOverview = await nativeOverviewProvider()
