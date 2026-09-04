@@ -125,7 +125,7 @@ launch({
 
 ### 8. `window.autoShow` 开关
 
-`WorkbenchAppConfig.window` 的 `autoShow?: boolean`（默认 `true`）控制 `ready-to-show` 是否自动显示主窗口。要先过登录门再显示窗口的宿主设 `autoShow: false`，自己在登录通过后 show：
+`WorkbenchAppConfig.window` 的 `autoShow?: boolean`（默认 `true`）控制 `ready-to-show` 是否自动显示**项目列表窗口**。要先过登录门再显示窗口的宿主设 `autoShow: false`，自己在登录通过后 show：
 
 ```ts
 launch({
@@ -143,7 +143,26 @@ launch({
 
 宿主在 test 下独占 reveal，无需写防御性 `on('show', hide)` re-hide——窗口按宿主自己的节奏 show 后常规 `waitForFunction` 即可。
 
-### 9. e2e 识别主窗口（用 `window.devtools` 标识）
+`window.autoShow` **只管列表窗口**。项目窗口有自己的开关 `projectWindow.autoShow`（同样默认 `true`）：登录门把列表窗口藏起来时，之后打开的项目窗口照常显示，不再跟着一起隐藏。要接管项目窗口的显示时机才设 `projectWindow: { autoShow: false }`，然后自己在 `setupProjectWindow(instance, opened)` 里 `opened.window.show()`。
+
+### 9. 项目窗口的宿主注册用 `setupProjectWindow`
+
+`onSetup(instance)` 只在启动时跑一次，`instance.context` 是**项目列表窗口**的 context——它不持有会话和视图，在它上面做的项目相关注册进不了任何项目窗口。项目级注册改用 `setupProjectWindow`，每打开一个项目窗口调用一次：
+
+```ts
+launch({
+  async setupProjectWindow(instance, opened) {
+    // opened: { path, name?, window, context } —— context 是这个项目窗口自己的
+    await opened.context.views.hostToolbar.loadFile(toolbarHtml)
+  },
+})
+```
+
+- `opened` 的形状（`ProjectWindowRef`）与 `onBeforeClose` 收到的 `closing` 一致，一进一出对称；
+- hook 被 await，且**能否决这次打开**：抛错时框架拆掉这个半成品窗口（销毁 window、dispose context、从 `projectWindows()` 里摘掉），并把原始错误抛给发起打开的一方——这点和 `onBeforeClose` 不同，后者的错误只记日志；
+- `onSetup` 还没跑完时到达的打开请求（渲染进程可以抢在宿主扩展就绪前触发打开）会先排队等它，不会拿到一个宿主尚未扩展的窗口。
+
+### 10. e2e 识别主窗口（用 `window.devtools` 标识）
 
 写 Playwright e2e 选主窗口用框架已注入的 `window.devtools`（主窗口 preload 暴露的 IPC bridge，见 `preload/windows/main.ts`）作稳定选择契约——它是**主窗口独有**的（host-toolbar 暴露的是 `window.diminaHostToolbar`），与展示名解耦、抗时序、抗 WCV 增多。不要用 `electronApp.firstWindow()`（依赖创建顺序，`autoShow:false` 下会抢到 host-toolbar WCV）或 `url().endsWith('index.html')` / title（依赖 renderer 入口路径、会被 `appName` / `brandingProvider` 改写）。e2e 选主窗口：
 

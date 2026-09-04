@@ -1,6 +1,9 @@
 import type { OpenProjectOptions } from '@dimina-kit/devkit'
 import type { SimulatorApiHandler } from '../main/services/simulator/custom-apis.js'
 import type { MiniappSessionAppInfo } from '../main/runtime/miniapp-runtime.js'
+import type { ClosingProjectWindow, ProjectWindowConfig, ProjectWindowRef } from './project-window-types.js'
+
+export type { ClosingProjectWindow, ProjectWindowConfig, ProjectWindowRef }
 
 /**
  * The HAND-WRITTEN narrow contract handed to a host `menuBuilder` — the
@@ -223,25 +226,6 @@ export interface WorkbenchHostInstance {
 }
 
 /**
- * The project window being closed, handed to
- * {@link WorkbenchAppConfig.onBeforeClose} alongside the app instance.
- */
-export interface ClosingProjectWindow {
-  /** Absolute path of the project this window was opened for. */
-  path: string
-  /** Display name the open supplied, when it supplied one. */
-  name?: string
-  /** The BrowserWindow that is closing. */
-  window: import('electron').BrowserWindow
-  /**
-   * This window's own context — the one holding its session and views. Same
-   * type as {@link WorkbenchHostInstance.context}, borrowed from there rather
-   * than named again so this file keeps its single WorkbenchContext reference.
-   */
-  context: WorkbenchHostInstance['context']
-}
-
-/**
  * Pluggable backend for the project-list panel. Hosts may supply this to
  * take over project storage from the default `<userData>/dimina-projects.json`.
  *
@@ -317,14 +301,30 @@ export interface WorkbenchAppConfig extends WorkbenchConfig {
   rendererDir?: string
   /** Enable or disable built-in IPC module groups. Defaults to all enabled. */
   modules?: Partial<Record<BuiltinModuleId, boolean>>
-  /** Window sizing overrides for the main devtools window. */
+  /** Window sizing overrides for the project-list window. */
   window?: WorkbenchWindowConfig
+  /** Overrides for the windows opened projects get. */
+  projectWindow?: ProjectWindowConfig
   /** Absolute path to a window/taskbar icon (png or ico). macOS uses the app bundle icon. */
   icon?: string
   /** Custom menu builder. Should call Menu.setApplicationMenu(). If omitted, the default dimina-devtools menu is installed. */
   menuBuilder?: (mainWindow: import('electron').BrowserWindow, menuContext: MenuContext) => void
   /** Called after window and context are created but before start() resolves. Use to register custom IPC handlers. */
   onSetup?: (instance: WorkbenchHostInstance) => void | Promise<void>
+  /**
+   * Called once per project window, after the framework has wired that window
+   * up and before the open resolves. `opened.context` is THAT window's own
+   * context, which is why per-project registration belongs here: `onSetup`
+   * only ever sees `instance.context`, the project list's, so a registration
+   * made there reaches no project window.
+   *
+   * Awaited, and unlike `onBeforeClose` it can fail the open: a rejection
+   * tears the half-built window down and reaches whoever asked for it.
+   */
+  setupProjectWindow?: (
+    instance: WorkbenchHostInstance,
+    opened: ProjectWindowRef,
+  ) => void | Promise<void>
   /**
    * Called when a project window is closing, before the framework disposes it.
    * `closing` says WHICH project is going away and carries that window's own

@@ -2,7 +2,7 @@ import { setupCdpPort, registerDifileScheme, suppressInsecureCspWarnings } from 
 import { installMaxListenersWarningDiagnostic } from './max-listeners-diagnostic.js'
 
 import { app, BrowserWindow, session } from 'electron'
-import type { BuiltinModuleId, WorkbenchAppConfig } from '../../shared/types.js'
+import type { WorkbenchAppConfig } from '../../shared/types.js'
 import type {
   SimulatorUiExtensionHandle,
   SimulatorUiExtensionRegistration,
@@ -13,7 +13,6 @@ import { rendererDir as defaultRendererDir } from '../utils/paths.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import { createAppServices, registerTrustedWindow } from '../services/app-services.js'
 import { createWindowContextRouter, type WindowContextRouter } from '../services/window-contexts/context-router.js'
-import type { WorkbenchModule } from '../services/module.js'
 import { createInternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
 import {
   registerAppIpc,
@@ -21,11 +20,6 @@ import {
   registerTooltipIpc,
   registerProjectCreateIpc,
   registerViewsIpc,
-  popoverModule,
-  projectsModule,
-  sessionModule,
-  settingsModule,
-  simulatorModule,
 } from '../ipc/index.js'
 import { registerProjectFsIpc } from '../ipc/project-fs.js'
 import { setupSimulatorSessionPolicy } from '../services/views/simulator-session-policy.js'
@@ -41,6 +35,8 @@ import { toDisposable, DisposableRegistry, type Disposable } from '@dimina-kit/e
 import { IpcRegistry } from '../utils/ipc-registry.js'
 import { createLauncherWindow, type ProjectRef, type ProjectWindow } from './project-window.js'
 import { createWorkbenchWindowManager } from './workbench-window.js'
+import { registerModuleIpc, setupWindowModules } from './workbench-modules.js'
+import { registerOpenProjectWindowIpc } from './open-project-ipc.js'
 import { createUiExtensionTargets } from './ui-extension-targets.js'
 import { installGlobalMirrors } from './global-mirrors.js'
 import { installHostSidebarDefault } from './host-sidebar-default.js'
@@ -54,65 +50,8 @@ import {
 import { setupAutomation, setupMcp } from './servers.js'
 import { enableDevRendererAutoReload, revealWindow } from './window-events.js'
 import { wireMainWindowEvents } from '../windows/main-window/index.js'
-import { WindowChannel } from '../../shared/ipc-channels.js'
 
-const DEFAULT_MODULES: Record<BuiltinModuleId, boolean> = {
-  projects: true,
-  session: true,
-  simulator: true,
-  popover: true,
-  settings: true,
-}
-
-const BUILTIN_MODULES: Record<BuiltinModuleId, WorkbenchModule> = {
-  projects: projectsModule,
-  session: sessionModule,
-  simulator: simulatorModule,
-  popover: popoverModule,
-  settings: settingsModule,
-}
-
-function resolveModules(config: WorkbenchAppConfig): Record<BuiltinModuleId, boolean> {
-  return {
-    ...DEFAULT_MODULES,
-    ...config.modules,
-  }
-}
-
-/**
- * The IPC half of the built-in modules: registered ONCE for the application.
- * Each handler answers whichever window a message came from (it takes the
- * router), so a second window needs no second registration — and must not make
- * one, since `ipcMain.handle` is a process-wide singleton per channel.
- */
-function registerModuleIpc(
-  config: WorkbenchAppConfig,
-  router: WindowContextRouter<WorkbenchContext>,
-  appRegistry: DisposableRegistry,
-): void {
-  const modules = resolveModules(config)
-  ;(Object.keys(modules) as BuiltinModuleId[]).forEach((moduleId) => {
-    if (!modules[moduleId]) return
-    appRegistry.add(BUILTIN_MODULES[moduleId].setup(router))
-  })
-}
-
-/**
- * The per-window half: wiring that mutates one concrete context (the
- * simulator's bridge router assigning `ctx.bridge` / `ctx.consoleForwarder`).
- * Runs once per window and is parked on that window's own registry.
- */
-export function setupWindowModules(
-  config: WorkbenchAppConfig,
-  context: WorkbenchContext,
-): void {
-  const modules = resolveModules(config)
-  ;(Object.keys(modules) as BuiltinModuleId[]).forEach((moduleId) => {
-    if (!modules[moduleId]) return
-    const module = BUILTIN_MODULES[moduleId]
-    if (module.setupWindow) context.registry.add(module.setupWindow(context))
-  })
-}
+export { setupWindowModules } from './workbench-modules.js'
 
 /**
  * Registers the workbench's IPC surface against the router, so each message is
@@ -327,11 +266,34 @@ export async function createDevtoolsRuntime(
     activeWindow: () => workbenchWindows.activeContext(),
   })
 
+  // The open-project IPC is registered below, well before `config.onSetup` is
+  // awaited, so a renderer that races ahead can ask for a project window while
+  // the host is still wiring its extensions up. Those opens park on `ready`
+  // instead of producing a window the host never got to extend.
+  let markReady!: (setup: Promise<void>) => void
+  const ready = new Promise<void>((resolve) => { markReady = resolve })
+  // The parked open reports an onSetup failure to whoever asked for the
+  // window; this keeps the rejection handled when nobody ever asks.
+  void ready.catch(() => {})
+
   const workbenchWindows = createWorkbenchWindowManager({
     config,
     rendererDir,
     appServices,
     router,
+    ready,
+    // Not wrapped in try/catch the way `onBeforeClose` is: this hook runs on
+    // the way IN, so a host that could not configure the window has no window
+    // worth keeping — the manager tears it down and the error reaches the
+    // caller.
+    setupProjectWindow: async (opened, project) => {
+      await config.setupProjectWindow?.(instance, {
+        path: project.path,
+        name: project.name,
+        window: opened.window,
+        context: opened.context,
+      })
+    },
     setupWindowModules: (ctx) => {
       setupWindowModules(config, ctx)
       uiExtensions.attachTo(ctx)
@@ -372,18 +334,7 @@ export async function createDevtoolsRuntime(
   appRegistry.add(toDisposable(() => setActiveMcpWindowResolver(() => null)))
   installMenu(config, mainWindow, activeProjectContext)
 
-  // Opening a project from the list — and from MCP's project_open, which the
-  // list renderer forwards here — always means "give it its own window".
-  const windowIpc = new IpcRegistry(router)
-  windowIpc.handleRouted(
-    WindowChannel.OpenProjectWindow,
-    async (_ctx, _event, ...args: unknown[]) => {
-      const project = args[0] as ProjectRef | undefined
-      if (!project?.path) throw new Error('openProjectWindow requires a project path')
-      await workbenchWindows.open({ path: project.path, name: project.name })
-    },
-  )
-  appRegistry.add(windowIpc)
+  appRegistry.add(registerOpenProjectWindowIpc(router, (project) => workbenchWindows.open(project)))
 
   const instance: WorkbenchAppInstance = {
     mainWindow,
@@ -427,9 +378,12 @@ export async function createDevtoolsRuntime(
 
   installHostSidebarDefault(context, rendererDir)
 
-  if (config.onSetup) {
-    await config.onSetup(instance)
-  }
+  // Run inside an async IIFE so a hook that throws SYNCHRONOUSLY still settles
+  // `ready` — leaving it pending would park every queued open forever, and
+  // `disposeAll()` waits on those queues.
+  const setup = (async () => { await config.onSetup?.(instance) })()
+  markReady(setup)
+  await setup
 
   if (config.updateChecker) {
     instance.updateManager = new UpdateManager({

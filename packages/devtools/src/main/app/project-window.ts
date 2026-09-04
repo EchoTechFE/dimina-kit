@@ -33,6 +33,7 @@ function createConfiguredMainWindow(
   rendererDir: string,
   entry: string,
   title: string,
+  autoShow: boolean | undefined,
   query?: Record<string, string>,
 ): BrowserWindow {
   const mainWindow = createMainWindow({
@@ -43,7 +44,7 @@ function createConfiguredMainWindow(
     height: config.window?.height,
     minWidth: config.window?.minWidth,
     minHeight: config.window?.minHeight,
-    autoShow: config.window?.autoShow,
+    autoShow,
   })
 
   // Set window/taskbar icon if provided (Linux/Windows; macOS uses app bundle icon)
@@ -100,10 +101,11 @@ function createWindowWithContext(
   opts: CreateProjectWindowOptions,
   entry: string,
   title: string,
+  autoShow: boolean | undefined,
   query?: Record<string, string>,
 ): ProjectWindow {
   const { config, rendererDir, appServices, router } = opts
-  const window = createConfiguredMainWindow(config, rendererDir, entry, title, query)
+  const window = createConfiguredMainWindow(config, rendererDir, entry, title, autoShow, query)
   const context = createContext(config, window, rendererDir, appServices)
 
   // Anchor the window's renderer as the first Connection. Resources scoped to
@@ -125,6 +127,7 @@ export function createLauncherWindow(opts: CreateProjectWindowOptions): ProjectW
     opts,
     'entries/main/index.html',
     opts.config.appName ?? 'Dimina DevTools',
+    opts.config.window?.autoShow,
   )
 }
 
@@ -141,6 +144,10 @@ export function createWorkbenchWindow(
     opts,
     'entries/workbench/index.html',
     project.name || opts.config.appName || 'Dimina DevTools',
+    // Deliberately NOT `config.window?.autoShow`: that knob hides the project
+    // list behind a host's own startup flow, and a project window opened after
+    // that flow passed has to appear on its own account.
+    opts.config.projectWindow?.autoShow ?? true,
     { path: project.path, name: project.name ?? '' },
   )
 }

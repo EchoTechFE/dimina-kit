@@ -42,6 +42,21 @@ export interface WorkbenchWindowDeps {
    * way out, so it can react but never cancel the teardown behind it.
    */
   onBeforeClose?: (win: ProjectWindow, project: ProjectRef) => Promise<void> | void
+  /**
+   * Host hook, awaited once the window is fully wired and before `open()`
+   * reports success, and told which project it belongs to. Unlike
+   * `onBeforeClose` it CAN fail the open: there is no usable window to react
+   * in yet, so a rejection tears the half-built window down and travels back
+   * to the caller unchanged.
+   */
+  setupProjectWindow?: (win: ProjectWindow, project: ProjectRef) => Promise<void> | void
+  /**
+   * Gate every open waits on before it builds anything. The app registers the
+   * open-project IPC before it awaits the host's own setup hook, so a renderer
+   * that races ahead must be parked rather than handed a window the host has
+   * not finished extending. Omitted means there is nothing to wait for.
+   */
+  ready?: Promise<void>
 }
 
 export interface WorkbenchWindowManager {
@@ -248,6 +263,11 @@ export function createWorkbenchWindowManager(
       // this task to settle rather than reaching into a half-built window, so
       // the undo below is this open's own job.
       if (disposed) throw disposedError()
+      // Last, so the host configures a window whose own services are all up.
+      // It runs while the window is already in `windows`: a hook that opens
+      // views or drives the session needs the window reachable, and a failure
+      // path below removes the entry again.
+      await deps.setupProjectWindow?.(projectWindow, project)
     } catch (err) {
       // A half-built window (the editor's http server can fail to bind) leaves
       // live services behind and keeps the project counted as open — which is
@@ -273,7 +293,14 @@ export function createWorkbenchWindowManager(
     // keeps every downstream lookup keyed on the one canonical spelling.
     open: (project) => {
       const normalized: ProjectRef = { ...project, path: path.resolve(project.path) }
-      return enqueue(normalized.path, () => openWindow(normalized))
+      // The readiness gate is awaited inside the queued task, not before
+      // queuing: opens of one path must keep their arrival order, and a
+      // `disposeAll()` landing meanwhile still finds this open in the queue it
+      // drains rather than floating loose outside it.
+      return enqueue(normalized.path, async () => {
+        await deps.ready
+        return openWindow(normalized)
+      })
     },
     list: () => [...windows.values()],
     activeContext: () => {
