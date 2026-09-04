@@ -429,8 +429,8 @@ export async function createElectronRuntime(
 }
 
 export type {
+  DeviceOrientation,
   NativeDeviceInfo,
-  NotchType,
   SafeAreaInsets,
   SyncStorageChange,
 } from './shared/runtime-types.js'

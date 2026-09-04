@@ -255,7 +255,7 @@ simulator 的 NavigationBar 由 DeviceShell 渲染；胶囊（capsule）的尺�
 
 **视觉**（`packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx`、`menu-capsule.tsx`、`navigation-bar.css`、`menu-capsule.css`）：
 
-- status bar 高度：iOS 44、Android 24。DeviceShell 的视觉布局直接取平台常量 `STATUS_BAR_HEIGHT_IOS = 44` / `STATUS_BAR_HEIGHT_ANDROID = 24`（`device-shell.tsx`，按 `platform` 选用）；同一组值另由 `hostEnvSnapshot`（`simulator-mini-app.ts`，`statusBarHeight = ios?44:24`）在 spawn 时下发给 service-host 的 sync 实现（getSystemInfo / 胶囊 geometry）。nav bar 高度 44（`NavigationBarProps.navBarHeight`）
+- status bar 高度：来自选中机型（`@devicekit/devices` 的 `statusBarHeight` / `safeAreaInsets.top`，按横竖屏解析），由 renderer 的 `use-device.ts` 打包成 `NativeDeviceInfo` 下发；DeviceShell 把它交给 `<dimina-device-frame>` 画状态栏，并作为 `MiniAppFrame.statusBarHeight` 让出布局空间；同一份数值经 `deviceInfoToHostEnv` 进入 `hostEnvSnapshot` 供 service-host 的 `getSystemInfoSync` 使用。第一份设备信息到达前用 `PLATFORM_DEFAULTS[platform].statusBarHeight` 占位。详见 [iOS 安全区与刘海](./ios-safe-area-and-notch.md)。
 - 标题对齐：iOS center / Android left（`titleAlign`）
 - 返回箭头（`stackDepth > 1`）/ 返回首页按钮（`homeButtonVisible`，两者可并存）。返回首页按钮的判据收敛在 `shouldShowHomeButton`（`navigate-home.ts`）：非应用首页（manifest `entryPagePath`，缺省 `pages[0]`）+ 非 tabBar 页（页面配置 `homeButton: true` 也不能突破这两条排除），且「页面栈栈底（自动规则）或页面配置 `homeButton: true`（此时与返回箭头并存显示）」；`wx.hideHomeButton()` 隐藏调用页自己的按钮。点击返回首页：首页是 tabBar 页走 switchTab（保留其它 tab 状态并露出 tabBar，自带清非 tab 栈），首页非 tab 时栈底走 redirectTo 原地替换、非栈底走 reLaunch 清整栈——路由判定收敛在 `resolveHomeNavAction`，`DeviceShell.handleHome` 只负责分发。注意 tab 分支回给调用方的动词虽是 `switchTab`，终态归约走的却是 `reduceNavigateHomeToTab` 而非普通 `reduceSwitchTab`——后者会还原目标 tab 的缓存子栈（可能落在子栈栈顶的内页），前者落 tab 根页、把每个 tab 裁到根、并销毁所有非 tab 页。已经在首页时整个动作幂等短路（`isAtHome`），不重开也不发多余生命周期
 - loading 转圈（show/hideNavigationBarLoading → `state.loading`）

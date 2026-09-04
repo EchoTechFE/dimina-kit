@@ -48,6 +48,7 @@ export interface MiniAppHost {
     pagePath?: string,
     isTab?: boolean,
     backgroundColor?: string,
+    navigationStyle?: 'default' | 'custom',
   ): string
 
   /** Allocate a render page within the live session. */

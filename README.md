@@ -75,6 +75,8 @@ console.log(`预览地址: http://localhost:${session.port}`)
 | [`@dimina-kit/workbench`](./packages/workbench) | 内嵌式 VS Code 编辑器（`@codingame/monaco-vscode-api`），带 WXML 语言特性与 dimina 配置的 JSON Schema |
 | [`@dimina-kit/inspect`](./packages/inspect) | 与宿主无关的 WXML 树提取与检查：Vue 运行时遍历、稳定 id、DOM 变更观察 |
 | [`@dimina-kit/view-anchor`](./packages/view-anchor) | 让主进程的原生视图（Electron `WebContentsView`）持续对齐某个 DOM 元素的几何位置 |
+| [`@devicekit/devices`](https://www.npmjs.com/package/@devicekit/devices) | 手机和平板的机型表：屏幕、像素比、状态栏、安全区、挖孔、UA，以及页面可用尺寸的换算。不碰 DOM。已独立为开源项目（[EchoTechFE/devicekit](https://github.com/EchoTechFE/devicekit)） |
+| [`@devicekit/frame`](https://www.npmjs.com/package/@devicekit/frame) | `<device-frame>` 自定义元素：画机身、状态栏和挖孔，留出标题栏和 tab 栏，报出 webview 该摆在哪。已独立为开源项目（[EchoTechFE/devicekit](https://github.com/EchoTechFE/devicekit)） |
 | [`@dimina-kit/design`](./packages/design) | devtools 那套外观：CSS 变量、基础样式、electron-deck 皮肤、Tailwind preset |
 | [`@dimina-kit/fs-core`](./packages/fs-core) | 零依赖的 OPFS WAL 文件系统内核，供 Web 端使用 |
 

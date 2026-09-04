@@ -193,6 +193,12 @@ importers:
 
   packages/devtools:
     dependencies:
+      '@devicekit/devices':
+        specifier: ^0.2.1
+        version: 0.2.1
+      '@devicekit/frame':
+        specifier: ^0.2.1
+        version: 0.2.1(@types/react@18.3.28)(react@18.3.1)
       '@dimina-kit/design':
         specifier: workspace:*
         version: link:../design
@@ -998,6 +1004,22 @@ packages:
   '@develar/schema-utils@2.6.5':
     resolution: {integrity: sha512-0cp4PsWQ/9avqTVMCtZ+GirikIA36ikvjtHweU4/j8yLtgObI0+JUPhYFScgwlteveGB1rt3Cm8UhN04XayDig==}
     engines: {node: '>= 8.9.0'}
+
+  '@devicekit/devices@0.2.1':
+    resolution: {integrity: sha512-r9JwH+qBmF5KcgNjPxjCEZ4LApO2TLcgBCt2/AXDjGlJOQSkUmYg52z+Ho6sE5Rp2cjrfgwrEq+esi5P3OL6DQ==}
+    engines: {node: '>=20'}
+
+  '@devicekit/frame@0.2.1':
+    resolution: {integrity: sha512-PNffcWFzQRoN8rhO+vQt4jBomEeBi8HM0U1D0xErOCj+JFdUVwO7IVkku7jSfy11sVrFbtylyYQzZaNiMQFlVA==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@types/react': '>=18'
+      react: '>=18'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      react:
+        optional: true
 
   '@electron-internal/extract-zip@1.0.4':
     resolution: {integrity: sha512-Zr1Vs7E9tpCNhZHDAbFVXc2gEVCG9RqPDjrno5+bdgB6LRAuvgyMHJut4NCVyYwtAieapMzc3fiQ3CSTi75ARg==}
@@ -6734,6 +6756,15 @@ snapshots:
     dependencies:
       ajv: 6.14.0
       ajv-keywords: 3.5.2(ajv@6.14.0)
+
+  '@devicekit/devices@0.2.1': {}
+
+  '@devicekit/frame@0.2.1(@types/react@18.3.28)(react@18.3.1)':
+    dependencies:
+      '@devicekit/devices': 0.2.1
+    optionalDependencies:
+      '@types/react': 18.3.28
+      react: 18.3.1
 
   '@electron-internal/extract-zip@1.0.4': {}
 

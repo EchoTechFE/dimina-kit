@@ -368,7 +368,13 @@ export function MiniAppFrame({
           <webview
             key={entry.bridgeId}
             className="device-shell__webview"
-            src={host.createRenderHostUrl(entry.bridgeId, entry.pagePath, entry.isTab, pageBackgroundColor(entry.windowConfig))}
+            src={host.createRenderHostUrl(
+              entry.bridgeId,
+              entry.pagePath,
+              entry.isTab,
+              pageBackgroundColor(entry.windowConfig),
+              entry.windowConfig?.navigationStyle,
+            )}
             preload={preload}
             // No static partition here: the renderer doesn't know the
             // per-project partition — the host WCV's `will-attach-webview`

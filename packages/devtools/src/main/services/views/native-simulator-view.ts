@@ -9,7 +9,8 @@ import {
   handleCustomApiBridgeRequest,
   type CustomApiBridgeRequest,
 } from '../simulator/custom-apis.js'
-import type { SafeAreaController } from '../safe-area/index.js'
+import type { GuestPageInsetPolicy, SafeAreaController } from '../safe-area/index.js'
+import { parseGuestPageInsetPolicy } from '../safe-area/index.js'
 import { configureMiniappSession, miniappPartition } from './miniapp-partition.js'
 import { refreshGuestStylesheets } from './refresh-styles.js'
 import { parseRoute } from '../../../shared/simulator-route.js'
@@ -280,23 +281,22 @@ export function createNativeSimulatorView(
     // them with contextIsolation/sandbox off so the render runtime + its preload
     // share the page realm. (A top-level WebContentsView can host these guests; a
     // `<webview>` guest cannot — that's the whole point of Option A.)
-    // Page type (`isTab`) of each attaching guest, captured from its render-host
-    // URL in will-attach (where `params.src` carries the full URL) and consumed
-    // FIFO in the matching did-attach — `guestWc.getURL()` is still empty there.
+    // Inset policy (`isTab`, `navStyle`) of each attaching guest, captured from
+    // its render-host URL in will-attach (where `params.src` carries the full
+    // URL) and consumed FIFO in the matching did-attach — `guestWc.getURL()` is
+    // still empty there.
     // Per-attach scope: a fresh simWc + handlers are built on every (re)attach.
     // (The guest's `bgColor` query param — WeChat/Android/Harmony white-flash
     // parity — is consumed entirely outside main: device-shell.tsx's `<webview>`
     // CSS background and render-host/preload.cjs both read it directly, since
     // `WebContents` has no `setBackgroundColor` for main to call here.)
-    const pendingGuestIsTab: boolean[] = []
+    const pendingGuestPages: GuestPageInsetPolicy[] = []
     simWc.on('will-attach-webview', (_event, webPreferences, params) => {
       ;(webPreferences as Electron.WebPreferences).partition = partition
       params.partition = partition
       webPreferences.contextIsolation = false
       ;(webPreferences as Electron.WebPreferences).sandbox = false
-      let isTab = false
-      try { isTab = new URL(params.src).searchParams.get('isTab') === '1' } catch { /* keep false */ }
-      pendingGuestIsTab.push(isTab)
+      pendingGuestPages.push(parseGuestPageInsetPolicy(params.src))
     })
     simWc.on('did-attach-webview', (_event, guestWc) => {
       // Scale the nested render-host page with the device zoom. The host WCV is
@@ -309,13 +309,13 @@ export function createNativeSimulatorView(
         guestWc.setZoomFactor(currentZoomFactor)
       } catch { /* guest not ready; setNativeSimulatorViewBounds re-applies */ }
       // Simulate this device's CSS env(safe-area-inset-*) on the fresh guest
-      // before it paints, so notch-aware page layout resolves correctly. The
-      // bottom inset is page-type-dependent (see services/safe-area): a tab
-      // page's content sits above the shell tabBar (bottom 0); a non-tab page
-      // is full-bleed (real bottom inset). The page type was captured from the
+      // before it paints, so notch-aware page layout resolves correctly. Both
+      // the top and the bottom inset depend on the page (see services/safe-area):
+      // only a custom-nav page borders the unsafe top zone, and only a non-tab
+      // page borders the bottom one. The policy was captured from the
       // render-host URL in will-attach (FIFO).
-      const isTabGuest = pendingGuestIsTab.shift() ?? false
-      safeArea.applyToGuest(guestWc, ctx.bridge?.getDevice() ?? null, isTabGuest)
+      const guestPage = pendingGuestPages.shift() ?? { isTabPage: false, isCustomNav: false }
+      safeArea.applyToGuest(guestWc, ctx.bridge?.getDevice() ?? null, guestPage)
       // Page-level resource loads (images/fonts/page fetch) run in THIS guest's
       // network stack, never the simulator's — without this, only wx.request
       // (forwarded to the simulator) shows in the Network panel and everything

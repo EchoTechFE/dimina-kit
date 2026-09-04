@@ -1,7 +1,8 @@
 /**
- * The phone the simulator pretends to be: bezel, screen geometry, status bar,
- * notch and home indicator, plus the devtools-only layers that ride along
- * (the UI extension mount point and the capsule "more" menu).
+ * The phone the simulator pretends to be: `<device-frame>` owns the
+ * bezel, screen geometry, status bar and home indicator (the 171-device
+ * table, not a hand-drawn shell). This file only wires the selected device
+ * into the frame's attributes/property and the mini-app into its light DOM.
  *
  * The mini-app inside it is `MiniAppFrame`, which the runtime owns. Everything
  * this file computes from the selected device reaches the frame as two numbers,
@@ -9,10 +10,12 @@
  * different ones — or none.
  */
 import { useCallback, useEffect, useState } from 'react'
+import { DeviceFrame } from '@devicekit/frame/react'
+import type { StatusBarTextStyle } from '@devicekit/frame'
+import { findDevice, PLATFORM_DEFAULTS, type DeviceOS, type DeviceProfile } from '@devicekit/devices'
 import { SIMULATOR_EVENTS as E } from '../../shared/bridge-channels'
 import type { DeviceShellProps } from './device-shell-types'
 import { attachApiCallForwarding } from '../api-call-forwarding'
-import { StatusBar } from './status-bar'
 import type { NativeDeviceInfo } from '../../shared/ipc-channels'
 import {
   dispatchSimulatorCapsuleMore,
@@ -21,31 +24,78 @@ import {
 import {
   MiniAppFrame,
   type CapsuleMoreContext,
+  type NavBarPlatform,
 } from '@dimina-kit/electron-runtime/simulator-ui'
 import './device-shell.css'
 
 export type { DeviceShellProps } from './device-shell-types'
 
-const STATUS_BAR_HEIGHT_IOS = 44
-const STATUS_BAR_HEIGHT_ANDROID = 24
+/**
+ * `NativeDeviceInfo.device` is a lookup key into the @devicekit/devices table;
+ * it is absent for a custom/legacy payload (no matching name). In that case we
+ * reconstruct a one-off `DeviceProfile` from the numbers already resolved for
+ * the CURRENT orientation, un-swapping back to the portrait-only `screen` shape
+ * the frame expects.
+ */
+function fallbackProfile(d: NativeDeviceInfo): DeviceProfile {
+  const screen = d.orientation === 'landscape'
+    ? { width: d.screenHeight, height: d.screenWidth }
+    : { width: d.screenWidth, height: d.screenHeight }
+  return {
+    name: d.device ?? d.model,
+    os: d.platform as DeviceOS,
+    screen,
+    pixelRatio: d.pixelRatio,
+    system: d.system,
+    statusBarHeight: d.statusBarHeight,
+    ...(d.orientation === 'landscape'
+      ? { safeAreaInsetsLandscape: d.safeAreaInsets }
+      : { safeAreaInsets: d.safeAreaInsets }),
+  }
+}
+
+/**
+ * No-DOM bridge from MiniAppFrame's `statusBar` render prop to DeviceShell's
+ * own state — the frame (not MiniAppFrame) draws the status bar now, so this
+ * component's only job is forwarding `textStyle` up in an effect. Reading it
+ * during render and calling `setState` there would fire mid-render on the
+ * PARENT, which React disallows.
+ */
+function StatusBarTextStyleBridge(
+  { textStyle, onChange }: { textStyle: StatusBarTextStyle; onChange: (t: StatusBarTextStyle) => void },
+) {
+  useEffect(() => { onChange(textStyle) }, [textStyle, onChange])
+  return null
+}
 
 export function DeviceShell(
-  { miniApp, bridgeId, platform = 'ios', active = true }: DeviceShellProps,
+  { miniApp, bridgeId, active = true }: DeviceShellProps,
 ) {
   const embedded = new URLSearchParams(window.location.search).get('embedded') === '1'
-  // The selected device drives the bezel size + status bar height + notch.
-  // Initial value rides the native-host bridge config (race-free); live toolbar
+  // The selected device drives the frame's bezel + status bar + notch. Initial
+  // value rides the native-host bridge config (race-free); live toolbar
   // changes arrive over DEVICE_CHANGE.
   const [device, setDevice] = useState<NativeDeviceInfo | null>(() => miniApp.getInitialDevice())
   useEffect(() => miniApp.onSimulatorEvent<NativeDeviceInfo>(E.DEVICE_CHANGE, setDevice), [miniApp])
+  const [statusBarTextStyle, setStatusBarTextStyle] = useState<StatusBarTextStyle>('black')
 
-  // DeviceShell draws the WHOLE phone at fixed device-logical size on a gray
-  // desk that fills the WCV and scrolls when the phone overflows the region.
-  // Only the chrome metrics below are derived from the device.
-  const statusBarHeight = embedded ? 0 : (device?.safeAreaInsets.top
-    ?? (platform === 'ios' ? STATUS_BAR_HEIGHT_IOS : STATUS_BAR_HEIGHT_ANDROID))
+  // Chrome metrics MiniAppFrame reserves layout space for — the frame itself
+  // draws the status bar and home indicator, MiniAppFrame only needs to know
+  // how much of its top/bottom to pad. Falls back to the platform default
+  // (single source: @devicekit/devices) before the first device arrives.
+  const statusBarHeight = embedded
+    ? 0
+    : (device?.safeAreaInsets.top ?? PLATFORM_DEFAULTS[miniApp.platform].statusBarHeight)
   const bottomInset = embedded ? 0 : (device?.safeAreaInsets.bottom ?? 0)
-  const notchType = device?.notchType ?? 'none'
+
+  // NavigationBar style follows the selected device, not the session's boot-time
+  // platform — a single owner instead of two fields that can disagree. Only
+  // falls back to `miniApp.platform` before any device has arrived.
+  const navBarPlatform: NavBarPlatform = device
+    ? (device.platform === 'ios' ? 'ios' : 'android')
+    : miniApp.platform
+
+  const resolvedProfile = device && !findDevice(device.device) ? fallbackProfile(device) : null
 
   // ── invokeAPI fallback (main → simulator) — see api-call-forwarding.ts ─────
   // Stays out of the frame: it dispatches into this product's own wx.* handler
@@ -58,55 +108,28 @@ export function DeviceShell(
 
   return (
     <main className={`device-shell-root${embedded ? ' device-shell-root--embedded' : ''}`}>
-      <section
+      <DeviceFrame
+        device={device?.device}
+        deviceProfile={resolvedProfile}
+        orientation={device?.orientation ?? 'portrait'}
+        embedded={embedded}
+        statusBarTextStyle={statusBarTextStyle}
         className={`device-shell${embedded ? ' device-shell--embedded' : ''}`}
         aria-label="Dimina simulator"
-        // Fixed device-logical size so the phone never squishes with the
-        // window/flex: the desk (.device-shell-root) scrolls when it overflows.
-        // Omitted when device is null → CSS sizing fallback fills the desk.
-        style={!embedded && device
-          ? { width: device.screenWidth, height: device.screenHeight }
-          : undefined}
       >
         <MiniAppFrame
           host={miniApp}
           bridgeId={bridgeId}
-          platform={platform}
+          platform={navBarPlatform}
           statusBarHeight={statusBarHeight}
           bottomInset={bottomInset}
           onMore={handleMore}
-          // Status bar overlay (time / icons / notch) pinned to the device top,
-          // above both the nav-bar and the page webview. The nav-bar still
-          // reserves `statusBarHeight` below it (paddingTop), so default nav
-          // blends its bg up into the status area while custom nav shows the
-          // page through it.
           statusBar={embedded ? undefined : ({ textStyle }) => (
-            <StatusBar
-              height={statusBarHeight}
-              notchType={notchType}
-              textStyle={textStyle}
-            />
+            <StatusBarTextStyleBridge textStyle={textStyle} onChange={setStatusBarTextStyle} />
           )}
-          deviceOverlay={(
-            <>
-              <SimulatorUiExtensionLayer active={active} appId={miniApp.appId} />
-              {/* Home-indicator pill — an absolute overlay at the device bottom
-                  (gesture-bar devices only; the home-button SE class has bottom
-                  inset 0). It is NOT in flow: a tab page sees the tabBar's color
-                  behind it, a non-tab page is full-bleed so its own content shows
-                  through. The page reserves bottom space only via its own
-                  env(safe-area-inset-*). */}
-              {bottomInset > 0 && (
-                <div
-                  className="device-shell__home-indicator"
-                  style={{ height: bottomInset }}
-                  aria-hidden="true"
-                />
-              )}
-            </>
-          )}
+          deviceOverlay={<SimulatorUiExtensionLayer active={active} appId={miniApp.appId} />}
         />
-      </section>
+      </DeviceFrame>
     </main>
   )
 }

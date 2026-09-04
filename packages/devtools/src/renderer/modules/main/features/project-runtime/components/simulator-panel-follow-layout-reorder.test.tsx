@@ -82,8 +82,9 @@ vi.mock('@dimina-kit/electron-deck/dock-react', () => ({
 }))
 
 import { SimulatorPanel } from './simulator-panel'
+import { DEVICE_NAMES, findDevice } from '@devicekit/devices'
 
-const DEVICE = { name: 'iPhone X', width: 375, height: 812 }
+const DEVICE = findDevice(DEVICE_NAMES.iPhone_X)!
 
 /** The simulator native slot's anchor (bound on the `native-simulator` region). */
 function simulatorAnchor() {

@@ -28,6 +28,10 @@ export interface RenderHostUrlOptions {
   /** Whether this page is a tabBar page. Surfaced on the URL so main can pick
    *  the bottom safe-area policy at `did-attach-webview` (services/safe-area). */
   isTab?: boolean
+  /** The page's resolved `navigationStyle` (page ∪ app-level). Surfaced on the
+   *  URL as `navStyle` so main can pick the TOP safe-area policy at
+   *  `did-attach-webview` (services/safe-area). */
+  navigationStyle?: 'default' | 'custom'
   /** The page's resolved `window.backgroundColor` (page ∪ app-level, already
    *  defaulted — see `pageBackgroundColor` in page-stack-controller.ts).
    *  Surfaced on the URL as `bgColor`: render-host/preload.cjs reads it and

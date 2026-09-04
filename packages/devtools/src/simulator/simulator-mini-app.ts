@@ -1,4 +1,4 @@
-import { SIMULATOR_EVENTS } from '../shared/bridge-channels'
+import { SIMULATOR_EVENTS, deviceInfoToHostEnv } from '../shared/bridge-channels'
 import type {
   ActivePagePayload,
   ApiResponsePayload,
@@ -35,7 +35,7 @@ interface NativeHostBridge {
   notifyApiResponse(payload: ApiResponsePayload): void
   notifyActivePage(payload: ActivePagePayload): void
   notifyPageStack(payload: PageStackPayload): void
-  createRenderHostUrl(opts: { bridgeId: string; appId: string; root: string; pagePath: string; isTab?: boolean; backgroundColor?: string }): string
+  createRenderHostUrl(opts: { bridgeId: string; appId: string; root: string; pagePath: string; isTab?: boolean; navigationStyle?: 'default' | 'custom'; backgroundColor?: string }): string
   renderPreloadUrl: string
   device?: NativeDeviceInfo
   onSimulatorEvent<T = unknown>(channel: string, listener: (payload: T) => void): () => void
@@ -265,6 +265,16 @@ export class SimulatorMiniApp {
   }
 
   /**
+   * The device every simulator-resident surface answers for: a live
+   * DEVICE_CHANGE wins over the boot config, null when none was ever selected.
+   * Single owner — `getDeviceMetrics` and `getHostEnvSnapshot` both read it, so
+   * they can't drift apart.
+   */
+  getCurrentDevice(): NativeDeviceInfo | null {
+    return this.currentDevice ?? this.getInitialDevice()
+  }
+
+  /**
    * Metric fallbacks for the simulator-resident wx.* API handlers
    * (readWindowMetrics in simulator-api.ts): the CURRENT device — a live
    * DEVICE_CHANGE wins over the boot config device — or, when no device was
@@ -272,7 +282,7 @@ export class SimulatorMiniApp {
    * service-host wx.getSystemInfoSync reports).
    */
   getDeviceMetrics(): DeviceMetrics {
-    const device = this.currentDevice ?? this.getInitialDevice()
+    const device = this.getCurrentDevice()
     if (device) {
       return {
         pixelRatio: device.pixelRatio,
@@ -293,36 +303,44 @@ export class SimulatorMiniApp {
   }
 
   getHostEnvSnapshot(): HostEnvSnapshot {
-    // Use the selected device's simulated dimensions (default iPhone 14 =
-    // 390x844) instead of the actual browser window — the simulator emulates a
-    // phone, not Electron's host window. WeChat capsule geometry + status bar
+    // Window metrics come from the selected device through the runtime's single
+    // derivation, never from the actual browser window — the simulator emulates
+    // a phone, not Electron's host window. WeChat capsule geometry + status bar
     // height also key off these via sync-impls/{menu-button,system-info}.ts.
-    const device = this.getInitialDevice()
-    const width = device?.screenWidth ?? 390
-    const height = device?.screenHeight ?? 844
-    const pixelRatio = device?.pixelRatio ?? 2
-    const language = navigator.language || 'zh-CN'
-    const statusBarHeight = device?.statusBarHeight ?? (this.platform === 'ios' ? 44 : 24)
+    const host = {
+      version: '8.0.5',
+      SDKVersion: '3.0.0',
+      language: navigator.language || 'zh-CN',
+      theme: prefersDarkMode() ? 'dark' : 'light',
+    }
+    const device = this.getCurrentDevice()
+    if (device) return { ...host, ...deviceInfoToHostEnv(device) } as HostEnvSnapshot
 
+    // Pre-selection default: an iPhone-14-class stand-in, no insets known.
+    const width = 390
+    const height = 844
     return {
+      ...host,
       brand: this.platform === 'ios' ? 'iPhone' : 'Android',
       model: this.platform === 'ios' ? 'iPhone' : 'Android',
       platform: this.platform,
       system: this.platform === 'ios' ? 'iOS 16.0' : 'Android 13',
-      version: '8.0.5',
-      SDKVersion: '3.0.0',
-      pixelRatio,
+      pixelRatio: 2,
       screenWidth: width,
       screenHeight: height,
       windowWidth: width,
       windowHeight: height,
-      statusBarHeight,
-      language,
-      theme: prefersDarkMode() ? 'dark' : 'light',
+      statusBarHeight: this.platform === 'ios' ? 44 : 24,
     }
   }
 
-  createRenderHostUrl(bridgeId: string, pagePath?: string, isTab?: boolean, backgroundColor?: string): string {
+  createRenderHostUrl(
+    bridgeId: string,
+    pagePath?: string,
+    isTab?: boolean,
+    backgroundColor?: string,
+    navigationStyle?: 'default' | 'custom',
+  ): string {
     return getNativeHost().createRenderHostUrl({
       bridgeId,
       appId: this.appId,
@@ -332,6 +350,7 @@ export class SimulatorMiniApp {
       root: this.root ?? 'main',
       pagePath: pagePath ?? this.pagePath,
       isTab,
+      navigationStyle,
       backgroundColor,
     })
   }

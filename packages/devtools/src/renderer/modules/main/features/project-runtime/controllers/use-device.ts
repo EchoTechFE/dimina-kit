@@ -6,13 +6,21 @@ import {
   useState,
 } from 'react'
 import type { RefObject } from 'react'
-import { AUTO_ZOOM, DEVICES, type ZoomSetting } from '@/shared/constants'
-import { setNativeDeviceInfo } from '@/shared/api'
 import {
-  clampPanelWidth,
-  computeSimPanelWidth,
-} from '../lib/device-geometry'
-import type { DeviceType } from './use-project-runtime-controller'
+  DEFAULT_DEVICE,
+  findDevice,
+  resolveDevice,
+  safeAreaInsetsFor,
+  statusBarHeightFor,
+  type DeviceProfile,
+  type Orientation,
+} from '@devicekit/devices'
+import { frameOuterSize } from '@devicekit/frame'
+import { AUTO_ZOOM, type ZoomSetting } from '@/shared/constants'
+import { setNativeDeviceInfo } from '@/shared/api'
+import { clampPanelWidth, computeSimPanelWidth } from '../lib/device-geometry'
+
+export type DeviceType = DeviceProfile
 
 export interface UseDeviceProps {
   initialDevice: DeviceType
@@ -20,10 +28,12 @@ export interface UseDeviceProps {
 
 export interface DeviceHookResult {
   device: DeviceType
+  orientation: Orientation
   zoom: ZoomSetting
   simPanelWidth: number
   setSimPanelWidth: (width: number) => void
   handleDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
+  handleOrientationChange: (orientation: Orientation) => void
   handleZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   /**
    * Manual splitter drag handler for the sim column. `side` describes
@@ -45,16 +55,31 @@ export interface DeviceHookResult {
   deviceRef: RefObject<DeviceType>
 }
 
+/**
+ * Brand shown in the mini-app's `wx.getSystemInfoSync()` payload. The device
+ * table carries no brand field (many entries share a maker), so it is derived
+ * from platform + name: iOS is always Apple; Android's first name word is the
+ * maker (WeChat's own devtools does the same); HarmonyOS devices are all
+ * Huawei today.
+ */
+function brandFor(device: DeviceProfile): string {
+  if (device.os === 'ios') return 'Apple'
+  if (device.os === 'harmony') return 'HUAWEI'
+  return device.name.split(' ')[0] ?? device.name
+}
+
 export function useDevice(props: UseDeviceProps): DeviceHookResult {
   const { initialDevice } = props
 
   const [device, setDevice] = useState<DeviceType>(initialDevice)
+  const [orientation, setOrientation] = useState<Orientation>('portrait')
   const [zoom, setZoom] = useState<ZoomSetting>(85)
   const [simPanelWidth, setSimPanelWidth] = useState(() =>
-    computeSimPanelWidth(initialDevice.width),
+    computeSimPanelWidth(frameOuterSize(initialDevice, 'portrait').width),
   )
   const simPanelWidthRef = useRef(simPanelWidth)
   const deviceRef = useRef(device)
+  const orientationRef = useRef(orientation)
 
   useEffect(() => {
     simPanelWidthRef.current = simPanelWidth
@@ -64,7 +89,11 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     deviceRef.current = device
   }, [device])
 
-  const sendDeviceInfo = useCallback((d: DeviceType) => {
+  useEffect(() => {
+    orientationRef.current = orientation
+  }, [orientation])
+
+  const pushDeviceInfo = useCallback((d: DeviceType, o: Orientation) => {
     // The simulator is a main-process WebContentsView, so there is no renderer
     // <webview> to receive `device:change`. The mini-app's authoritative
     // `wx.getSystemInfoSync()` runs in the hidden service-host window off its
@@ -72,32 +101,54 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     // that snapshot (no relaunch). Zoom is NOT part of this — it is a display
     // scale applied to the simulator WCV + nested render guests via
     // setNativeSimulatorBounds, so logical device metrics stay zoom-invariant.
+    const resolved = resolveDevice(d)
+    const screen = o === 'landscape'
+      ? { width: resolved.screen.height, height: resolved.screen.width }
+      : resolved.screen
     void setNativeDeviceInfo({
-      brand: 'Apple',
+      device: d.name,
+      brand: brandFor(d),
       model: d.name,
-      system: d.system,
-      platform: 'ios',
+      system: resolved.system,
+      platform: d.os,
+      orientation: o,
       pixelRatio: d.pixelRatio,
-      screenWidth: d.width,
-      screenHeight: d.height,
-      statusBarHeight: d.statusBarHeight,
-      notchType: d.notchType,
-      safeAreaInsets: { ...d.safeAreaInsets },
+      screenWidth: screen.width,
+      screenHeight: screen.height,
+      statusBarHeight: statusBarHeightFor(resolved, o),
+      safeAreaInsets: safeAreaInsetsFor(resolved, o),
     })
   }, [])
 
   const handleDeviceChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const d = DEVICES.find((item) => item.name === e.target.value) ?? DEVICES[1]!
+      const d = findDevice(e.target.value) ?? DEFAULT_DEVICE
       setDevice(d)
-      sendDeviceInfo(d)
+      pushDeviceInfo(d, orientation)
       // React layout state is the single width authority: the panel re-renders
       // at the new width, and the simulator/DevTools view anchors re-measure
       // and publish the precise rects to main (no width IPC side-channel).
-      setSimPanelWidth(computeSimPanelWidth(d.width))
+      setSimPanelWidth(computeSimPanelWidth(frameOuterSize(d, orientation).width))
     },
-    [sendDeviceInfo],
+    [orientation, pushDeviceInfo],
   )
+
+  const handleOrientationChange = useCallback(
+    (o: Orientation) => {
+      setOrientation(o)
+      pushDeviceInfo(device, o)
+      setSimPanelWidth(computeSimPanelWidth(frameOuterSize(device, o).width))
+    },
+    [device, pushDeviceInfo],
+  )
+
+  // Public single-arg form used by callers outside this hook (e.g. the
+  // simulator attach effect, which only knows the device — orientation is
+  // this hook's own state, read from the ref so the callback identity stays
+  // stable across orientation changes).
+  const sendDeviceInfo = useCallback((d: DeviceType) => {
+    pushDeviceInfo(d, orientationRef.current)
+  }, [pushDeviceInfo])
 
   const handleZoomChange = useCallback(
     (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -135,10 +186,12 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
 
   return {
     device,
+    orientation,
     zoom,
     simPanelWidth,
     setSimPanelWidth,
     handleDeviceChange,
+    handleOrientationChange,
     handleZoomChange,
     handleSplitterDrag,
     sendDeviceInfo,
