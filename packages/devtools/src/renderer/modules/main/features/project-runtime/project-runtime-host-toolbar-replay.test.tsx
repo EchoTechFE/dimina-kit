@@ -71,6 +71,7 @@ vi.mock('./controllers/use-project-runtime-controller', () => ({
   useProjectRuntimeController: () => ({
     session: {
       compileStatus: { status: 'ready', message: '' },
+      compileModes: { selectedId: null, entries: [] },
       compileEvents: [],
       compileLogs: [],
       clearCompileEvents: vi.fn(),

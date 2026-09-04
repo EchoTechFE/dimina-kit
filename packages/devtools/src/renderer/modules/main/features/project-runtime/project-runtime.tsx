@@ -17,6 +17,8 @@ import type { BottomDebugPanelProps, DebugTabContentId } from '../bottom-debug-p
 import { useViewAnchor, createPlacementAnchor } from '@dimina-kit/view-anchor'
 import type { Placement, PlacementAnchorHandle } from '@dimina-kit/view-anchor'
 import { VIEW_ID, VIEW_LAYER } from '../../../../../shared/view-ids'
+import { compileModeLabel } from '../../../../../shared/compile-modes'
+import { selectedMode } from '../../../../../shared/compile-mode-state'
 import { PlacementPublisherContext, usePlacementPublisher } from '@/shared/placement-publisher-context'
 import { useHostSlotExtent, useScreenPlacementPublisher } from '@/shared/host-slot-hooks'
 import { DockView } from '@dimina-kit/electron-deck/dock-react'
@@ -241,6 +243,8 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
         compileDropdownRef={popover.compileDropdownRef}
         showCompilePanel={popover.showCompilePanel}
         onToggleCompilePanel={popover.toggleCompilePanel}
+        compileModeLabel={compileModeLabel(selectedMode(session.compileModes))}
+        compileModesReady={session.compileModesReady}
         onRelaunch={() => session.relaunch()}
         compileStatus={session.compileStatus}
         dockModel={dockModel}

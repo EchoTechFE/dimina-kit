@@ -4,7 +4,7 @@
  * never throws.
  *
  * Covers three target classes:
- *   - main window methods (windowNavigateBack, popoverRelaunch, projectStatus)
+ *   - main window methods (windowNavigateBack, compileModesChanged, projectStatus)
  *     → routed via `ctx.windows.mainWindow.webContents.send`
  *   - settings overlay (settingsInit) → routed via
  *     `ctx.views.getSettingsWebContents().send`
@@ -19,6 +19,9 @@ import {
 } from '../../../shared/ipc-channels.js'
 import { PopoverChannel, SettingsChannel } from '../../../shared/ipc-channels-overlays.js'
 import { createRendererNotifier } from './renderer-notifier.js'
+
+const COMPILE_MODES_CHANGED = (ProjectChannel as unknown as Record<string, string>).CompileModesChanged
+const COMPILE_MODES_APPLY_FAILED = (ProjectChannel as unknown as Record<string, string>).CompileModesApplyFailed
 
 function makeWebContents() {
   return {
@@ -96,20 +99,41 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
   })
 
-  it('popoverRelaunch: sends with payload while alive, no-ops after destruction', () => {
+  it('compileModesChanged: sends the change while alive, no-ops after destruction', () => {
     const mainWindow = makeBrowserWindow()
     const ctx = {
       windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
       views: { getSettingsWebContents: () => null },
     }
     const notifier = createRendererNotifier(ctx)
-    const cfg = { foo: 'bar' } as unknown as import('../../../shared/types.js').CompileConfig
+    const change = {
+      revision: 3,
+      state: { selectedId: null, entries: [] },
+      relaunch: true,
+    }
 
-    notifier.popoverRelaunch(cfg)
-    expect(mainWindow.webContents.send).toHaveBeenCalledWith(PopoverChannel.Relaunch, cfg)
+    notifier.compileModesChanged(change)
+    expect(mainWindow.webContents.send).toHaveBeenCalledWith(COMPILE_MODES_CHANGED, change)
 
     mainWindow.destroyed = true
-    notifier.popoverRelaunch(cfg)
+    notifier.compileModesChanged(change)
+    expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('compileModesApplyFailed: sends the error message while alive, no-ops after destruction', () => {
+    const mainWindow = makeBrowserWindow()
+    const ctx = {
+      windows: { mainWindow: mainWindow as unknown as Electron.BrowserWindow },
+      views: { getSettingsWebContents: () => null },
+    }
+    const notifier = createRendererNotifier(ctx)
+    const payload = { message: '磁盘写入失败' }
+
+    notifier.compileModesApplyFailed(payload)
+    expect(mainWindow.webContents.send).toHaveBeenCalledWith(COMPILE_MODES_APPLY_FAILED, payload)
+
+    mainWindow.destroyed = true
+    notifier.compileModesApplyFailed(payload)
     expect(mainWindow.webContents.send).toHaveBeenCalledTimes(1)
   })
 
@@ -146,7 +170,6 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     const notifier = createRendererNotifier(ctx)
     const payload = {
       projectPath: '/x',
-      config: {} as import('../../../shared/types.js').CompileConfig,
       projectSettings: {} as import('../projects/project-repository.js').ProjectSettings,
     }
 
@@ -169,7 +192,6 @@ describe('RendererNotifier — destroyed targets no-op', () => {
     expect(() =>
       notifier.settingsInit({
         projectPath: '',
-        config: {} as import('../../../shared/types.js').CompileConfig,
         projectSettings: {} as import('../projects/project-repository.js').ProjectSettings,
       }),
     ).not.toThrow()

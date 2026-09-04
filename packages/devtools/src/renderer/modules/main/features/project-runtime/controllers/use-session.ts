@@ -1,23 +1,26 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from 'react'
 import {
-  getCompileConfig,
+  getCompileModeState,
   getProjectPages,
   onCompileLog,
+  onCompileModesApplyFailed,
+  onCompileModesChanged,
   onProjectStatus,
   onSessionRuntimeStatus,
   openProject,
   rebuildProject,
-  saveCompileConfig,
 } from '@/shared/api'
 import type { AppInfo, CompileLogEntry, SessionRuntimeStatusPayload } from '@/shared/api'
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, CompileModeState } from '@/shared/types'
 import type { CompileEvent } from '@dimina-kit/inspect'
-import { DEFAULT_SCENE } from '../../../../../../shared/constants'
+import { compileConfigFromMode } from '../../../../../../shared/compile-modes'
+import { emptyCompileModeState, selectedMode } from '../../../../../../shared/compile-mode-state'
 import type { CompileStatus } from './use-project-runtime-controller'
 
 export interface UseSessionProps {
@@ -43,6 +46,29 @@ export interface SessionHookResult {
   appInfo: AppInfo | null
   port: number
   pages: string[]
+  /** The page 普通编译 launches — the project's own entry page. */
+  entryPagePath: string
+  /**
+   * The project's named compile modes and which one is selected — mirrors
+   * the main-process `CompileModeStore`, updated by `getCompileModeState` on
+   * open and by `onCompileModesChanged` pushes thereafter. Editing goes
+   * through `applyPopoverCommand`, straight to main; this hook only adopts
+   * the result.
+   */
+  compileModes: CompileModeState
+  /**
+   * True once main has opened this window's project into a `CompileModeStore`
+   * AND the local mirror has adopted at least one snapshot/push from it.
+   * Before that, `getCompileModeState`/`applyCompileModeCommand` on main
+   * throw `no compile-mode store open` — the popover's Show has nothing
+   * authoritative to read, so gate it on this instead.
+   */
+  compileModesReady: boolean
+  /**
+   * The launch parameters the selected mode resolves to, with 普通编译's empty
+   * start page filled in from the project's entry page. Derived from
+   * `compileModes` — never edited directly.
+   */
   compileConfig: CompileConfig
   /**
    * Strictly-increasing counter, bumped once per `projectStatus` payload that
@@ -64,7 +90,7 @@ export interface SessionHookResult {
   compileLogs: CompileLogEntry[]
   /** Empty BOTH compileEvents and compileLogs (the panel's single 清空). */
   clearCompileEvents: () => void
-  relaunch: (nextConfig?: CompileConfig) => Promise<void>
+  relaunch: () => Promise<void>
   /**
    * Bumped on every explicit `relaunch` so the simulator attach effect forces a
    * fresh hard attach at `startPage` even when the URL is unchanged.
@@ -92,13 +118,52 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
   const [pages, setPages] = useState<string[]>([])
   const [port, setPort] = useState(0)
-  const [compileConfig, setCompileConfig] = useState<CompileConfig>({
-    startPage: '',
-    scene: DEFAULT_SCENE,
-    queryParams: [],
-  })
+  const [entryPagePath, setEntryPagePath] = useState('')
+  const [compileModes, setCompileModes] = useState<CompileModeState>(emptyCompileModeState())
+  const [compileModesReady, setCompileModesReady] = useState(false)
+
+  // The single derived view of the selected mode. 普通编译 resolves to an empty
+  // start page — only this layer knows the project's own entry page, so the
+  // substitution happens here rather than in the pure resolver.
+  const compileConfig = useMemo<CompileConfig>(() => {
+    const resolved = compileConfigFromMode(selectedMode(compileModes))
+    return {
+      ...resolved,
+      startPage: resolved.startPage || entryPagePath || pages[0] || '',
+    }
+  }, [compileModes, entryPagePath, pages])
+
+  // The highest `CompileModeStore` revision adopted so far for the CURRENT
+  // project — reset per `projectPath`. Guards against a slow `getCompileModeState`
+  // fetch resolving AFTER a fresher `onCompileModesChanged` push already
+  // landed: whichever side carries the higher revision wins, regardless of
+  // arrival order, so the in-flight fetch can never roll a newer push back.
+  const revisionRef = useRef(-1)
+  // Mirrors `relaunch` so the change-adoption effect below (subscribed once
+  // per `projectPath`) can always call the LATEST relaunch without itself
+  // depending on `relaunch` — depending on it would tear the subscription
+  // down and rebuild it on every relaunch-callback identity change.
+  const relaunchRef = useRef<() => Promise<void>>(async () => {})
+
   useEffect(() => {
     let cancelled = false
+    revisionRef.current = -1
+    setCompileModesReady(false)
+
+    // Registered synchronously, before any async work starts, so a push that
+    // lands while `load()` is still in flight can never be missed.
+    const offChanged = onCompileModesChanged((change) => {
+      if (cancelled) return
+      if (change.revision <= revisionRef.current) return
+      revisionRef.current = change.revision
+      setCompileModes(change.state)
+      setCompileModesReady(true)
+      if (change.relaunch) void relaunchRef.current()
+    })
+    const offApplyFailed = onCompileModesApplyFailed((payload) => {
+      if (cancelled) return
+      setCompileStatus({ status: 'error', message: payload.message })
+    })
 
     async function load() {
       try {
@@ -110,29 +175,30 @@ export function useSession(props: UseSessionProps): SessionHookResult {
           return
         }
 
-        // Fetch pages + compile config BEFORE committing port/appInfo to state,
-        // so the first <webview> render already has the correct startPage. If
-        // port is set first, simulatorUrl renders with an empty startPage and
-        // falls back to the hardcoded 'pages/index/index', triggering a wasted
-        // load for a page that doesn't exist in the compiled output.
-        const [pagesResult, config] = await Promise.all([
+        // Fetch pages + compile-mode state BEFORE committing port/appInfo to
+        // state, so the first <webview> render already has the correct
+        // startPage. If port is set first, simulatorUrl renders with an
+        // empty startPage and falls back to the hardcoded
+        // 'pages/index/index', triggering a wasted load for a page that
+        // doesn't exist in the compiled output.
+        const [pagesResult, snapshot] = await Promise.all([
           getProjectPages(projectPath),
-          getCompileConfig(projectPath),
+          getCompileModeState(projectPath),
         ])
         if (cancelled) return
 
         setAppInfo(result.appInfo)
         setPort(result.port)
         setPages(pagesResult.pages)
-        setCompileConfig({
-          startPage:
-            config.startPage ||
-            pagesResult.entryPagePath ||
-            pagesResult.pages[0] ||
-            '',
-          scene: config.scene ?? DEFAULT_SCENE,
-          queryParams: config.queryParams || [],
-        })
+        setEntryPagePath(pagesResult.entryPagePath || pagesResult.pages[0] || '')
+        // A push carrying a higher revision may have already arrived while
+        // this fetch was in flight — discard the now-stale fetch result
+        // rather than rolling the adopted state backward.
+        if (snapshot.revision > revisionRef.current) {
+          revisionRef.current = snapshot.revision
+          setCompileModes(snapshot.state)
+          setCompileModesReady(true)
+        }
         setCompileStatus({ status: 'ready', message: '编译完成' })
       } catch (err) {
         if (cancelled) return
@@ -143,6 +209,8 @@ export function useSession(props: UseSessionProps): SessionHookResult {
     void load()
     return () => {
       cancelled = true
+      offChanged()
+      offApplyFailed()
     }
   }, [projectPath])
 
@@ -259,7 +327,7 @@ export function useSession(props: UseSessionProps): SessionHookResult {
   const [relaunchNonce, setRelaunchNonce] = useState(0)
 
   const relaunch = useCallback(
-    async (nextConfig: CompileConfig = compileConfig) => {
+    async () => {
       try {
         if (!appInfo?.appId || isRefreshing.current) return
 
@@ -284,11 +352,9 @@ export function useSession(props: UseSessionProps): SessionHookResult {
           // (host adapter without a real rebuild) falls through to the
           // reattach-only behavior.
           await rebuildProject()
-          await saveCompileConfig(projectPath, nextConfig)
-          // Triggers the native re-attach effect (simulatorUrl depends on this).
-          setCompileConfig(nextConfig)
-          // Force the re-attach even when nextConfig leaves simulatorUrl
-          // unchanged — an explicit relaunch always resets to startPage.
+          // Force the re-attach even when the compile config leaves
+          // simulatorUrl unchanged — an explicit relaunch always resets to
+          // startPage.
           setRelaunchNonce((n) => n + 1)
           setCompileStatus({ status: 'ready', message: '刷新完成' })
         } finally {
@@ -302,14 +368,21 @@ export function useSession(props: UseSessionProps): SessionHookResult {
         })
       }
     },
-    [appInfo, compileConfig, projectPath],
+    [appInfo],
   )
+
+  useEffect(() => {
+    relaunchRef.current = relaunch
+  }, [relaunch])
 
   return {
     compileStatus,
     appInfo,
     port,
     pages,
+    entryPagePath,
+    compileModes,
+    compileModesReady,
     compileConfig,
     hotReloadToken,
     compileEvents,

@@ -3,6 +3,7 @@ import { ProjectChannel } from '../../shared/ipc-channels.js'
 import {
   ProjectCaptureThumbnailSchema,
   ProjectGetCompileConfigSchema,
+  ProjectGetCompileModeStateSchema,
   ProjectGetPagesSchema,
   ProjectGetThumbnailSchema,
   ProjectOpenSchema,
@@ -43,6 +44,14 @@ export function registerSessionIpc(input: IpcInput<SessionIpcCtx>): Disposable {
         args,
       )
       return ctx.workspace.saveCompileConfig(projectPath, config as CompileConfig)
+    })
+    .handleRouted(ProjectChannel.GetCompileModeState, (ctx, _e, ...args: unknown[]) => {
+      const [projectPath] = validate(
+        ProjectChannel.GetCompileModeState,
+        ProjectGetCompileModeStateSchema,
+        args,
+      )
+      return ctx.workspace.getCompileModeState(projectPath)
     })
     .handleRouted(ProjectChannel.Close, (ctx) => {
       return ctx.workspace.closeProject()

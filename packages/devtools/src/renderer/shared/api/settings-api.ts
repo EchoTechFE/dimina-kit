@@ -1,4 +1,3 @@
-import type { CompileConfig } from '@/shared/types'
 import { WorkbenchSettingsChannel } from '../../../shared/ipc-channels'
 import { SettingsChannel } from '../../../shared/ipc-channels-overlays'
 import { invoke, invokeStrict, on, send } from './ipc-transport'
@@ -59,7 +58,6 @@ export interface ProjectSettingsPatch {
 
 export interface SettingsInitPayload {
   projectPath: string
-  config: CompileConfig
   projectSettings?: {
     uploadWithSourceMap: boolean
   }
@@ -78,11 +76,6 @@ export interface WorkbenchSettingsInitPayload {
  */
 export function setSettingsVisible(visible: boolean): Promise<void> {
   return invoke<void>(SettingsChannel.SetVisible, visible)
-}
-
-/** Broadcast a compile-config change from the embedded settings overlay. */
-export function emitSettingsConfigChanged(config: CompileConfig): void {
-  send(SettingsChannel.ConfigChanged, config)
 }
 
 /** Broadcast a project-settings patch from the embedded settings overlay. */

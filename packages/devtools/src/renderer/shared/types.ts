@@ -1,5 +1,13 @@
-// Re-export canonical CompileConfig / ProjectType from shared types
-export type { CompileConfig } from '../../shared/types'
+// Re-export the canonical compile-mode / ProjectType types from shared types
+export type { CompileConfig, CompileMode, CompileModes } from '../../shared/types'
+export type {
+  CompileModeChange,
+  CompileModeCommand,
+  CompileModeEntry,
+  CompileModeId,
+  CompileModeSnapshot,
+  CompileModeState,
+} from '../../shared/compile-mode-state'
 import type { ProjectType } from '../../shared/types'
 
 export type { ProjectType }

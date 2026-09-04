@@ -3,7 +3,7 @@ import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
 import { DEVICES, SIM_PANEL_PADDING, type ZoomSetting } from '@/shared/constants'
 import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
-import type { CompileConfig } from '@/shared/types'
+import type { CompileConfig, CompileModeState } from '@/shared/types'
 import type { AppDataPanelSource, StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
@@ -33,6 +33,12 @@ interface SessionSlice {
   appInfo: AppInfo | null
   port: number
   pages: string[]
+  /** The page 普通编译 launches. */
+  entryPagePath: string
+  /** Named compile modes + selection — the toolbar label reads from this. */
+  compileModes: CompileModeState
+  /** Gates the compile-mode button — see `SessionHookResult.compileModesReady`. */
+  compileModesReady: boolean
   compileConfig: CompileConfig
   /** 编译 tab event log (useSession passthrough — feeds BottomDebugPanel). */
   compileEvents: CompileEvent[]
@@ -40,7 +46,7 @@ interface SessionSlice {
   compileLogs: CompileLogEntry[]
   /** Clears both compileEvents and compileLogs. */
   clearCompileEvents: () => void
-  relaunch: (nextConfig?: CompileConfig) => Promise<void>
+  relaunch: () => Promise<void>
   /** Latest runtime-lifecycle push for the active session; null when healthy/unreported, or right after a hot-reload starts a fresh launch round. */
   runtimeStatus: SessionRuntimeStatusPayload | null
   /** True once the project's file watcher has died for this session. */
@@ -105,9 +111,9 @@ export interface ProjectRuntimeController {
  * entry point so `project-runtime.tsx` stays declarative.
  *
  * Side-effect ordering preserved from the pre-controller hooks:
- *  1. openProject → getProjectPages / getCompileConfig → compileStatus ready
+ *  1. openProject → getProjectPages / getCompileModeState → compileStatus ready
  *  2. compileStatus ready → webview attach + sendDeviceInfo + ipc-message
- *  3. popover:closed → clear showCompilePanel; popover:relaunch → relaunch()
+ *  3. popover:closed → clear showCompilePanel; popover:apply → save + relaunch
  */
 export function useProjectRuntimeController(
   props: ProjectRuntimeControllerProps,
@@ -165,9 +171,11 @@ export function useProjectRuntimeController(
   })
 
   const popoverHook = usePopover({
-    relaunch: sessionHook.relaunch,
-    compileConfig: sessionHook.compileConfig,
     pages: sessionHook.pages,
+    entryPagePath: sessionHook.entryPagePath,
+    // The page the simulator is actually showing, so 以当前页面新建编译模式
+    // captures where the user navigated rather than where the session started.
+    currentRoute: simulatorHook.currentRoute,
     compileDropdownRef,
   })
 
@@ -179,6 +187,9 @@ export function useProjectRuntimeController(
       appInfo: sessionHook.appInfo,
       port: sessionHook.port,
       pages: sessionHook.pages,
+      entryPagePath: sessionHook.entryPagePath,
+      compileModes: sessionHook.compileModes,
+      compileModesReady: sessionHook.compileModesReady,
       compileConfig: sessionHook.compileConfig,
       compileEvents: sessionHook.compileEvents,
       compileLogs: sessionHook.compileLogs,

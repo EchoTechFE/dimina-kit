@@ -31,10 +31,9 @@ export const ProjectsAddSchema = z.tuple([AbsolutePath])
 export const ProjectOpenSchema = z.tuple([AbsolutePath])
 
 /**
- * Shared shape for CompileConfig payloads (used by saveCompileConfig,
- * settings:configChanged, and popover:relaunch). Permissive on the outer
- * object so we stay forward-compatible with new fields; the known top-level
- * keys are validated to catch wrong types early.
+ * Shared shape for CompileConfig payloads. Permissive on the outer object so
+ * we stay forward-compatible with new fields; the known top-level keys are
+ * validated to catch wrong types early.
  */
 const CompileConfigShape = z.looseObject({
   startPage: z.string().optional(),
@@ -50,6 +49,50 @@ const CompileConfigShape = z.looseObject({
 export const ProjectSaveCompileConfigSchema = z.tuple([
   AbsolutePath,
   CompileConfigShape,
+])
+
+/**
+ * Shared shape for the stored compile-mode list (`condition.miniprogram` in
+ * project.config.json). Loose because WeChat writes fields we carry through
+ * untouched; `normalizeCompileModes` does the semantic coercion after this
+ * structural check.
+ */
+// `.default('')` (not `.optional()`) so the parsed type matches CompileMode's
+// required `name`/`query` strings — a command's mode is always a complete
+// CompileMode, never a partial patch.
+const CompileModeShape = z.looseObject({
+  name: z.string().default(''),
+  pathName: z.string(),
+  query: z.string().default(''),
+  scene: z.number().nullable().default(null),
+})
+
+/** project:getCompileModeState — absolute project path. */
+export const ProjectGetCompileModeStateSchema = z.tuple([AbsolutePath])
+
+/**
+ * A compile-mode id: minted by the store, never empty. `select` alone also
+ * allows `null` (普通编译), so it is not part of this shape.
+ */
+const CompileModeId = z.string().min(1)
+
+/**
+ * The single command shape the popover sends instead of a whole new list —
+ * main is the only thing that interprets it against the live store. Mirrors
+ * `CompileModeCommand` in `compile-mode-state.ts`.
+ */
+export const CompileModeCommandSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('select'), id: CompileModeId.nullable() }),
+  z.object({ type: z.literal('add'), mode: CompileModeShape }),
+  z.object({ type: z.literal('update'), id: CompileModeId, mode: CompileModeShape }),
+  z.object({ type: z.literal('remove'), id: CompileModeId }),
+])
+
+/** popover:apply — the command to interpret against the open project's store. */
+export const PopoverApplySchema = z.tuple([
+  z.object({
+    command: CompileModeCommandSchema,
+  }),
 ])
 
 /** popover:show — must be an object (not undefined/null/string). */
@@ -308,11 +351,6 @@ export const WorkbenchSettingsSetThemeSchema = z.tuple([
 /** settings:setVisible — boolean. */
 export const SettingsSetVisibleSchema = z.tuple([z.boolean()])
 
-/** settings:configChanged — full CompileConfig object (see shared/types.ts). */
-export const SettingsConfigChangedSchema = z.tuple([CompileConfigShape])
-
-/** popover:relaunch — full CompileConfig object pushed back to main on relaunch. */
-export const PopoverRelaunchSchema = z.tuple([CompileConfigShape])
 
 /**
  * settings:projectSettingsChanged — Partial<ProjectSettings>.

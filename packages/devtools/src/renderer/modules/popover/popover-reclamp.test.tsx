@@ -17,6 +17,11 @@ import React from 'react'
 import { act, render } from '@testing-library/react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
+interface FakeCompileModeState {
+  selectedId: string | null
+  entries: Array<{ id: string; mode: { name: string; pathName: string; query: string; scene: number | null } }>
+}
+
 const { popoverInitListeners } = vi.hoisted(() => ({
   popoverInitListeners: [] as Array<(payload: unknown) => void>,
 }))
@@ -25,7 +30,9 @@ function emitPopoverInit(payload: {
   top: number
   left: number
   pages: string[]
-  config: { startPage: string; scene: number; queryParams: { key: string; value: string }[] }
+  state: FakeCompileModeState
+  entryPagePath: string
+  currentRoute: string
 }): void {
   for (const fn of [...popoverInitListeners]) fn(payload)
 }
@@ -38,7 +45,7 @@ vi.mock('@/shared/api', () => ({
       if (i >= 0) popoverInitListeners.splice(i, 1)
     }
   }),
-  emitPopoverRelaunch: vi.fn(),
+  applyPopoverCommand: vi.fn(async () => {}),
   hidePopover: vi.fn(async () => {}),
   notifyOverlayReady: vi.fn(),
 }))
@@ -66,7 +73,9 @@ describe('Popover — re-clamps the panel when the view gains its size', () => {
         top: 40,
         left: 10,
         pages: ['pages/index/index'],
-        config: { startPage: 'pages/index/index', scene: 1001, queryParams: [] },
+        state: { selectedId: null, entries: [] },
+        entryPagePath: 'pages/index/index',
+        currentRoute: '',
       })
     })
     expect(panelElement().style.left).toBe('-348px')
@@ -80,7 +89,9 @@ describe('Popover — re-clamps the panel when the view gains its size', () => {
         top: 40,
         left: 10,
         pages: ['pages/index/index'],
-        config: { startPage: 'pages/index/index', scene: 1001, queryParams: [] },
+        state: { selectedId: null, entries: [] },
+        entryPagePath: 'pages/index/index',
+        currentRoute: '',
       })
     })
     expect(panelElement().style.left).toBe('-348px')
@@ -105,7 +116,9 @@ describe('Popover — re-clamps the panel when the view gains its size', () => {
         top: 40,
         left: 10,
         pages: ['pages/index/index'],
-        config: { startPage: 'pages/index/index', scene: 1001, queryParams: [] },
+        state: { selectedId: null, entries: [] },
+        entryPagePath: 'pages/index/index',
+        currentRoute: '',
       })
     })
     unmount()

@@ -188,6 +188,19 @@ export const ProjectChannel = {
   GetPages: 'project:getPages',
   GetCompileConfig: 'project:getCompileConfig',
   SaveCompileConfig: 'project:saveCompileConfig',
+  // Renderer → main invoke: the id-based in-memory snapshot for the
+  // currently open project's `CompileModeStore`. There is no
+  // `SaveCompileModes` counterpart any more — the store is main's alone to
+  // mutate, via `PopoverChannel.Apply`'s command.
+  GetCompileModeState: 'project:getCompileModeState',
+  // Main → renderer push: the open project's `CompileModeStore` advanced —
+  // via the popover, or any other command source. Carries the full
+  // `CompileModeChange` (revision, state, relaunch).
+  CompileModesChanged: 'project:compileModesChanged',
+  // Main → renderer push: an `applyCompileModeCommand` rejected (e.g. a
+  // failed persist). Carries `{ message }`; the renderer surfaces it as a
+  // compile-status error without touching `compileModes`.
+  CompileModesApplyFailed: 'project:compileModesApplyFailed',
   Status: 'project:status',
   // Main → renderer push of per-line dmcc compile logs (devkit `onLog`).
   // Dedicated channel: `project:status` keeps its one-event-per-payload
