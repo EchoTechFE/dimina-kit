@@ -61,7 +61,12 @@ export interface WorkbenchWindowManager {
    * first project window opens.
    */
   activeContext: () => WindowContext | null
-  /** Tear every workbench window down (app quit / runtime disposal). */
+  /**
+   * Tear every workbench window down (app quit / runtime disposal). Terminal
+   * and idempotent: once it starts, no `open()` — pending, queued or already
+   * in flight — leaves a live window behind, and it does not resolve until
+   * every in-flight open or close has settled.
+   */
   disposeAll: () => Promise<void>
 }
 
@@ -140,6 +145,14 @@ export function createWorkbenchWindowManager(
   // MCP's project_open) must queue rather than each find "no window" and build
   // one. Entries are dropped once a path goes idle.
   const pathQueues = new Map<string, Promise<unknown>>()
+  // Terminal state owned by this manager, deliberately not `isAppQuitting()`:
+  // a runtime can be disposed while the app keeps running, and a manager that
+  // has torn everything down must never build another window either way.
+  let disposed = false
+
+  function disposedError(): Error {
+    return new Error('workbench window manager is disposed')
+  }
 
   function enqueue<T>(path: string, task: () => Promise<T>): Promise<T> {
     const previous = pathQueues.get(path) ?? Promise.resolve()
@@ -155,6 +168,12 @@ export function createWorkbenchWindowManager(
   }
 
   async function openWindow(project: ProjectRef): Promise<BrowserWindow> {
+    // Checked where the queued task starts running, not where it was queued:
+    // an open sitting behind a close on the same path can be dequeued long
+    // after `disposeAll()` began, and must fail instead of resurrecting a
+    // project the app just tore down.
+    if (disposed) throw disposedError()
+
     const existing = windows.get(project.path)
     if (existing && !existing.window.isDestroyed()) {
       if (existing.window.isMinimized()) existing.window.restore()
@@ -225,6 +244,10 @@ export function createWorkbenchWindowManager(
       const getActiveAppId = createActiveAppIdResolver(context)
       setupWindowRuntimeServices(context, window, getActiveAppId)
       await setupEditorView(config, context, getActiveAppId)
+      // `disposeAll()` can land while this open is parked above. It waits for
+      // this task to settle rather than reaching into a half-built window, so
+      // the undo below is this open's own job.
+      if (disposed) throw disposedError()
     } catch (err) {
       // A half-built window (the editor's http server can fail to bind) leaves
       // live services behind and keeps the project counted as open — which is
@@ -260,6 +283,20 @@ export function createWorkbenchWindowManager(
       return all.length > 0 ? all[all.length - 1]!.context : null
     },
     disposeAll: async () => {
+      // Set before waiting, never after: the in-flight opens and closes being
+      // waited on are exactly the code that has to observe the terminal state
+      // in order to finish instead of building on.
+      disposed = true
+      // Drained repeatedly because settling one entry releases whatever was
+      // queued behind it on the same path; new opens reject at their task
+      // start, so the queues run dry.
+      while (pathQueues.size > 0) {
+        await Promise.allSettled([...pathQueues.values()])
+      }
+
+      // Snapshotted only now: an open that lost the race above already removed
+      // and disposed itself, and a finished close already dropped its entry,
+      // so nothing here is disposed twice.
       const all = [...windows.values()]
       windows.clear()
       // Serial: each teardown closes a devkit session and an http server, and
