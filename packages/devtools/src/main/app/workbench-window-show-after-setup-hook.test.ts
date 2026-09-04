@@ -52,6 +52,7 @@ function revealCallCount(win: MockWindow): number {
 async function buildManager(
   config: WorkbenchAppConfig,
   setupProjectWindow: WorkbenchWindowDeps['setupProjectWindow'],
+  extraDeps?: Partial<WorkbenchWindowDeps>,
 ) {
   const [{ createWorkbenchWindowManager }, { createAppServices }, { createWindowContextRouter }, { rendererDir }] =
     await Promise.all([
@@ -67,6 +68,7 @@ async function buildManager(
     router: createWindowContextRouter(),
     setupWindowModules: () => {},
     setupProjectWindow,
+    ...extraDeps,
   }
   return createWorkbenchWindowManager(deps)
 }
@@ -162,12 +164,16 @@ describe('a close or teardown that lands while the setup hook is pending must wi
   it('a window closed while the hook is still pending must never be revealed once the hook resolves', async () => {
     await state.createDevtoolsRuntime({})
     const gate = createGate()
-    const manager = await buildManager({}, async () => { await gate.promise })
+    let hookEntered = false
+    const manager = await buildManager({}, async () => {
+      hookEntered = true
+      await gate.promise
+    })
     registerProject('/tmp/closeDuringSetupHook')
 
     const openPromise = manager.open({ path: '/tmp/closeDuringSetupHook' })
     await vi.waitFor(() => {
-      expect(manager.list()).toHaveLength(1)
+      expect(hookEntered).toBe(true)
     })
     const win = manager.list()[0]!.window as unknown as MockWindow
 
@@ -193,12 +199,16 @@ describe('a close or teardown that lands while the setup hook is pending must wi
   it('a manager torn down by disposeAll while the hook is pending must never reveal the window', async () => {
     await state.createDevtoolsRuntime({})
     const gate = createGate()
-    const manager = await buildManager({}, async () => { await gate.promise })
+    let hookEntered = false
+    const manager = await buildManager({}, async () => {
+      hookEntered = true
+      await gate.promise
+    })
     registerProject('/tmp/disposeAllDuringSetupHook')
 
     const openPromise = manager.open({ path: '/tmp/disposeAllDuringSetupHook' })
     await vi.waitFor(() => {
-      expect(manager.list()).toHaveLength(1)
+      expect(hookEntered).toBe(true)
     })
     const win = manager.list()[0]!.window as unknown as MockWindow
 
@@ -217,5 +227,53 @@ describe('a close or teardown that lands while the setup hook is pending must wi
       revealCallCount(win),
       'a window whose manager already started disposeAll() must not be revealed once the hook resolves',
     ).toBe(0)
+  })
+
+  it('teardown queued behind an open that disposeAll already tore down must not run onBeforeClose again', async () => {
+    await state.createDevtoolsRuntime({})
+    const gate = createGate()
+    let hookEntered = false
+    const onBeforeClose = vi.fn(async () => {})
+    const manager = await buildManager(
+      {},
+      async () => {
+        hookEntered = true
+        await gate.promise
+      },
+      { onBeforeClose },
+    )
+    registerProject('/tmp/teardownAfterDisposeAllRace')
+
+    const openPromise = manager.open({ path: '/tmp/teardownAfterDisposeAllRace' })
+    await vi.waitFor(() => {
+      expect(hookEntered).toBe(true)
+    })
+    const win = manager.list()[0]!.window as unknown as MockWindow
+
+    win.emit('ready-to-show')
+
+    // Close is requested first, so its teardown queues behind this still-running
+    // open on the same project path (see `enqueue`); disposeAll() then begins
+    // while both are still queued.
+    emitClose(win, makeCloseEvent().event)
+    const disposeAllPromise = manager.disposeAll()
+    gate.resolve()
+
+    await expect(
+      openPromise,
+      'an open whose hook resolved after disposeAll() began must reject',
+    ).rejects.toThrow(/disposed/)
+    await disposeAllPromise
+    await vi.waitFor(() => {
+      expect(manager.list()).toHaveLength(0)
+    })
+
+    expect(
+      onBeforeClose,
+      'the queued teardown finds its window already torn down by the failed open and must not hand ' +
+        'a destroyed window to onBeforeClose a second time',
+    ).not.toHaveBeenCalled()
+    expect(revealCallCount(win)).toBe(0)
+    expect(manager.list()).toHaveLength(0)
   })
 })

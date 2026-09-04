@@ -243,6 +243,11 @@ export function createWorkbenchWindowManager(
     })
 
     const teardown = async () => {
+      // A close queued behind an open that then failed (or lost to
+      // `disposeAll()`) finds the window already removed and torn down by
+      // that open's own undo path. Nothing is left to close, and the host
+      // hook must not be handed a disposed context and a destroyed window.
+      if (windows.get(project.path) !== projectWindow) return
       try {
         await deps.onBeforeClose?.(projectWindow, project)
       } catch (err) {
