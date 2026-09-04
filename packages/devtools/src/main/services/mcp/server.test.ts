@@ -182,7 +182,7 @@ let port = 0
 const openReqs: http.ClientRequest[] = []
 
 function createProjectHost(): McpProjectHost {
-  return {
+  const target = {
     workspace: {
       validateProjectDir: vi.fn(async () => null),
       hasProject: vi.fn(async () => false),
@@ -194,8 +194,11 @@ function createProjectHost(): McpProjectHost {
     },
     sessionStatus: createSessionStatusStore(),
     compileLogs: createCompileLogBuffer(),
+    closeWindow: vi.fn(),
+  }
+  return {
+    currentProject: () => target,
     requestOpenInUi: vi.fn(),
-    pinActiveProjectWindow: vi.fn(() => null),
   }
 }
 

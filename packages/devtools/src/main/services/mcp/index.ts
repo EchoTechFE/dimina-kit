@@ -13,6 +13,7 @@
  */
 
 export { startMcpServer } from './server.js'
+export type { McpProjectHost, McpProjectTarget } from './tools/project-tools.js'
 export { getMcpStatus, type McpRuntimeStatus } from './status.js'
 // Every project window owns its own native-host state and its own renderer, so
 // each registers its facts and MCP resolves the active window on every use.
@@ -25,4 +26,4 @@ export {
   getNativeOverviewProvider,
   type McpWindowFacts,
 } from './target-manager.js'
-export { createCloseForMcp, createOpenForMcp, type McpOpenedProject } from './opened-project.js'
+export { createOpenForMcp, createTargetForMcp, type McpOpenedProject } from './opened-project.js'

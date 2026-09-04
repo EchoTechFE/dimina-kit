@@ -1,14 +1,17 @@
 /**
- * Resolving the window an MCP-driven project open landed in.
+ * Resolving the project window an MCP call is aimed at.
  *
  * A project lives in its own window and every window keeps its own
  * session-status store, so `project_open` can only report the truth if it
  * awaits the store of the window it just opened. Reading the app-active
  * window's store instead times out on a first open (that window never compiles
  * this project) and can return another project's rebuild as this one's result.
+ * The other tools have no window of their own to point at, so they take the
+ * active one — once per call, as a whole.
  */
 
 import type { SessionStatusStore } from '../workspace/session-status-store.js'
+import type { McpProjectTarget } from './tools/project-tools.js'
 
 /** The status surface `project_open` reports from: one window's own state. */
 export interface McpProjectStatusSource {
@@ -70,7 +73,17 @@ export function createOpenForMcp<W>(
   }
 }
 
-export interface CloseForMcpDeps<W, C> {
+/**
+ * The window-context fields an MCP project call reads. Structural, so this
+ * module stays independent of the workbench context that satisfies it.
+ */
+export interface McpTargetContext {
+  workspace: McpProjectTarget['workspace']
+  sessionStatus: McpProjectTarget['sessionStatus']
+  compileLogBuffer: McpProjectTarget['compileLogs']
+}
+
+export interface TargetForMcpDeps<W, C extends McpTargetContext> {
   /** Every live project window, so the active one can be matched by context. */
   list: () => { window: W; context: C }[]
   /** The context of the project window the user is working in. */
@@ -80,22 +93,28 @@ export interface CloseForMcpDeps<W, C> {
 }
 
 /**
- * Build the `pinActiveProjectWindow` the MCP project tools drive: resolve the
- * active project window NOW and hand back a closer bound to that window.
+ * Build the `currentProject` the MCP project tools drive: resolve the project
+ * window the user is working in NOW and hand back every surface a tool call
+ * needs, all bound to that one window.
  *
- * `project_close` awaits the session teardown before it uses the closer, and
- * the user can focus another project meanwhile. Re-resolving "the active
- * window" at that point closes the window they just moved to and leaves the
- * one whose session was torn down on screen, empty — so the target is captured
- * here, once, and never looked up again. Null means no project window is open.
+ * Tool calls yield — `closeProject()` awaits a teardown, `waitForSettled()`
+ * awaits a compile — and the user can focus another project meanwhile.
+ * Re-resolving afterwards reports one project's compile as another's, or
+ * closes the window they just moved to while the window whose session was torn
+ * down stays on screen, empty. The active context can also be the project
+ * list, which owns no project window: closing then does nothing.
  */
-export function createCloseForMcp<W, C>(
-  deps: CloseForMcpDeps<W, C>,
-): () => (() => void) | null {
+export function createTargetForMcp<W, C extends McpTargetContext>(
+  deps: TargetForMcpDeps<W, C>,
+): () => McpProjectTarget {
   return () => {
-    const active = deps.activeContext()
-    const pinned = deps.list().find((w) => w.context === active)
-    if (!pinned) return null
-    return () => deps.close(pinned.window)
+    const context = deps.activeContext()
+    const owner = deps.list().find((w) => w.context === context)
+    return {
+      workspace: context.workspace,
+      sessionStatus: context.sessionStatus,
+      compileLogs: context.compileLogBuffer,
+      closeWindow: () => { if (owner) deps.close(owner.window) },
+    }
   }
 }

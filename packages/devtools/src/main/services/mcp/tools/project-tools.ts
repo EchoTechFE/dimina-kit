@@ -35,11 +35,30 @@ export interface McpProjectWorkspace {
   hasActiveSession(): boolean
 }
 
-/** Everything `registerProjectTools` needs, assembled by app bootstrap. */
-export interface McpProjectHost {
+/**
+ * One project window's surfaces, resolved together. A project lives in its own
+ * window with its own workspace, status store and log buffer, so a tool call
+ * that read them one by one could mix two projects: every surface here comes
+ * from the same window at the same instant.
+ */
+export interface McpProjectTarget {
   workspace: McpProjectWorkspace
   sessionStatus: SessionStatusStore
   compileLogs: CompileLogBuffer
+  /** Close this target's project window; a no-op when it has none. */
+  closeWindow(): void
+}
+
+/** Everything `registerProjectTools` needs, assembled by app bootstrap. */
+export interface McpProjectHost {
+  /**
+   * The project window a call arriving now is aimed at. Taken ONCE per tool
+   * call and held for its whole lifetime: tools await compiles and teardowns,
+   * and the user is free to focus another project meanwhile — re-resolving
+   * afterwards would report one project's compile as another's, or close the
+   * window they just moved to.
+   */
+  currentProject(): McpProjectTarget
   /**
    * Push the renderer to open the project (the user-click-equivalent path) and
    * resolve with the window it landed in. A project lives in its own window
@@ -48,15 +67,6 @@ export interface McpProjectHost {
    * different project.
    */
   requestOpenInUi(project: { name: string; path: string }): Promise<McpOpenedProject>
-  /**
-   * Pin the project window that is active right now and hand back its closer,
-   * or null when no project window is open. A project lives in its own window,
-   * so returning to the project list means that window goes away and the
-   * always-present list window is what remains — but which window that is has
-   * to be settled before the session teardown is awaited, or the close lands
-   * on whatever window the user focused meanwhile.
-   */
-  pinActiveProjectWindow(): (() => void) | null
 }
 
 const DEFAULT_OPEN_TIMEOUT_MS = 180_000
@@ -84,7 +94,7 @@ function publicPhase(
   return snapshot.phase
 }
 
-/** Reads one window's own status: the host for a query, the opened window for an open. */
+/** Reads one window's own status: the pinned target, or the window an open landed in. */
 function statusPayload(source: McpProjectStatusSource) {
   const snapshot = source.sessionStatus.get()
   const sessionActive = source.workspace.hasActiveSession()
@@ -109,25 +119,26 @@ export function registerProjectTools(server: McpServer, host: McpProjectHost): v
         .describe('Max time to wait for the compile to settle'),
     },
     async ({ path: rawPath, timeoutMs }) => {
+      const target = host.currentProject()
       const dir = path.resolve(rawPath)
 
       // Already open and settled: report instead of re-triggering a compile.
-      const current = host.sessionStatus.get()
-      if (host.workspace.getProjectPath() === dir
-        && host.workspace.hasActiveSession()
+      const current = target.sessionStatus.get()
+      if (target.workspace.getProjectPath() === dir
+        && target.workspace.hasActiveSession()
         && current.phase === 'ready') {
-        return text({ ...statusPayload(host), note: 'project already open' })
+        return text({ ...statusPayload(target), note: 'project already open' })
       }
 
-      const invalid = await host.workspace.validateProjectDir(dir)
+      const invalid = await target.workspace.validateProjectDir(dir)
       if (invalid) return errorText(invalid)
 
       let project: { name: string; path: string }
-      if (await host.workspace.hasProject(dir)) {
-        const known = (await host.workspace.listProjects()).find((p) => p.path === dir)
+      if (await target.workspace.hasProject(dir)) {
+        const known = (await target.workspace.listProjects()).find((p) => p.path === dir)
         project = known ?? { name: path.basename(dir), path: dir }
       } else {
-        project = await host.workspace.addProject(dir)
+        project = await target.workspace.addProject(dir)
       }
 
       // The open hands back the window it landed in; that window's store is the
@@ -159,14 +170,14 @@ export function registerProjectTools(server: McpServer, host: McpProjectHost): v
     'Close the currently open project session and return the workbench to the project list.',
     {},
     async () => {
-      if (!host.workspace.getProjectPath() && !host.workspace.hasActiveSession()) {
+      // Held across the await: `closeProject()` yields, and a window the user
+      // focuses while it runs must not become the window this close takes down.
+      const target = host.currentProject()
+      if (!target.workspace.getProjectPath() && !target.workspace.hasActiveSession()) {
         return text({ closed: false, note: 'no project is open' })
       }
-      // Pinned before the await: `closeProject()` yields, and a window the user
-      // focuses while it runs must not become the window this close takes down.
-      const closeWindow = host.pinActiveProjectWindow()
-      await host.workspace.closeProject()
-      closeWindow?.()
+      await target.workspace.closeProject()
+      target.closeWindow()
       return text({ closed: true })
     },
   )
@@ -175,7 +186,7 @@ export function registerProjectTools(server: McpServer, host: McpProjectHost): v
     'project_status',
     'Query the current project compile status (phase: idle | compiling | ready | error). Includes `generation` — pass it to project_wait_ready to await the NEXT settled state.',
     {},
-    async () => text(statusPayload(host)),
+    async () => text(statusPayload(host.currentProject())),
   )
 
   server.tool(
@@ -188,12 +199,15 @@ export function registerProjectTools(server: McpServer, host: McpProjectHost): v
         .describe('Max time to wait'),
     },
     async ({ afterGeneration, timeoutMs }) => {
+      // Held across the wait: the state this call reports must come from the
+      // window it was aimed at, whichever window is focused when it settles.
+      const target = host.currentProject()
       try {
-        await host.sessionStatus.waitForSettled({ afterGeneration, timeoutMs })
+        await target.sessionStatus.waitForSettled({ afterGeneration, timeoutMs })
       } catch (err) {
         return errorText(err instanceof Error ? err.message : String(err))
       }
-      return text(statusPayload(host))
+      return text(statusPayload(target))
     },
   )
 
@@ -208,7 +222,7 @@ export function registerProjectTools(server: McpServer, host: McpProjectHost): v
         .describe('Only lines from this stream (stderr carries compile errors)'),
     },
     async ({ cursor, limit, stream }) => {
-      const read = host.compileLogs.read({ afterSeq: cursor, limit, stream })
+      const read = host.currentProject().compileLogs.read({ afterSeq: cursor, limit, stream })
       return text(read)
     },
   )

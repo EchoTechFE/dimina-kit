@@ -22,6 +22,7 @@ import type { McpOpenedProject } from '../opened-project.js'
 import {
   registerProjectTools,
   type McpProjectHost,
+  type McpProjectTarget,
 } from './project-tools.js'
 
 interface ToolResult {
@@ -66,11 +67,16 @@ function newWindow(): McpOpenedProject {
   }
 }
 
+/**
+ * One host over one target. Spread flat as well, so a test can drive the
+ * target's stores directly — they are the same objects the tools reach through
+ * `currentProject()`.
+ */
 function makeHost(
-  overrides?: Partial<McpProjectHost['workspace']>,
+  overrides?: Partial<McpProjectTarget['workspace']>,
   opened: McpOpenedProject = newWindow(),
-): McpProjectHost {
-  return {
+): McpProjectHost & McpProjectTarget {
+  const target: McpProjectTarget = {
     workspace: {
       validateProjectDir: vi.fn(async () => null),
       hasProject: vi.fn(async () => false),
@@ -83,8 +89,12 @@ function makeHost(
     },
     sessionStatus: createSessionStatusStore(),
     compileLogs: createCompileLogBuffer(),
+    closeWindow: vi.fn(),
+  }
+  return {
+    ...target,
+    currentProject: () => target,
     requestOpenInUi: vi.fn(async () => opened),
-    pinActiveProjectWindow: vi.fn(() => vi.fn()),
   }
 }
 
@@ -249,10 +259,9 @@ describe('project_close', () => {
 
     const result = await call('project_close')
     expect(host.workspace.closeProject).toHaveBeenCalledTimes(1)
-    expect(host.pinActiveProjectWindow).toHaveBeenCalledTimes(1)
     expect(
-      vi.mocked(host.pinActiveProjectWindow).mock.results[0]!.value,
-      'the pinned window closer must actually run — pinning without closing leaves the project window on screen with a dead session',
+      host.closeWindow,
+      'the target window must actually close — tearing the session down without it leaves the project window on screen with a dead session',
     ).toHaveBeenCalledTimes(1)
     expect(parse(result)).toMatchObject({ closed: true })
   })

@@ -1,21 +1,13 @@
 import { app } from 'electron'
 import type { WorkbenchAppInstance } from './app.js'
 import { startAutomationServer } from '../services/automation/index.js'
-import { startMcpServer, type McpOpenedProject } from '../services/mcp/index.js'
+import {
+  startMcpServer,
+  type McpOpenedProject,
+  type McpProjectTarget,
+} from '../services/mcp/index.js'
 import { loadWorkbenchSettings } from '../services/settings/index.js'
-import type { WorkspaceService } from '../services/workspace/workspace-service.js'
-import type { SessionStatusStore } from '../services/workspace/session-status-store.js'
-import type { CompileLogBuffer } from '../services/workspace/compile-log-buffer.js'
-import type { RendererNotifier } from '../services/notifications/renderer-notifier.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
-
-/** Narrow view of the context fields the MCP project host reads. */
-export interface McpHostContext {
-  workspace: WorkspaceService
-  sessionStatus: SessionStatusStore
-  compileLogBuffer: CompileLogBuffer
-  notify: RendererNotifier
-}
 
 /** Parse --auto, --auto-port, --project from process.argv. */
 function parseAutoArgs(): { auto: boolean; autoPort: number; projectPath: string } {
@@ -62,24 +54,21 @@ export async function setupAutomation(
 }
 
 export function setupMcp(
-  getContext: () => McpHostContext,
+  currentProject: () => McpProjectTarget,
   openProjectWindow: (project: { path: string; name: string }) => Promise<McpOpenedProject>,
-  pinActiveProjectWindow: () => (() => void) | null,
 ): Disposable | null {
   const settings = loadWorkbenchSettings()
   if (!settings.mcp.enabled) return null
 
   const cdpPortSwitch = app.commandLine.getSwitchValue('remote-debugging-port')
   const cdpPort = cdpPortSwitch ? parseInt(cdpPortSwitch, 10) : settings.cdp.port
-  // Getters, not a snapshot: the project MCP drives lives in whichever
-  // workbench window is active, and that changes as windows open and close.
+  // Resolved per tool call, not once at boot: the project MCP drives lives in
+  // whichever workbench window is active, and that changes as windows open and
+  // close. Each call then holds the target it got.
   return startMcpServer(cdpPort, settings.mcp.port, {
-    get workspace() { return getContext().workspace },
-    get sessionStatus() { return getContext().sessionStatus },
-    get compileLogs() { return getContext().compileLogBuffer },
+    currentProject,
     // A project opens into its own window; the renderer entry mounted there
     // compiles it and attaches the simulator.
     requestOpenInUi: (p) => openProjectWindow(p),
-    pinActiveProjectWindow,
   })
 }

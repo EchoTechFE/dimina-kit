@@ -70,7 +70,7 @@ describe('window context router', () => {
     expect(router.resolve(wc(50))).toBe(first)
   })
 
-  it('follows the window a sender was last owned by', () => {
+  it('answers an app-wide sender from the first registrant until a window is marked active', () => {
     const trusted = new Set<number>([50])
     const router = createWindowContextRouter()
     const first = makeContext(1, trusted)
@@ -78,10 +78,12 @@ describe('window context router', () => {
     router.register(first)
     router.register(second)
 
+    // Nothing focused yet: registration order is the deterministic fallback,
+    // and resolving is a pure query that leaves it alone.
     expect(router.active()).toBe(first)
-    router.resolve(wc(2))
-    expect(router.active()).toBe(second)
-    expect(router.resolve(wc(50))).toBe(second)
+    expect(router.resolve(wc(2))).toBe(second)
+    expect(router.active()).toBe(first)
+    expect(router.resolve(wc(50))).toBe(first)
   })
 
   it('falls back to a still-registered context when the active one goes away', () => {

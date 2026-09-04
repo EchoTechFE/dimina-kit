@@ -46,8 +46,8 @@ import { installGlobalMirrors } from './global-mirrors.js'
 import { installHostSidebarDefault } from './host-sidebar-default.js'
 import { installMenu } from './menu-setup.js'
 import {
-  createCloseForMcp,
   createOpenForMcp,
+  createTargetForMcp,
   noteActiveMcpWindowChanged,
   setActiveMcpWindowResolver,
 } from '../services/mcp/index.js'
@@ -447,13 +447,13 @@ export async function createDevtoolsRuntime(
 
   const automation = await setupAutomation(instance, activeProjectContext, router)
   if (automation) appRegistry.add(automation)
-  const mcp = setupMcp(activeProjectContext, createOpenForMcp(workbenchWindows), createCloseForMcp({
+  const mcp = setupMcp(createTargetForMcp({
     list: () => workbenchWindows.list(),
     activeContext: activeProjectContext,
     // `close()` (not `destroy()`) so the window's own close handling runs the
     // same teardown a user-driven close does.
     close: (window) => { if (!window.isDestroyed()) window.close() },
-  }))
+  }), createOpenForMcp(workbenchWindows))
   if (mcp) appRegistry.add(mcp)
 
   // The list window opens no project, so its close needs none of the workbench

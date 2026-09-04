@@ -20,11 +20,15 @@ export interface WindowContextRouter<T extends RoutableWindowContext = RoutableW
   extends IpcContextSource<T> {
   /** Register a window context; the returned Disposable unregisters it. */
   register(ctx: T): Disposable
-  /** The context owning `sender`, or null when no registered context claims it. */
+  /**
+   * The context owning `sender`, or null when no registered context claims it.
+   * A pure query: looking a sender up never changes which context is active.
+   */
   resolve(sender: WebContents): T | null
   /**
-   * The context last resolved from a sender it owns, or last marked active.
-   * Falls back to the first registered context, and null when none are.
+   * The context last marked active by `setActive`. With none marked — or after
+   * the marked one unregisters — it falls back to the first still-registered
+   * context, and null when none are.
    */
   active(): T | null
   /** Mark `ctx` active (on window focus). Ignored for unregistered contexts. */
@@ -62,11 +66,12 @@ export function createWindowContextRouter<
       // overlay views), which is unique by construction. Pass two covers the
       // accepted-but-unowned senders that are left: they belong to the app
       // rather than to a window, so the active window answers them.
+      //
+      // Neither pass moves "active": window focus is what decides which window
+      // an app-wide sender belongs to, and a background window handling its own
+      // IPC must not steal that answer from the focused one.
       for (const ctx of contexts) {
-        if (ctx.ownsSender(sender)) {
-          activeCtx = ctx
-          return ctx
-        }
+        if (ctx.ownsSender(sender)) return ctx
       }
       for (const ctx of contexts) {
         if (ctx.senderPolicy(sender)) return activeCtx ?? first()
