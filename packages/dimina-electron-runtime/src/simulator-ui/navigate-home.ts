@@ -115,9 +115,11 @@ export function reduceNavigateHomeToTab(
   if (prevTop && prevTop.bridgeId !== homeRoot.bridgeId && survivors.has(prevTop.bridgeId)) {
     effects.push({ kind: 'lifecycle', bridgeId: prevTop.bridgeId, event: 'pageHide' })
   }
-  if (cachedRoot) {
-    // Restored from cache — a freshly opened page gets its own lifecycle from
-    // the renderer init path.
+  if (!prevTop || prevTop.bridgeId !== homeRoot.bridgeId) {
+    // homeRoot just became the stack top — restored from cache or freshly
+    // opened, either way it gets its own pageShow. When it was already the
+    // top (repeated "back to home" on the home page itself) this is a true
+    // no-op: nothing changed, so no lifecycle fires.
     effects.push({ kind: 'lifecycle', bridgeId: homeRoot.bridgeId, event: 'pageShow' })
   }
 

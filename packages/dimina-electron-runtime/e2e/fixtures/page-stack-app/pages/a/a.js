@@ -37,6 +37,15 @@ Page({
     record('a', 'onLoad', { options: options || {} })
   },
   onShow: function () { record('a', 'onShow') },
+  onReady: function () { record('a', 'onReady') },
+  onResize: function (res) {
+    var info = wx.getSystemInfoSync()
+    record('a', 'onResize', {
+      size: (res && res.size) || null,
+      deviceOrientation: res && res.deviceOrientation,
+      systemInfo: { windowWidth: info.windowWidth, windowHeight: info.windowHeight },
+    })
+  },
   onHide: function () { record('a', 'onHide') },
   onUnload: function () { record('a', 'onUnload') },
   goBack: function () { wx.navigateBack() },

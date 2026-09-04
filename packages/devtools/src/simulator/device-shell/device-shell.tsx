@@ -72,6 +72,7 @@ export function DeviceShell(
           host={miniApp}
           bridgeId={bridgeId}
           platform={platform}
+          active={active}
           statusBarHeight={statusBarHeight}
           bottomInset={bottomInset}
           onMore={handleMore}

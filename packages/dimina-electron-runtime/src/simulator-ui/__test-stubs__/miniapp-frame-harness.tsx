@@ -210,15 +210,34 @@ export interface BootedShell {
   container: HTMLElement
   recorder: HostRecorder
   bridgeId: string
+  /** Re-renders the frame with a new `active` value (visible ↔ hidden host). */
+  setActive: (active: boolean) => Promise<void>
 }
 
-export async function bootShell(rootPagePath: string): Promise<BootedShell> {
+export interface BootShellOptions {
+  /** Initial `active` prop; omitted = the frame's default (visible). */
+  active?: boolean
+}
+
+export async function bootShell(rootPagePath: string, options?: BootShellOptions): Promise<BootedShell> {
   const { host, recorder } = createFakeHost(rootPagePath)
+  const makeElement = (active?: boolean) => (
+    <MiniAppFrame host={host} bridgeId={ROOT_BRIDGE_ID} {...(active === undefined ? {} : { active })} />
+  )
   let container!: HTMLElement
+  let rerender!: (ui: React.ReactElement) => void
   await act(async () => {
-    container = render(<MiniAppFrame host={host} bridgeId={ROOT_BRIDGE_ID} />).container
+    const result = render(makeElement(options?.active))
+    container = result.container
+    rerender = result.rerender
   })
-  return { container, recorder, bridgeId: ROOT_BRIDGE_ID }
+  const setActive = async (active: boolean) => {
+    await act(async () => {
+      rerender(makeElement(active))
+      await Promise.resolve()
+    })
+  }
+  return { container, recorder, bridgeId: ROOT_BRIDGE_ID, setActive }
 }
 
 export function homeButton(container: HTMLElement): Element | null {
@@ -254,6 +273,21 @@ export async function serviceNav(
       bridgeId: ROOT_BRIDGE_ID,
       name,
       params: { url: `/${pagePath}` },
+      callbacks: {},
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+}
+
+/** navigateBack carries no target url, only a pop count — drive it separately from serviceNav. */
+export async function serviceNavBack(recorder: HostRecorder, delta = 1): Promise<void> {
+  await act(async () => {
+    recorder.fire(E.NAV_ACTION, {
+      appSessionId: APP_SESSION_ID,
+      bridgeId: ROOT_BRIDGE_ID,
+      name: 'navigateBack',
+      params: { delta },
       callbacks: {},
     })
     await Promise.resolve()

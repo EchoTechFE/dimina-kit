@@ -6,7 +6,7 @@
  * ──────────────────────────────
  * The authoritative device info rides the hostEnvSnapshot (sync
  * wx.getSystemInfoSync in the service host is correct: bridge-router layers
- * the live `currentDevice` on spawn, and SetDeviceInfo pushes HostEnvUpdate).
+ * the live `currentDevice` on spawn, and setDevice pushes `hostEnvUpdate`).
  * But an ASYNC wx.getSystemInfo is forwarded by the bridge-router
  * (`forwardApiCallToSimulator`) into the simulator window, where the handler
  * in simulator-api.ts resolves metrics via `readWindowMetrics`:
@@ -255,7 +255,7 @@ describe('async getSystemInfo — follows DEVICE_CHANGE', () => {
   it('subsequent calls report the NEW device after a DEVICE_CHANGE', async () => {
     // BUG CAUGHT: the metrics are constant. After the toolbar switches the
     // device (main → DEVICE_CHANGE simulator event), the sync service-host path
-    // updates (HostEnvUpdate) but the async simulator path keeps answering the
+    // updates (`hostEnvUpdate`) but the async simulator path keeps answering the
     // same hardcoded values forever.
     const { emitDeviceChange } = installNativeHostMock(IPHONE_14)
     const miniApp = await bootMiniApp()

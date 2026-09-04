@@ -88,7 +88,10 @@ interface DiminaRenderBridge {
 | `firstRender` | Service → Render | 首屏数据 + 组件初始 props | 透明转发 |
 | `appShow` / `appHide` | Container → Service | App 前后台生命周期 | 发起（主进程 `installAppLifecycleDriver` 按主窗口 `minimize/hide`→`appHide`、`show/restore`→`appShow` 触发，驱动 `App.onShow/onHide` 与 `wx.onAppShow/onAppHide` 监听） |
 | `stackShow` / `stackHide` | Container → Service | 页面栈进出生命周期 | 声明保留（同上，不触发） |
-| `pageShow` / `pageHide` / `pageReady` / `pageUnload` / `pageScroll` / `pageResize` / `pageRouteDone` | Render → Service | 页面生命周期与交互 | 透明转发 |
+| `pageShow` / `pageHide` / `pageUnload` | 模拟器壳 → 主进程 → Service | 页面成为/离开栈顶、被销毁；壳的 reducer 是唯一的生产者，主进程经 `PAGE_LIFECYCLE` 原样转发 | 转发（`handlePageLifecycle`，同时维护 `visibleBridgeId`） |
+| `pageReady` / `pageScroll` / `pageRouteDone` | Render → Service | 页面就绪与交互 | 透明转发 |
+| `pageResize` | 主进程 → Service | `bridge.setDevice()` 几何变化（尺寸或朝向）时，向当前可见页推送新 `size`/`deviceOrientation`；无可见页或几何未变化不发 | 发起（`setDevice`） |
+| `hostEnvUpdate` | 主进程 → Service | `bridge.setDevice()` 时推送完整新 `HostEnvSnapshot`（`{ systemInfo }`）。service-host preload 在转发前先把它合并进 `__diminaSpawnContext.hostEnvSnapshot`（同步 `wx.getSystemInfoSync()` 每次调用都读这里），再交给 service 更新异步 `hostEnv`；先于同一次 `setDevice` 的 `pageResize` 发出，所以 `Page.onResize` 里读到的已是新机型 | 发起（`setDevice`） |
 | `mC` / `mR` / `mU` | Render → Service | Component create / ready / unmount | 透明转发 |
 | `t` | Render → Service | 用户事件触发自定义 method | 透明转发 |
 | `u` / `ub` | Service → Render | 单条 / 批量 setData 更新 | 透明转发 |
@@ -106,7 +109,7 @@ interface DiminaRenderBridge {
 
 容器（bridge-router）只需要参与以下角色：
 
-- **发起**：`loadResource`、`resourceLoaded`、`triggerCallback`、（可选）`print`；`pageShow/Hide/Unload` 由 DeviceShell reducer 经 `PAGE_LIFECYCLE` 转发；`appShow/Hide` 由主进程 `installAppLifecycleDriver` 按主窗口可见性触发（`stackShow/Hide` 仍不触发）
+- **发起**：`loadResource`、`resourceLoaded`、`triggerCallback`、（可选）`print`；`pageShow/Hide/Unload` 由 DeviceShell reducer 经 `PAGE_LIFECYCLE` 转发；`appShow/Hide` 由主进程 `installAppLifecycleDriver` 按主窗口可见性触发（`stackShow/Hide` 仍不触发）；`hostEnvUpdate` + （当前可见页存在且几何变化时的）`pageResize` 由 `bridge.setDevice()` 发起，前者恒先于后者
 - **接收 + 聚合**：`serviceResourceLoaded` + `renderResourceLoaded` → `resourceLoaded`
 - **接收**：`domReady`（隐藏 loading）、`renderHostReady`、`serviceHostError`、`consoleLog`、`storageChanged`、`wxmlChanged`
 - **透明转发**：所有 `target: 'service' | 'render'` 的消息按 bridgeId 路由到对应 webContents

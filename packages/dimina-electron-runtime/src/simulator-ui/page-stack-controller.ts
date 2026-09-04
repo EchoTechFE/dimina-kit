@@ -159,12 +159,16 @@ export function reduceNavigateTo(
       ? { ...state.tabStacks, [state.currentTabPath]: nextStack }
       : state.tabStacks,
   }
-  return {
-    next,
-    effects: prevTop
-      ? [{ kind: 'lifecycle', bridgeId: prevTop.bridgeId, event: 'pageHide' }]
-      : [],
-  }
+  const effects: SideEffect[] = prevTop
+    ? [{ kind: 'lifecycle', bridgeId: prevTop.bridgeId, event: 'pageHide' }]
+    : []
+  effects.push({ kind: 'lifecycle', bridgeId: newEntry.bridgeId, event: 'pageShow' })
+  return { next, effects }
+}
+
+/** The pageShow that makes the current stack top visible to service once the frame becomes active; no reducer call produces it because the frame may already have navigated while hidden. */
+export function revealTopEffects(state: ShellState): SideEffect[] {
+  return state.stack.slice(-1).map((top): SideEffect => ({ kind: 'lifecycle', bridgeId: top.bridgeId, event: 'pageShow' }))
 }
 
 export function reduceNavigateBack(
@@ -226,6 +230,7 @@ export function reduceRedirectTo(
     effects.push({ kind: 'lifecycle', bridgeId: prevTop.bridgeId, event: 'pageUnload' })
     effects.push({ kind: 'closePage', bridgeId: prevTop.bridgeId })
   }
+  effects.push({ kind: 'lifecycle', bridgeId: newEntry.bridgeId, event: 'pageShow' })
   return { next, effects }
 }
 
@@ -259,6 +264,7 @@ export function reduceReLaunch(
     effects.push({ kind: 'lifecycle', bridgeId, event: 'pageUnload' })
     effects.push({ kind: 'closePage', bridgeId })
   }
+  effects.push({ kind: 'lifecycle', bridgeId: newEntry.bridgeId, event: 'pageShow' })
   return { next, effects }
 }
 
@@ -269,7 +275,7 @@ export function reduceReLaunch(
  *   2. If the target tab already has a saved substack, restore it as the
  *      visible stack. Otherwise build a fresh single-page stack with the
  *      newly-opened tab entry passed in by the caller.
- *   3. Lifecycle: pageHide prev top, pageShow restored top.
+ *   3. Lifecycle: pageHide prev top, pageShow new top (cache-restored or fresh).
  *   4. Every substack survives, so a page held by any tab is never torn down.
  *      A page held by none — the visible page of a session with no active tab —
  *      belongs to nothing the switch preserves and gets pageUnload + closePage.
@@ -318,11 +324,8 @@ export function reduceSwitchTab(
   // preserves. Pages still held by a tab substack survive untouched: keeping
   // them is the per-tab cache semantics this shell mirrors from iOS/Harmony.
   effects.push(...teardownDropped(state, next))
-  if (!freshlyOpenedEntry) {
-    // Restored from cache — emit pageShow. (Newly-opened pages get their
-    // own lifecycle from the renderer init path.)
-    effects.push({ kind: 'lifecycle', bridgeId: newTop.bridgeId, event: 'pageShow' })
-  }
+  // The new top always gets its own pageShow, cache-restored or freshly opened.
+  effects.push({ kind: 'lifecycle', bridgeId: newTop.bridgeId, event: 'pageShow' })
   return { next, effects }
 }
 

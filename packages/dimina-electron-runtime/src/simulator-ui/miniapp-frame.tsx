@@ -33,6 +33,7 @@ import {
   mutatePageNavBar,
   navBarFromConfig,
   normalizePath,
+  revealTopEffects,
   pageBackgroundColor,
   reduceNavBar,
   type PageEntry,
@@ -100,6 +101,13 @@ export interface MiniAppFrameProps {
   statusBar?: (chrome: FrameChromeState) => ReactNode
   /** Host chrome drawn above everything — extension layers, a home indicator. */
   deviceOverlay?: ReactNode
+  /**
+   * Whether the user can see this frame. A host that mounts a frame hidden
+   * (devtools' soft reload boots the next app invisibly and swaps it in once
+   * its first page is ready) passes false until the swap; the launch page's
+   * pageShow — hence onShow/onReady — waits for that. Default true.
+   */
+  active?: boolean
 }
 
 export function MiniAppFrame({
@@ -111,6 +119,7 @@ export function MiniAppFrame({
   onMore,
   statusBar,
   deviceOverlay,
+  active = true,
 }: MiniAppFrameProps) {
   const preload = useMemo(() => host.getRenderPreloadUrl(), [host])
   const tabBarConfig = useMemo(() => host.getTabBarConfig(), [host])
@@ -154,15 +163,34 @@ export function MiniAppFrame({
   // overwrites the one before it. React state is only the render mirror.
   const stateRef = useRef<MiniAppFrameState>({ shell, tabBar })
 
+  // False until the frame is first active: a hidden frame (pending soft reload) must not tell
+  // service its pages are showing or hiding, only that they unload. Activation is one-way.
+  const visibleRef = useRef(false)
   const applySideEffects = useCallback((effects: SideEffect[]) => {
     for (const effect of effects) {
       if (effect.kind === 'lifecycle') {
+        const isVisibility = effect.event === 'pageShow' || effect.event === 'pageHide'
+        if (isVisibility && !visibleRef.current) continue
         host.notifyLifecycle(effect.bridgeId, effect.event)
       } else if (effect.kind === 'closePage') {
         host.closePage(effect.bridgeId)
       }
     }
   }, [host])
+
+  // The launch page becomes stack top the moment this frame mounts, but no
+  // reducer call produced that transition — makeInitialShellState built it
+  // directly. Without this, service never learns the launch page is visible
+  // until some later navigation restores it from a tab cache. It fires the
+  // first time the frame is `active` (a hidden pending boot waits for its
+  // promotion), exactly once per bridgeId: the ref survives later
+  // active toggles and unrelated re-renders, while a soft-reload remount (new
+  // host, new bridgeId) gets its own.
+  useEffect(() => {
+    if (!active || visibleRef.current) return
+    visibleRef.current = true
+    applySideEffects(revealTopEffects(stateRef.current.shell))
+  }, [active, applySideEffects])
 
   // ── NavigationBar dynamic updates ──────────────────────────────────────────
   useEffect(() => {

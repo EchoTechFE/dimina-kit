@@ -48,8 +48,10 @@ toolbar device picker (renderer)
     ├→ bridge caches device + DEVICE_CHANGE
     │   → simulator WCV / DeviceShell visual state
     │   → SimulatorMiniApp.currentDevice for async system-info handlers
-    ├→ safe-area service re-applies CDP override to each render-host webview
-    └→ HostEnvUpdate → service-host hostEnvSnapshot for sync handlers
+    ├→ bridge sends `hostEnvUpdate` (+ `pageResize` on a geometry change) to
+    │   each service host; its preload merges the payload into hostEnvSnapshot
+    │   for the sync handlers before service.js sees it
+    └→ safe-area service re-applies CDP override to each render-host webview
 ```
 
 - **Transport renderer → simulator.** The simulator is a top-level
@@ -169,7 +171,7 @@ reach it: upstream service intercepts `getWindowInfo` in `hostEnvResolvers`
 before bridge dispatch. In contrast, the async system-info APIs are not local
 host-env resolvers and do reach `buildSystemInfo()`.
 
-The initial snapshot and later `HostEnvUpdate` payload are built by `deviceInfoToHostEnv` in
+The initial snapshot and later `hostEnvUpdate` payload are built by `deviceInfoToHostEnv` in
 `packages/dimina-electron-runtime/src/shared/bridge-channels.ts`; it carries
 `statusBarHeight` but neither `safeAreaInsets` nor `safeArea`. The similarly
 named devtools file only re-exports that runtime module. CSS
