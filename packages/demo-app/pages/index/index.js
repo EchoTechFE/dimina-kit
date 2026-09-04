@@ -42,6 +42,27 @@ Page({
         title: 'Audio 音频测试',
         subtitle: '验证 createInnerAudioContext 的容器→service 事件桥',
         tags: ['audio', 'createInnerAudioContext', '事件桥']
+      },
+      {
+        path: '/pages/safe-area-test/safe-area-test',
+        icon: '\u{1F4D0}',
+        title: '安全区域 env() 测试',
+        subtitle: '实测 env(safe-area-inset-*) 与 wx safeArea，切机型/横竖屏自动重量',
+        tags: ['env()', 'safeArea', 'onResize']
+      },
+      {
+        path: '/pages/navbar-color-test/navbar-color-test',
+        icon: '\u{1F3A8}',
+        title: '导航栏颜色测试',
+        subtitle: 'setNavigationBarColor / Title / Loading，状态栏文字跟随 frontColor',
+        tags: ['setNavigationBarColor', 'frontColor', 'animation']
+      },
+      {
+        path: '/pages/fullscreen-test/fullscreen-test',
+        icon: '\u{1F5BC}',
+        title: '取消导航栏测试',
+        subtitle: 'navigationStyle: custom，页面顶到状态栏，自绘导航栏',
+        tags: ['navigationStyle', 'custom', 'safe-area-inset-top']
       }
     ],
     deviceInfo: {}

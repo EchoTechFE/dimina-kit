@@ -1,7 +1,24 @@
 Page({
   data: {
     statusBarHeight: 0,
-    navHeight: 0
+    navHeight: 0,
+    envTop: '-'
+  },
+
+  onReady() {
+    this.measureEnvTop()
+  },
+
+  onResize() {
+    this.measureEnvTop()
+  },
+
+  measureEnvTop() {
+    wx.createSelectorQuery().select('#env-top-probe').boundingClientRect((rect) => {
+      const envTop = rect ? `${Math.round(rect.height * 100) / 100}px` : 'n/a'
+      console.log('[Fullscreen] env(safe-area-inset-top) 实测:', envTop)
+      this.setData({ envTop })
+    }).exec()
   },
 
   onLoad() {
