@@ -3,10 +3,12 @@
  * orientation both drive a single NativeDeviceInfo push (`setNativeDeviceInfo`),
  * and simPanelWidth tracks the framed (bezel-inclusive) size for the current
  * device/orientation pair rather than the bare screen width.
+ *
+ * handleDeviceChange takes the device name directly (DevicePicker's
+ * `onSelect` is `(name: string) => void`, not a <select> ChangeEvent).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
-import type React from 'react'
 import {
   DEFAULT_DEVICE,
   DEVICE_NAMES,
@@ -24,10 +26,6 @@ vi.mock('@/shared/api', () => ({
 }))
 
 import { setNativeDeviceInfo } from '@/shared/api'
-
-function changeEvent(value: string): React.ChangeEvent<HTMLSelectElement> {
-  return { target: { value } } as React.ChangeEvent<HTMLSelectElement>
-}
 
 function lastPayload() {
   const calls = vi.mocked(setNativeDeviceInfo).mock.calls
@@ -52,7 +50,7 @@ describe('useDevice: selecting an Android device', () => {
     const pixel8 = resolveDevice(findDevice(DEVICE_NAMES.Pixel_8)!)
 
     act(() => {
-      result.current.handleDeviceChange(changeEvent(DEVICE_NAMES.Pixel_8))
+      result.current.handleDeviceChange(DEVICE_NAMES.Pixel_8)
     })
 
     const payload = lastPayload()
@@ -77,7 +75,7 @@ describe('useDevice: rotating to landscape', () => {
     const iphone15 = resolveDevice(findDevice(DEVICE_NAMES.iPhone_15)!)
 
     act(() => {
-      result.current.handleDeviceChange(changeEvent(DEVICE_NAMES.iPhone_15))
+      result.current.handleDeviceChange(DEVICE_NAMES.iPhone_15)
     })
     vi.mocked(setNativeDeviceInfo).mockClear()
 
@@ -103,7 +101,7 @@ describe('useDevice: selecting an unknown device name', () => {
     const { result } = renderHook(() => useDevice({ initialDevice: DEFAULT_DEVICE }))
 
     act(() => {
-      result.current.handleDeviceChange(changeEvent('Definitely Not A Real Phone'))
+      result.current.handleDeviceChange('Definitely Not A Real Phone')
     })
 
     expect(result.current.device).toBe(DEFAULT_DEVICE)
@@ -116,7 +114,7 @@ describe('useDevice: simPanelWidth follows the framed (bezel-inclusive) size', (
     const pixel8Profile = findDevice(DEVICE_NAMES.Pixel_8)!
 
     act(() => {
-      result.current.handleDeviceChange(changeEvent(DEVICE_NAMES.Pixel_8))
+      result.current.handleDeviceChange(DEVICE_NAMES.Pixel_8)
     })
 
     expect(result.current.simPanelWidth).toBe(computeSimPanelWidth(frameOuterSize(pixel8Profile, 'portrait').width))

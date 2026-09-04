@@ -32,7 +32,7 @@ export interface DeviceHookResult {
   zoom: ZoomSetting
   simPanelWidth: number
   setSimPanelWidth: (width: number) => void
-  handleDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
+  handleDeviceChange: (name: string) => void
   handleOrientationChange: (orientation: Orientation) => void
   handleZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   /**
@@ -121,8 +121,8 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
   }, [])
 
   const handleDeviceChange = useCallback(
-    (e: React.ChangeEvent<HTMLSelectElement>) => {
-      const d = findDevice(e.target.value) ?? DEFAULT_DEVICE
+    (name: string) => {
+      const d = findDevice(name) ?? DEFAULT_DEVICE
       setDevice(d)
       pushDeviceInfo(d, orientation)
       // React layout state is the single width authority: the panel re-renders
