@@ -34,6 +34,7 @@ import { UpdateManager } from '../services/update/index.js'
 import { toDisposable, DisposableRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
 import { IpcRegistry } from '../utils/ipc-registry.js'
 import { createLauncherWindow, type ProjectRef, type ProjectWindow } from './project-window.js'
+import { createProjectListSurface } from './project-list-surface.js'
 import { createWorkbenchWindowManager } from './workbench-window.js'
 import { registerModuleIpc, setupWindowModules } from './workbench-modules.js'
 import { registerOpenProjectWindowIpc } from './open-project-ipc.js'
@@ -48,7 +49,7 @@ import {
   setActiveMcpWindowResolver,
 } from '../services/mcp/index.js'
 import { setupAutomation, setupMcp } from './servers.js'
-import { enableDevRendererAutoReload, revealWindow } from './window-events.js'
+import { enableDevRendererAutoReload } from './window-events.js'
 import { wireMainWindowEvents } from '../windows/main-window/index.js'
 
 export { setupWindowModules } from './workbench-modules.js'
@@ -234,6 +235,7 @@ export async function createDevtoolsRuntime(
 
   const launcher = createLauncherWindow({ config, rendererDir, appServices, router })
   const { window: mainWindow, context } = launcher
+  const projectList = createProjectListSurface({ window: mainWindow, context })
 
   registerWorkbenchIpc(config, router, context, mainWindow, appRegistry)
   // No `setupWindowModules` here: the only per-window module is the simulator's
@@ -320,7 +322,7 @@ export async function createDevtoolsRuntime(
       // open. The list window may be hidden behind it (see the close handler
       // below) — leaving it hidden strands the user with a running app and
       // nothing on screen.
-      if (workbenchWindows.list().every((pw) => pw === closing)) revealWindow(mainWindow)
+      if (workbenchWindows.list().every((pw) => pw === closing)) projectList.revealProjectList()
     },
   })
 
@@ -332,7 +334,7 @@ export async function createDevtoolsRuntime(
   const activeProjectContext = (): WorkbenchContext => workbenchWindows.activeContext() ?? context
   setActiveMcpWindowResolver(() => workbenchWindows.activeContext())
   appRegistry.add(toDisposable(() => setActiveMcpWindowResolver(() => null)))
-  installMenu(config, mainWindow, activeProjectContext)
+  installMenu(config, mainWindow, activeProjectContext, projectList.revealProjectList)
 
   appRegistry.add(registerOpenProjectWindowIpc(router, (project) => workbenchWindows.open(project)))
 
@@ -388,7 +390,7 @@ export async function createDevtoolsRuntime(
   if (config.updateChecker) {
     instance.updateManager = new UpdateManager({
       checker: config.updateChecker,
-      showUpdatePanel: (info) => context.views.showUpdateDialog(info),
+      showUpdatePanel: (info) => projectList.showUpdate(info),
       notifyDownloadProgress: (percent) => context.views.notifyUpdateDownloadProgress(percent),
       hideUpdatePanel: () => context.views.hideUpdateDialog(),
       senderPolicy: context.senderPolicy,
@@ -421,8 +423,9 @@ export async function createDevtoolsRuntime(
       // With projects still open, this window must survive its own close
       // button: it is the only way back to the project list, and the
       // app-level IPC it registered cannot be registered again on a
-      // replacement window. Hide it — every path back calls `revealWindow`,
-      // including the last project window closing.
+      // replacement window. Hide it — every path back calls
+      // `projectList.revealProjectList()`, including the last project window
+      // closing.
       if (workbenchWindows.list().length > 0) {
         e.preventDefault()
         mainWindow.hide()
@@ -440,7 +443,7 @@ export async function createDevtoolsRuntime(
     if (mainWindow.isDestroyed()) return
     if (mainWindow.isVisible()) return
     if (workbenchWindows.list().some((pw) => !pw.window.isDestroyed() && pw.window.isVisible())) return
-    revealWindow(mainWindow)
+    projectList.revealProjectList()
   }
   app.on('activate', onActivate)
   appRegistry.add(toDisposable(() => { app.removeListener('activate', onActivate) }))

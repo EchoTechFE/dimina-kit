@@ -3,7 +3,6 @@ import type { MenuContext, WorkbenchAppConfig } from '../../shared/types.js'
 import type { WorkspaceService } from '../services/workspace/workspace-service.js'
 import type { RendererNotifier } from '../services/notifications/renderer-notifier.js'
 import { installAppMenu } from '../menu/index.js'
-import { revealWindow } from './window-events.js'
 
 /** Narrow view of the context fields the menu surface closes over. */
 export interface MenuHostContext {
@@ -27,7 +26,7 @@ export interface MenuHostContext {
  */
 function toMenuContext(
   activeContext: () => MenuHostContext,
-  listWindow: BrowserWindow,
+  revealProjectList: () => void,
 ): MenuContext {
   return {
     get appName() { return activeContext().appName },
@@ -43,12 +42,11 @@ function toMenuContext(
       projectStatus: (payload) => activeContext().notify.projectStatus(payload),
       // A project opens in its own window, so "back to the project list" is
       // no longer a screen change inside one window — it brings the list
-      // window forward. The notify half still fires: the list refreshes from
-      // whatever changed while the user was in a workbench window.
-      windowNavigateBack: () => {
-        revealWindow(listWindow)
-        activeContext().notify.windowNavigateBack()
-      },
+      // window forward. That window owns its own context, which may not be
+      // `activeContext()` (a project window can be the active one), so this
+      // routes through the injected surface instead of notifying whatever is
+      // currently active.
+      windowNavigateBack: () => revealProjectList(),
     },
   }
 }
@@ -57,11 +55,12 @@ export function installMenu(
   config: WorkbenchAppConfig,
   mainWindow: BrowserWindow,
   activeContext: () => MenuHostContext,
+  revealProjectList: () => void,
 ): void {
   // Menu: use host-provided builder or fall back to default. Both consume the
   // same narrow MenuContext, so the built-in menu proves the hand-written
   // contract covers the real internal consumption.
-  const menuContext = toMenuContext(activeContext, mainWindow)
+  const menuContext = toMenuContext(activeContext, revealProjectList)
   if (config.menuBuilder) {
     config.menuBuilder(mainWindow, menuContext)
   } else {
