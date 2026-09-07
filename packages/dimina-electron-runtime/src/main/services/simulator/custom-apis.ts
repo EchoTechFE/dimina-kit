@@ -1,10 +1,18 @@
-export type SimulatorApiHandler = (params: unknown) => unknown | Promise<unknown>
+/** Main-process invocation metadata, supplied by the owning host context. */
+export interface SimulatorApiCallContext {
+  readonly projectPath: string | null
+}
+
+export type SimulatorApiHandler = (
+  params: unknown,
+  context?: SimulatorApiCallContext,
+) => unknown | Promise<unknown>
 
 export interface SimulatorApiRegistry {
   register(name: string, handler: SimulatorApiHandler): () => void
   list(): string[]
   has(name: string): boolean
-  invoke(name: string, params: unknown): Promise<unknown>
+  invoke(name: string, params: unknown, context?: SimulatorApiCallContext): Promise<unknown>
   clear(): void
 }
 
@@ -67,10 +75,10 @@ export function createSimulatorApiRegistry(): SimulatorApiRegistry {
     has(name) {
       return handlers.has(name)
     },
-    async invoke(name, params) {
+    async invoke(name, params, context) {
       const handler = handlers.get(name)
       if (!handler) throw new Error(`Simulator API "${name}" is not registered`)
-      return await handler(params)
+      return await (context === undefined ? handler(params) : handler(params, context))
     },
     clear() {
       handlers.clear()

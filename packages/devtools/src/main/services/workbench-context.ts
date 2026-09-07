@@ -208,9 +208,9 @@ export interface WorkbenchContext extends RuntimeContext {
    * `instance.registerSimulatorApi`; read by the simulator IPC handlers.
    *
    * Supplied by {@link AppServices} when the caller has one, and therefore
-   * shared across contexts: the host registers each handler once, so a window
-   * opened afterwards must still answer those `wx.*` calls. A context built
-   * without app services (focused unit tests) gets its own registry.
+   * registrations are shared across contexts. The invocation facade supplies
+   * THIS window's project path, independently of focus, without changing the
+   * app-owned handlers or their lifetime.
    */
   simulatorApis: SimulatorApiRegistry
 
@@ -407,7 +407,13 @@ export function createWorkbenchContext(opts: CreateContextOptions): WorkbenchCon
   ctx.registry.add(() => ctx.cdpSessionBroker.dispose())
   ctx.trustedWindowSenderIds =
     opts.appServices?.trustedWindowSenderIds ?? new Map<number, number>()
-  ctx.simulatorApis = opts.appServices?.simulatorApis ?? createSimulatorApiRegistry()
+  const simulatorApis = opts.appServices?.simulatorApis ?? createSimulatorApiRegistry()
+  ctx.simulatorApis = {
+    ...simulatorApis,
+    invoke: (name, params) => simulatorApis.invoke(name, params, {
+      projectPath: ctx.workspace.hasActiveSession() ? ctx.workspace.getProjectPath() : null,
+    }),
+  }
   ctx.simulatorUiExtensions = createSimulatorUiExtensionRegistry()
   ctx.registry.add(() => ctx.simulatorUiExtensions.clear())
   ctx.windows = createWindowService(opts.mainWindow)
