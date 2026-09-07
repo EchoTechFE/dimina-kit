@@ -38,14 +38,29 @@ const stubs = vi.hoisted(() => {
     const listeners: EventBag = {}
     const api = {
       listeners,
-      on(event: string, fn: AnyFn) { (listeners[event] ??= new Set()).add(fn); return api },
-      once(event: string, fn: AnyFn) {
-        const wrap: AnyFn = (...a: unknown[]) => { listeners[event]?.delete(wrap); return fn(...a) }
-        ;(listeners[event] ??= new Set()).add(wrap); return api
+      on(event: string, fn: AnyFn) {
+        ;(listeners[event] ??= new Set()).add(fn)
+        return api
       },
-      off(event: string, fn: AnyFn) { listeners[event]?.delete(fn); return api },
-      removeListener(event: string, fn: AnyFn) { listeners[event]?.delete(fn); return api },
-      emit(event: string, ...a: unknown[]) { for (const fn of [...(listeners[event] ?? [])]) fn(...a) },
+      once(event: string, fn: AnyFn) {
+        const wrap: AnyFn = (...a: unknown[]) => {
+          listeners[event]?.delete(wrap)
+          return fn(...a)
+        }
+        ;(listeners[event] ??= new Set()).add(wrap)
+        return api
+      },
+      off(event: string, fn: AnyFn) {
+        listeners[event]?.delete(fn)
+        return api
+      },
+      removeListener(event: string, fn: AnyFn) {
+        listeners[event]?.delete(fn)
+        return api
+      },
+      emit(event: string, ...a: unknown[]) {
+        for (const fn of [...(listeners[event] ?? [])]) fn(...a)
+      },
     }
     return api
   }
@@ -59,10 +74,14 @@ const stubs = vi.hoisted(() => {
       ...em,
       id: nextWcId++,
       destroyed: false,
-      isDestroyed() { return this.destroyed },
+      isDestroyed() {
+        return this.destroyed
+      },
       getURL: () => 'about:blank',
       getType: () => 'window',
-      send: vi.fn((channel: string, payload: unknown) => { sent.push({ channel, payload }) }),
+      send: vi.fn((channel: string, payload: unknown) => {
+        sent.push({ channel, payload })
+      }),
       executeJavaScript: vi.fn(() => Promise.resolve(undefined)),
       openDevTools: vi.fn(),
       sentMessages: sent,
@@ -77,8 +96,12 @@ const stubs = vi.hoisted(() => {
       ...em,
       webContents: makeWebContents(),
       destroyed: false,
-      isDestroyed() { return this.destroyed },
-      close: vi.fn(function (this: { destroyed: boolean }) { this.destroyed = true }),
+      isDestroyed() {
+        return this.destroyed
+      },
+      close: vi.fn(function (this: { destroyed: boolean }) {
+        this.destroyed = true
+      }),
       loadURL: vi.fn(() => Promise.resolve()),
       loadFile: vi.fn(() => Promise.resolve()),
     }
@@ -91,7 +114,15 @@ const stubs = vi.hoisted(() => {
     nextWcId = 8000
   }
 
-  return { onListeners, invokeHandlers, wcById, makeEmitter, makeWebContents, makeBrowserWindow, reset }
+  return {
+    onListeners,
+    invokeHandlers,
+    wcById,
+    makeEmitter,
+    makeWebContents,
+    makeBrowserWindow,
+    reset,
+  }
 })
 
 vi.mock('electron', () => {
@@ -99,16 +130,26 @@ vi.mock('electron', () => {
 
   const ipcMain = {
     on: vi.fn((channel: string, fn: AnyFn) => {
-      ;(stubs.onListeners.get(channel) ?? stubs.onListeners.set(channel, new Set()).get(channel)!).add(fn)
+      ;(
+        stubs.onListeners.get(channel) ?? stubs.onListeners.set(channel, new Set()).get(channel)!
+      ).add(fn)
     }),
     removeListener: vi.fn((channel: string, fn: AnyFn) => {
       stubs.onListeners.get(channel)?.delete(fn)
     }),
-    handle: vi.fn((channel: string, fn: AnyFn) => { stubs.invokeHandlers.set(channel, fn) }),
-    removeHandler: vi.fn((channel: string) => { stubs.invokeHandlers.delete(channel) }),
+    handle: vi.fn((channel: string, fn: AnyFn) => {
+      stubs.invokeHandlers.set(channel, fn)
+    }),
+    removeHandler: vi.fn((channel: string) => {
+      stubs.invokeHandlers.delete(channel)
+    }),
   }
 
-  const protocolStub = { handle: vi.fn(), unhandle: vi.fn(), registerSchemesAsPrivileged: vi.fn() }
+  const protocolStub = {
+    handle: vi.fn(),
+    unhandle: vi.fn(),
+    registerSchemesAsPrivileged: vi.fn(),
+  }
   const sessionStub = {
     fromPartition: vi.fn(() => ({
       webRequest: { onBeforeSendHeaders: vi.fn(), onHeadersReceived: vi.fn() },
@@ -120,12 +161,23 @@ vi.mock('electron', () => {
 
   return {
     ipcMain,
-    app: { isPackaged: true, getLocale: () => 'en-US', getPath: vi.fn(() => '/tmp/dimina-test-userdata') },
+    app: {
+      isPackaged: true,
+      getLocale: () => 'en-US',
+      getPath: vi.fn(() => '/tmp/dimina-test-userdata'),
+    },
     BrowserWindow: class {},
-    WebContentsView: class { webContents = {}; setBounds = vi.fn(); setBackgroundColor = vi.fn() },
+    WebContentsView: class {
+      webContents = {}
+      setBounds = vi.fn()
+      setBackgroundColor = vi.fn()
+    },
     protocol: protocolStub,
     session: sessionStub,
-    webContents: { fromId: vi.fn(() => null), getAllWebContents: vi.fn(() => []) },
+    webContents: {
+      fromId: vi.fn(() => null),
+      getAllWebContents: vi.fn(() => []),
+    },
     nativeTheme: { themeSource: 'system', on: vi.fn() },
     default: {},
   }
@@ -142,7 +194,13 @@ vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
 }))
 
 import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
-import type { ApiResponsePayload, MessageEnvelope, ServiceInvokePayload, SpawnRequest, SpawnResult } from '../../shared/bridge-channels.js'
+import type {
+  ApiResponsePayload,
+  MessageEnvelope,
+  ServiceInvokePayload,
+  SpawnRequest,
+  SpawnResult,
+} from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
@@ -172,14 +230,22 @@ function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     connections: createConnectionRegistry(),
-    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
-    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
+    simulatorApis: {
+      has: (_name: string) => false,
+      invoke: async () => ({}),
+      list: () => [],
+    },
+    windows: {
+      mainWindow: { webContents: simulatorWc, isDestroyed: () => false },
+    },
     workspace: { getSession: () => undefined },
   } as unknown as WorkbenchContext
   return { ctx, simulatorWc }
 }
 
-async function spawnSession(simulatorWc: MockWc): Promise<{ result: SpawnResult; serviceWc: MockWc }> {
+async function spawnSession(
+  simulatorWc: MockWc,
+): Promise<{ result: SpawnResult; serviceWc: MockWc }> {
   const handle = stubs.invokeHandlers.get(C.SPAWN)
   if (!handle) throw new Error('SPAWN handler not registered')
   const req: SpawnRequest = {
@@ -197,16 +263,21 @@ async function spawnSession(simulatorWc: MockWc): Promise<{ result: SpawnResult;
   return { result, serviceWc: serviceWc as unknown as MockWc }
 }
 
-/** Forward an ordinary (non-persistent) `request` invokeAPI from the service. */
-function forwardRequestCall(serviceWc: MockWc, callbacks: {
-  success?: unknown; complete?: unknown; fail?: unknown
-}): void {
+/** Forward an ordinary (non-persistent) `downloadFile` invokeAPI from the service. */
+function forwardDownloadFileCall(
+  serviceWc: MockWc,
+  callbacks: {
+    success?: unknown
+    complete?: unknown
+    fail?: unknown
+  },
+): void {
   const msg: MessageEnvelope = {
     type: 'invokeAPI',
     target: 'container',
     body: {
-      name: 'request',
-      params: { url: 'https://example.com/api', ...callbacks },
+      name: 'downloadFile',
+      params: { url: 'https://example.com/file.bin', ...callbacks },
     },
   }
   const payload: ServiceInvokePayload = { msg }
@@ -228,11 +299,20 @@ function triggerCallbacks(serviceWc: MockWc): Array<{ id: unknown; args: unknown
     .map(m => m.body as { id: unknown; args: unknown })
 }
 
-async function setup(): Promise<{ ctx: WorkbenchContext; simulatorWc: MockWc; serviceWc: MockWc; requestId: string }> {
+async function setup(): Promise<{
+  ctx: WorkbenchContext
+  simulatorWc: MockWc
+  serviceWc: MockWc
+  requestId: string
+}> {
   const { ctx, simulatorWc } = makeCtx()
   installBridgeRouter(ctx)
   const { serviceWc } = await spawnSession(simulatorWc)
-  forwardRequestCall(serviceWc, { success: 'svc-success', complete: 'svc-complete', fail: 'svc-fail' })
+  forwardDownloadFileCall(serviceWc, {
+    success: 'svc-success',
+    complete: 'svc-complete',
+    fail: 'svc-fail',
+  })
   const requestId = forwardedRequestId(simulatorWc)
   return { ctx, simulatorWc, serviceWc, requestId }
 }
@@ -241,7 +321,12 @@ describe('bridge-router — handleApiResponse fail path transparently forwards `
   it('an ok:false response carries every `result` field (e.g. errno) through to the fail callback args', async () => {
     const { simulatorWc, serviceWc, requestId } = await setup()
 
-    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: false, result: { errMsg: '', errno: 5 } }
+    const resp: ApiResponsePayload = {
+      appSessionId: 'demo-app',
+      requestId,
+      ok: false,
+      result: { errMsg: '', errno: 5 },
+    }
     emitOn(C.API_RESPONSE, simulatorWc, resp)
 
     const cbs = triggerCallbacks(serviceWc)
@@ -256,7 +341,13 @@ describe('bridge-router — handleApiResponse fail path transparently forwards `
     // (an h2 response with no statusText stringifies to errMsg: '').
     const { simulatorWc, serviceWc, requestId } = await setup()
 
-    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: false, errMsg: '', result: { errMsg: '', errno: 5 } }
+    const resp: ApiResponsePayload = {
+      appSessionId: 'demo-app',
+      requestId,
+      ok: false,
+      errMsg: '',
+      result: { errMsg: '', errno: 5 },
+    }
     emitOn(C.API_RESPONSE, simulatorWc, resp)
 
     const cbs = triggerCallbacks(serviceWc)
@@ -264,7 +355,7 @@ describe('bridge-router — handleApiResponse fail path transparently forwards `
     const args = failFire!.args as { errMsg?: string; errno?: number }
     expect(typeof args.errMsg).toBe('string')
     expect(args.errMsg).not.toBe('')
-    expect(args.errMsg).toBe('request:fail')
+    expect(args.errMsg).toBe('downloadFile:fail')
     expect(args.errno).toBe(5)
   })
 })
@@ -274,7 +365,10 @@ describe('bridge-router — handleApiResponse fail path errMsg resolution priori
     const { simulatorWc, serviceWc, requestId } = await setup()
 
     const resp: ApiResponsePayload = {
-      appSessionId: 'demo-app', requestId, ok: false, errMsg: 'top-level failure',
+      appSessionId: 'demo-app',
+      requestId,
+      ok: false,
+      errMsg: 'top-level failure',
       result: { errMsg: 'ignored-nested-message', errno: 1 },
     }
     emitOn(C.API_RESPONSE, simulatorWc, resp)
@@ -291,7 +385,9 @@ describe('bridge-router — handleApiResponse fail path errMsg resolution priori
     const { simulatorWc, serviceWc, requestId } = await setup()
 
     const resp: ApiResponsePayload = {
-      appSessionId: 'demo-app', requestId, ok: false,
+      appSessionId: 'demo-app',
+      requestId,
+      ok: false,
       result: { errMsg: 'nested failure reason' },
     }
     emitOn(C.API_RESPONSE, simulatorWc, resp)
@@ -304,13 +400,18 @@ describe('bridge-router — handleApiResponse fail path errMsg resolution priori
   it('no usable errMsg anywhere falls back to `${name}:fail`, and any surviving result fields still pass through', async () => {
     const { simulatorWc, serviceWc, requestId } = await setup()
 
-    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: false, result: { errno: 9 } }
+    const resp: ApiResponsePayload = {
+      appSessionId: 'demo-app',
+      requestId,
+      ok: false,
+      result: { errno: 9 },
+    }
     emitOn(C.API_RESPONSE, simulatorWc, resp)
 
     const cbs = triggerCallbacks(serviceWc)
     const failFire = cbs.find(c => c.id === 'svc-fail')
     const args = failFire!.args as { errMsg?: string; errno?: number }
-    expect(args.errMsg).toBe('request:fail')
+    expect(args.errMsg).toBe('downloadFile:fail')
     expect(args.errno).toBe(9)
   })
 })
@@ -319,7 +420,12 @@ describe('bridge-router — handleApiResponse fail path complete parity', () => 
   it('complete fires with the identical object the fail callback received', async () => {
     const { simulatorWc, serviceWc, requestId } = await setup()
 
-    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: false, result: { errno: 5 } }
+    const resp: ApiResponsePayload = {
+      appSessionId: 'demo-app',
+      requestId,
+      ok: false,
+      result: { errno: 5 },
+    }
     emitOn(C.API_RESPONSE, simulatorWc, resp)
 
     const cbs = triggerCallbacks(serviceWc)
@@ -334,7 +440,12 @@ describe('bridge-router — handleApiResponse ok:true path is unaffected (regres
   it('an ok:true response still delivers `result` unchanged to the success callback', async () => {
     const { simulatorWc, serviceWc, requestId } = await setup()
 
-    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: true, result: { data: { a: 1 }, statusCode: 200 } }
+    const resp: ApiResponsePayload = {
+      appSessionId: 'demo-app',
+      requestId,
+      ok: true,
+      result: { data: { a: 1 }, statusCode: 200 },
+    }
     emitOn(C.API_RESPONSE, simulatorWc, resp)
 
     const cbs = triggerCallbacks(serviceWc)

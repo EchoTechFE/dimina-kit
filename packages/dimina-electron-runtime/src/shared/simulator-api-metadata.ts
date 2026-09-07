@@ -16,12 +16,14 @@
  * truth, consumed by `bridge-router` (skip the one-shot timeout, keep-alive
  * responses) and `run-api-async` (no premature settle, re-fire on every event).
  */
-import { MAX_TIMEOUT_MS, resolveTimeoutBudgetMs } from './request-core.js'
+import { MAX_TIMEOUT_MS, resolveTimeoutBudgetMs } from "./request-core.js";
 
-export const PERSISTENT_SIMULATOR_APIS: ReadonlySet<string> = new Set(['audioListen'])
+export const PERSISTENT_SIMULATOR_APIS: ReadonlySet<string> = new Set([
+  "audioListen",
+]);
 
 export function isPersistentSimulatorApi(name: string): boolean {
-  return PERSISTENT_SIMULATOR_APIS.has(name)
+  return PERSISTENT_SIMULATOR_APIS.has(name);
 }
 
 /**
@@ -30,16 +32,15 @@ export function isPersistentSimulatorApi(name: string): boolean {
  * handler answers when the network answers, not within a fixed router window.
  */
 export const NETWORK_BUDGET_SIMULATOR_APIS: ReadonlySet<string> = new Set([
-  'request',
-  'downloadFile',
-  'uploadFile',
-])
+  "downloadFile",
+  "uploadFile",
+]);
 
 /**
  * Flat watchdog window for forwarded one-shot calls whose handler is expected
  * to answer promptly; it guards against a missing handler / dead seam.
  */
-export const API_CALL_WATCHDOG_MS = 5_000
+export const API_CALL_WATCHDOG_MS = 5_000;
 
 /**
  * How long bridge-router's one-shot "no handler" watchdog waits before
@@ -56,10 +57,10 @@ export function apiCallWatchdogMs(
   name: string,
   params: Record<string, unknown> | undefined,
 ): number {
-  if (!NETWORK_BUDGET_SIMULATOR_APIS.has(name)) return API_CALL_WATCHDOG_MS
+  if (!NETWORK_BUDGET_SIMULATOR_APIS.has(name)) return API_CALL_WATCHDOG_MS;
   // resolveTimeoutBudgetMs rejects non-finite/oversized caller timeouts, and
   // the final clamp keeps budget+grace inside setTimeout's range — an
   // overflowing delay would wrap to ~1ms and fire the watchdog immediately.
-  const budget = resolveTimeoutBudgetMs(params?.timeout)
-  return Math.min(budget + API_CALL_WATCHDOG_MS, MAX_TIMEOUT_MS)
+  const budget = resolveTimeoutBudgetMs(params?.timeout);
+  return Math.min(budget + API_CALL_WATCHDOG_MS, MAX_TIMEOUT_MS);
 }

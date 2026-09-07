@@ -1,43 +1,15 @@
 /**
- * E2E (native-host): the right-panel Chrome DevTools "Network" panel can load a
- * response body for a mini-app `wx.request` call.
- *
- * Topology: `wx.request` issued by the service host is forwarded (via the
- * shared request-core / bridge-router — see request-statuscode.spec.ts) to a
- * real fetch executed in the SIMULATOR WebContents (the top-level DeviceShell
- * WebContentsView). The main process attaches a CDP debugger session to that
- * simulator wc, observes its `Network.*` events, rewrites each `requestId` to
- * a `dimina:sim:`-prefixed virtual id (so it can never collide with an id the
- * front-end's own natively-attached target — the service host — produces),
- * and re-injects the rewritten event into the right-panel DevTools front-end
- * via `window.DevToolsAPI.dispatchMessage`.
- *
- * That first leg (events arriving with a `dimina:sim:` id) already works and
- * is pinned by the first test below. The CONTRACT this spec exists to guard
- * is the second leg: when the user opens the Response tab for such a request,
- * the front-end sends `Network.getResponseBody({requestId: "dimina:sim:…"})`
- * back to whatever target `InspectorFrontendHost.sendMessageToBackend`
- * natively talks to (the service host's own CDP session). That target has
- * never heard of a `dimina:sim:` id — it belongs to a DIFFERENT wc's CDP
- * session — so the naive round-trip resolves with an error ("No resource
- * with given identifier found"), which is the regression this spec fails
- * red on. The fix intercepts `getResponseBody` calls for `dimina:sim:` ids in
- * the wrapped `sendMessageToBackend`, answers from a main-process prefetch
- * cache keyed by the virtual id, and replies through the same
- * `DevToolsAPI.dispatchMessage` channel the real backend would use.
- *
- * We can't read the closed-shadow Network panel UI, so — mirroring
- * native-host-devtools-elements.spec.ts / native-host-devtools-console.spec.ts
- * — we drive and observe the front-end's own CDP wire protocol directly:
- * wrap `DevToolsAPI.dispatchMessage` to capture every `Network.*` event and
- * every id-bearing reply, then issue the same `getResponseBody` command a
- * real Response-tab click would send.
+ * Real Electron Network round-trip: native wx.request emits dimina:http: events;
+ * renderer image loads retain dimina:sim: ids. The actual DevTools frontend
+ * sends body commands through its installed outbound hook and receives cached
+ * bytes through DevToolsAPI, exactly as its Response and Payload tabs do.
  */
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'
 import http from 'http'
 import type { AddressInfo } from 'net'
 import path from 'path'
 import fs from 'fs'
+import { gzipSync } from 'node:zlib'
 import { fileURLToPath } from 'url'
 import {
   openProjectInUI,
@@ -63,12 +35,13 @@ interface CapturedCdpMessage {
   id?: number
   method?: string
   params?: { requestId?: string; request?: { url?: string } }
-  result?: { body?: string; base64Encoded?: boolean }
+  result?: { body?: string; base64Encoded?: boolean; postData?: string }
   error?: { message?: string }
 }
 
 let server: http.Server
 let baseUrl: string
+let preflightCount = 0
 
 // A minimal valid 1x1 transparent PNG, hardcoded so the /img route needs no
 // on-disk fixture. Its first bytes carry the PNG magic number (0x89 'P' 'N' 'G')
@@ -84,15 +57,28 @@ test.beforeAll(async () => {
       'Access-Control-Allow-Headers': '*',
     }
     if (req.method === 'OPTIONS') {
-      res.writeHead(204, cors)
+      preflightCount++
+      res.writeHead(405)
       res.end()
       return
     }
     const url = new URL(req.url ?? '/', 'http://127.0.0.1')
+    if (url.pathname === '/redirect') {
+      res.writeHead(302, { location: `/compressed${url.search}` }); res.end(); return
+    }
+    if (url.pathname === '/compressed') {
+      res.writeHead(200, { 'content-type': 'application/json', 'content-encoding': 'gzip' })
+      res.end(gzipSync(JSON.stringify({ marker: url.searchParams.get('marker') }))); return
+    }
+    if (url.pathname === '/wait') return
     if (url.pathname === '/echo') {
       const marker = url.searchParams.get('marker') ?? ''
-      res.writeHead(200, { ...cors, 'Content-Type': 'application/json' })
-      res.end(JSON.stringify({ marker }))
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ marker, body: Buffer.concat(chunks).toString(), method: req.method, origin: req.headers.origin ?? null, referer: req.headers.referer ?? null }))
+      })
       return
     }
     if (url.pathname === '/img') {
@@ -233,11 +219,11 @@ async function readCaptured(app: ElectronApplication): Promise<CapturedCdpMessag
   return out ?? []
 }
 
-function findRequestWillBeSent(events: CapturedCdpMessage[], urlSubstring: string): CapturedCdpMessage | undefined {
+function findRequestWillBeSent(events: CapturedCdpMessage[], urlSubstring: string, prefix = 'dimina:sim:'): CapturedCdpMessage | undefined {
   return events.find((m) =>
     m.method === 'Network.requestWillBeSent'
     && typeof m.params?.requestId === 'string'
-    && m.params.requestId.startsWith('dimina:sim:')
+    && m.params.requestId.startsWith(prefix)
     && typeof m.params?.request?.url === 'string'
     && m.params.request.url.includes(urlSubstring),
   )
@@ -296,7 +282,7 @@ test.describe('native-host DevTools Network panel loads a wx.request response bo
     await shutdownApp(handle)
   })
 
-  test('a wx.request fired in the service host is forwarded to the front-end with a dimina:sim: request id', async () => {
+  test('a wx.request fired in the service host is forwarded to the front-end with a dimina:http: request id', async () => {
     const { app } = handle!
     requestToken = `net-body-${Date.now()}`
     const url = `${baseUrl}/echo?marker=${requestToken}`
@@ -306,7 +292,7 @@ test.describe('native-host DevTools Network panel loads a wx.request response bo
     const requestEvent = await pollUntil(
       async () => {
         const events = await readCaptured(app)
-        return findRequestWillBeSent(events, requestToken)
+        return findRequestWillBeSent(events, requestToken, 'dimina:http:')
       },
       (evt) => !!evt,
       20000,
@@ -314,7 +300,7 @@ test.describe('native-host DevTools Network panel loads a wx.request response bo
     )
     expect(
       requestEvent,
-      'Network.requestWillBeSent for the request should reach the front-end with a dimina:sim: requestId',
+      'Network.requestWillBeSent for the request should reach the front-end with a dimina:http: requestId',
     ).toBeTruthy()
     capturedRequestId = requestEvent!.params!.requestId!
 
@@ -335,12 +321,13 @@ test.describe('native-host DevTools Network panel loads a wx.request response bo
     const outcome = await outcomePromise
     expect(outcome.path, `wx.request should resolve via success: ${JSON.stringify(outcome)}`).toBe('success')
     expect(outcome.statusCode).toBe(200)
-    expect(outcome.data).toEqual({ marker: requestToken })
+    const appId = JSON.parse(fs.readFileSync(path.join(FIXTURE_DIR, 'project.config.json'), 'utf8')).appid
+    expect(outcome.data).toEqual({ marker: requestToken, body: '', method: 'GET', origin: null, referer: `https://servicewechat.com/${appId}/develop/page-frame.html` })
   })
 
-  test('Network.getResponseBody for that dimina:sim: id resolves with the real response body, not an error', async () => {
+  test('Network.getResponseBody for that dimina:http: id resolves with the real response body, not an error', async () => {
     const { app } = handle!
-    expect(capturedRequestId, 'the previous test must have captured a dimina:sim: requestId').toBeTruthy()
+    expect(capturedRequestId, 'the previous test must have captured a dimina:http: requestId').toBeTruthy()
 
     await evalInDevtools(
       app,
@@ -367,7 +354,7 @@ test.describe('native-host DevTools Network panel loads a wx.request response bo
     ).toBeTruthy()
     expect(
       reply?.error,
-      `Network.getResponseBody for a dimina:sim: id must not error; got: ${JSON.stringify(reply?.error)}`,
+      `Network.getResponseBody for a dimina:http: id must not error; got: ${JSON.stringify(reply?.error)}`,
     ).toBeUndefined()
     expect(
       reply?.result,
@@ -379,6 +366,65 @@ test.describe('native-host DevTools Network panel loads a wx.request response bo
       decoded,
       `decoded response body should contain the request token; got: ${decoded}`,
     ).toContain(requestToken)
+  })
+
+  test('a custom-header POST has no preflight and its Payload is readable after completion', async () => {
+    const { app } = handle!
+    const marker = `post-body-${Date.now()}`
+    const url = `${baseUrl}/echo?marker=${marker}`
+    const outcome = await evalInWebContentsByUrl<RequestOutcome>(app, 'service.html', `new Promise((resolve) => {
+      wx.request({ url: ${JSON.stringify(url)}, method: 'POST', header: { 'x-native-check': 'yes' }, data: { value: 42 },
+        success: (r) => resolve({ path: 'success', statusCode: r.statusCode, data: r.data }),
+        fail: (e) => resolve({ path: 'fail', errMsg: e.errMsg }) })
+    })`)
+    expect(outcome).toMatchObject({ path: 'success', statusCode: 200, data: { body: '{"value":42}', origin: null, method: 'POST' } })
+    expect(preflightCount).toBe(0)
+    const request = await pollUntil(async () => findRequestWillBeSent(await readCaptured(app), marker, 'dimina:http:'), (value) => !!value, 20000, 300)
+    expect(request).toBeTruthy()
+    const id = 424244
+    await evalInDevtools(app, `globalThis.InspectorFrontendHost.sendMessageToBackend(${JSON.stringify(JSON.stringify({ id, method: 'Network.getRequestPostData', params: { requestId: request!.params!.requestId } }))})`)
+    const reply = await pollUntil(async () => findReply(await readCaptured(app), id), (value) => !!value, 20000, 300)
+    expect(reply?.error).toBeUndefined()
+    expect(reply?.result).toEqual({ postData: '{"value":42}' })
+  })
+
+  test('redirected compressed data matches the response returned through the actual Network body hook', async () => {
+    const { app } = handle!
+    const marker = `redirect-${Date.now()}`
+    const outcome = await evalInWebContentsByUrl<RequestOutcome>(app, 'service.html', `new Promise((resolve) => {
+      wx.request({ url: ${JSON.stringify(`${baseUrl}/redirect?marker=${marker}`)},
+        success: (r) => resolve({ path: 'success', statusCode: r.statusCode, data: r.data }),
+        fail: (e) => resolve({ path: 'fail', errMsg: e.errMsg }) })
+    })`)
+    expect(outcome).toMatchObject({ path: 'success', statusCode: 200, data: { marker } })
+    const request = await pollUntil(async () => findRequestWillBeSent(await readCaptured(app), marker, 'dimina:http:'), (value) => !!value, 20000, 300)
+    expect(request).toBeTruthy()
+    const id = 424245
+    await evalInDevtools(app, `globalThis.InspectorFrontendHost.sendMessageToBackend(${JSON.stringify(JSON.stringify({ id, method: 'Network.getResponseBody', params: { requestId: request!.params!.requestId } }))})`)
+    const reply = await pollUntil(async () => findReply(await readCaptured(app), id), (value) => !!value, 20000, 300)
+    expect(reply?.error).toBeUndefined()
+    expect(JSON.parse(decodeBody(reply!.result!))).toEqual({ marker })
+  })
+
+  test('the preload request task aborts through IPC and invokes fail then complete once', async () => {
+    const outcome = await evalInSimulator(handle!.app, `new Promise((resolve, reject) => {
+      const events = [];
+      const task = wx.request({ url: ${JSON.stringify(`${baseUrl}/wait`)}, timeout: 1000,
+        success: () => events.push('success'), fail: (e) => events.push(e.errMsg),
+        complete: () => { events.push('complete'); resolve(events); } });
+      if (!task || typeof task.abort !== 'function') { reject(new Error('missing preload RequestTask')); return; }
+      task.abort();
+    })`)
+    expect(outcome).toEqual(['request:fail abort', 'complete'])
+  })
+
+  test('the preload resolves a document-relative request using its own document base', async () => {
+    const outcome = await evalInSimulator(handle!.app, `new Promise((resolve) => {
+      wx.request({ url: './index.html', dataType: 'text',
+        success: (r) => resolve({ status: r.statusCode, html: typeof r.data === 'string' && /<html/i.test(r.data) }),
+        fail: (e) => resolve({ errMsg: e.errMsg }) });
+    })`)
+    expect(outcome).toEqual({ status: 200, html: true })
   })
 
   test('a render-guest image load is forwarded with a dimina:sim: id and its body is retrievable', async () => {

@@ -16,25 +16,29 @@
  * a legal 2147483647ms budget plus the 5000ms forwarding grace would
  * otherwise overflow the same limit one layer up.
  */
-import { describe, it, expect } from 'vitest'
-import { apiCallWatchdogMs } from './simulator-api-metadata'
+import { describe, it, expect } from "vitest";
+import { apiCallWatchdogMs } from "./simulator-api-metadata";
 
-const MAX_SAFE_DELAY_MS = 2_147_483_647
+const MAX_SAFE_DELAY_MS = 2_147_483_647;
 
-describe('apiCallWatchdogMs — non-finite params.timeout falls back to the default budget', () => {
-  it('Infinity is rejected, not passed through to the watchdog delay', () => {
-    expect(apiCallWatchdogMs('request', { timeout: Infinity })).toBe(65_000)
-  })
+describe("apiCallWatchdogMs — non-finite params.timeout falls back to the default budget", () => {
+  it("Infinity is rejected, not passed through to the watchdog delay", () => {
+    expect(apiCallWatchdogMs("downloadFile", { timeout: Infinity })).toBe(
+      65_000,
+    );
+  });
 
-  it('a value larger than the setTimeout max safe delay is rejected', () => {
-    expect(apiCallWatchdogMs('request', { timeout: 1e12 })).toBe(65_000)
-  })
-})
+  it("a value larger than the setTimeout max safe delay is rejected", () => {
+    expect(apiCallWatchdogMs("downloadFile", { timeout: 1e12 })).toBe(65_000);
+  });
+});
 
-describe('apiCallWatchdogMs — the legal upper bound is honoured without overflowing the return value', () => {
-  it('params.timeout at exactly the setTimeout max safe delay is used, and the +5000ms grace is clamped rather than overflowing', () => {
-    const result = apiCallWatchdogMs('request', { timeout: MAX_SAFE_DELAY_MS })
-    expect(result).toBe(MAX_SAFE_DELAY_MS)
-    expect(result).toBeLessThanOrEqual(MAX_SAFE_DELAY_MS)
-  })
-})
+describe("apiCallWatchdogMs — the legal upper bound is honoured without overflowing the return value", () => {
+  it("params.timeout at exactly the setTimeout max safe delay is used, and the +5000ms grace is clamped rather than overflowing", () => {
+    const result = apiCallWatchdogMs("downloadFile", {
+      timeout: MAX_SAFE_DELAY_MS,
+    });
+    expect(result).toBe(MAX_SAFE_DELAY_MS);
+    expect(result).toBeLessThanOrEqual(MAX_SAFE_DELAY_MS);
+  });
+});

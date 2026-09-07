@@ -61,7 +61,8 @@ import type { WebContents } from 'electron'
 import type { ConnectionRegistry } from '@dimina-kit/electron-deck/main'
 import type { BridgeRouterHandle, RenderEvent } from '../../ipc/bridge-router.js'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
-import { VIRTUAL_REQUEST_ID_PREFIX, type NetworkBodyProvider } from '../network-forward/index.js'
+import type { NetworkBodyProvider } from '../network-forward/index.js'
+import { BODY_REQUEST_ID_PREFIXES } from '../network-forward/request-ids.js'
 import { buildSingleDispatchScript, createFrontendReplyChannel, answerNetworkBodyCommand, drainOutboundBatch } from '../network-forward/frontend-dispatch.js'
 import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
 
@@ -134,14 +135,14 @@ export const NETWORK_BODY_METHODS: readonly string[] = [
  * equivalent test driven by the same literals, so the two cannot drift.
  *
  * A non-string / missing requestId routes to 'service': only the
- * `dimina:sim:` namespace is ours to answer, and the real backend is the
+ * simulator and native HTTP namespaces is ours to answer, and the real backend is the
  * correct authority for its own ids.
  */
 export function routeOutboundCommand(method: string, params: unknown): CdpRoute {
   if (routeByDomain(method) === 'render') return 'render'
   if (NETWORK_BODY_METHODS.includes(method)) {
     const requestId = (params as { requestId?: unknown } | null | undefined)?.requestId
-    if (typeof requestId === 'string' && requestId.startsWith(VIRTUAL_REQUEST_ID_PREFIX)) {
+    if (typeof requestId === 'string' && BODY_REQUEST_ID_PREFIXES.some((prefix) => requestId.startsWith(prefix))) {
       return 'network'
     }
   }
@@ -166,13 +167,13 @@ export function routeOutboundCommand(method: string, params: unknown): CdpRoute 
 export function buildElementsHookScript(): string {
   const prefixes = JSON.stringify(RENDER_DOMAIN_PREFIXES)
   const netMethods = JSON.stringify(NETWORK_BODY_METHODS)
-  const vprefix = JSON.stringify(VIRTUAL_REQUEST_ID_PREFIX)
+  const vprefix = JSON.stringify(BODY_REQUEST_ID_PREFIXES)
   return `(function(){try{
     if (globalThis.__diminaElementsHookInstalled) return 'already';
     var OUT = (globalThis.__diminaElementsOutbound = globalThis.__diminaElementsOutbound || []);
     var PREFIXES = ${prefixes};
     var NET_METHODS = ${netMethods};
-    var VPREFIX = ${vprefix};
+    var VPREFIXES = ${vprefix};
     function isRender(method){
       if (!method) return false;
       for (var i=0;i<PREFIXES.length;i++){ if (method.indexOf(PREFIXES[i])===0) return true; }
@@ -183,7 +184,7 @@ export function buildElementsHookScript(): string {
       if (isRender(m.method)) return 'render';
       if (NET_METHODS.indexOf(m.method) >= 0 && m.params
           && typeof m.params.requestId === 'string'
-          && m.params.requestId.indexOf(VPREFIX) === 0) return 'network';
+          && VPREFIXES.some(function(prefix){ return m.params.requestId.indexOf(prefix) === 0; })) return 'network';
       return 'service';
     }
     var IFH = globalThis.InspectorFrontendHost;

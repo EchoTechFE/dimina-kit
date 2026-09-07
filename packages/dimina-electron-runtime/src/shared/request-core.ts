@@ -1,8 +1,7 @@
 /**
- * Runtime-owned authoritative implementation of wx.request network semantics, shared
- * by every request surface (simulator `directRequest`, preload api-compat
- * `wx.request` shim). Keeping the semantics in one module is what prevents the
- * surfaces from drifting apart on the core contract.
+ * Published fetch-based compatibility helper for external embedders. DevTools'
+ * request entrypoints use main/services/native-request; timeout constants remain
+ * shared with that transport and the simulator forwarding watchdog.
  *
  * The contract (official wx.request semantics):
  *  - success vs fail is decided ONLY by whether a server response was
@@ -21,7 +20,11 @@
  *    spelling) yields an ArrayBuffer instead.
  *  - Outgoing headers merge case-insensitively via `Headers` so a caller's
  *    `content-type` in any casing wins exactly once; the `application/json`
- *    default applies only when the caller supplied none. Plain-object merges
+ *    default applies only when the caller supplied none AND the request will
+ *    actually carry a body (non-GET/HEAD with `data`). A bodyless GET/HEAD
+ *    gets no default content-type — matching what a real device sends — so
+ *    it stays a CORS-simple request instead of forcing a preflight the
+ *    simulator's Chromium renderer would otherwise send. Plain-object merges
  *    would keep both casings as distinct keys and comma-join them on the wire.
  *  - GET/HEAD serialize object `data` into URL query params (no body);
  *    other methods send string data verbatim, form-encode objects under
@@ -34,35 +37,35 @@
  */
 
 export interface RequestSuccessResult {
-  data: unknown
-  statusCode: number
-  header: Record<string, string>
-  errMsg: 'request:ok'
+  data: unknown;
+  statusCode: number;
+  header: Record<string, string>;
+  errMsg: "request:ok";
 }
 
 export interface RequestFailResult {
-  errMsg: string
-  errno?: number
+  errMsg: string;
+  errno?: number;
 }
 
 export interface RequestHandle {
-  abort(): void
+  abort(): void;
 }
 
 export interface RequestCoreOptions {
-  url: string
-  data?: unknown
-  header?: Record<string, string>
-  timeout?: number
-  method?: string
-  dataType?: string
-  responseType?: string
+  url: string;
+  data?: unknown;
+  header?: Record<string, string>;
+  timeout?: number;
+  method?: string;
+  dataType?: string;
+  responseType?: string;
 }
 
 export interface RequestCoreCallbacks {
-  success?: (res: RequestSuccessResult) => void
-  fail?: (err: RequestFailResult) => void
-  complete?: (res: RequestSuccessResult | RequestFailResult) => void
+  success?: (res: RequestSuccessResult) => void;
+  fail?: (err: RequestFailResult) => void;
+  complete?: (res: RequestSuccessResult | RequestFailResult) => void;
 }
 
 /**
@@ -71,14 +74,14 @@ export interface RequestCoreCallbacks {
  * bridge-router watchdog (apiCallWatchdogMs in simulator-api-metadata.ts)
  * derives its window from this so the two cannot drift apart.
  */
-export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000
+export const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
 /**
  * Largest delay setTimeout honours (2^31-1 ms). Anything above overflows the
  * signed-32-bit timer register and fires ~immediately (~1ms) instead of late —
  * so an oversized caller timeout must be rejected, never passed through.
  */
-export const MAX_TIMEOUT_MS = 2_147_483_647
+export const MAX_TIMEOUT_MS = 2_147_483_647;
 
 /**
  * Resolve a caller-supplied wx timeout into a usable budget: a finite positive
@@ -88,40 +91,52 @@ export const MAX_TIMEOUT_MS = 2_147_483_647
  * two layers can never disagree on what a valid timeout is.
  */
 export function resolveTimeoutBudgetMs(timeout: unknown): number {
-  const t = Number(timeout)
-  return Number.isFinite(t) && t > 0 && t <= MAX_TIMEOUT_MS ? t : DEFAULT_REQUEST_TIMEOUT_MS
+  const t = Number(timeout);
+  return Number.isFinite(t) && t > 0 && t <= MAX_TIMEOUT_MS
+    ? t
+    : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
-function buildHeaders(header: Record<string, string> | undefined): Headers {
-  const headers = new Headers()
+// `willSendBody` gates the `application/json` default: a bodyless GET/HEAD
+// must not gain a content-type it never asked for, or it stops being a
+// CORS-simple request in the simulator's Chromium renderer (see the
+// module-level contract note above).
+function buildHeaders(
+  header: Record<string, string> | undefined,
+  willSendBody: boolean,
+): Headers {
+  const headers = new Headers();
   for (const [key, value] of Object.entries(header ?? {})) {
-    if (value != null) headers.set(key, String(value))
+    if (value != null) headers.set(key, String(value));
   }
-  if (!headers.has('content-type')) headers.set('content-type', 'application/json')
-  return headers
+  if (willSendBody && !headers.has("content-type"))
+    headers.set("content-type", "application/json");
+  return headers;
 }
 
 function appendQueryParams(url: string, data: Record<string, unknown>): string {
   // Resolve against the current document when available so page-relative URLs
   // keep working in the render-window shim.
-  const base = typeof location !== 'undefined' ? location.href : undefined
-  const resolved = new URL(url, base)
+  const base = typeof location !== "undefined" ? location.href : undefined;
+  const resolved = new URL(url, base);
   for (const [key, value] of Object.entries(data)) {
-    resolved.searchParams.append(key, String(value))
+    resolved.searchParams.append(key, String(value));
   }
-  return resolved.toString()
+  return resolved.toString();
 }
 
 function encodeBody(data: unknown, contentType: string): BodyInit {
-  if (typeof data === 'string') return data
-  if (contentType.includes('application/x-www-form-urlencoded')) {
-    const form = new URLSearchParams()
-    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-      form.append(key, String(value))
+  if (typeof data === "string") return data;
+  if (contentType.includes("application/x-www-form-urlencoded")) {
+    const form = new URLSearchParams();
+    for (const [key, value] of Object.entries(
+      data as Record<string, unknown>,
+    )) {
+      form.append(key, String(value));
     }
-    return form.toString()
+    return form.toString();
   }
-  return JSON.stringify(data)
+  return JSON.stringify(data);
 }
 
 async function decodeResponseData(
@@ -129,88 +144,104 @@ async function decodeResponseData(
   dataType: string,
   responseType: string,
 ): Promise<unknown> {
-  if (responseType === 'arraybuffer' || dataType === 'arraybuffer') {
-    return response.arrayBuffer()
+  if (responseType === "arraybuffer" || dataType === "arraybuffer") {
+    return response.arrayBuffer();
   }
-  const text = await response.text()
-  if (dataType !== 'json') return text
+  const text = await response.text();
+  if (dataType !== "json") return text;
   try {
-    return JSON.parse(text)
+    return JSON.parse(text);
   } catch {
-    return text
+    return text;
   }
 }
 
+/**
+ * @deprecated No longer called by devtools' own wx.request path — that now
+ * runs through `main/services/native-request` (Node http/https in the main
+ * process), so it never participates in Chromium's Fetch/CORS algorithm.
+ * Kept here, unchanged, only because `./shared/request-core` is a published
+ * npm subpath export of `@dimina-kit/electron-runtime` (an embeddable
+ * package) — an external embedder could import this directly. Do not wire
+ * this back into any devtools call site; fix wx.request behaviour in
+ * native-request instead.
+ */
 export function performRequest(
   opts: RequestCoreOptions,
   callbacks: RequestCoreCallbacks,
 ): RequestHandle {
-  const method = (opts.method || 'GET').toUpperCase()
-  const canHaveBody = method !== 'GET' && method !== 'HEAD'
-  const headers = buildHeaders(opts.header)
+  const method = (opts.method || "GET").toUpperCase();
+  const canHaveBody = method !== "GET" && method !== "HEAD";
+  const willSendBody = canHaveBody && opts.data != null;
+  const headers = buildHeaders(opts.header, willSendBody);
 
-  let url = opts.url
-  const init: RequestInit = { method, headers }
+  let url = opts.url;
+  const init: RequestInit = { method, headers };
 
   if (!canHaveBody) {
-    if (opts.data && typeof opts.data === 'object') {
-      url = appendQueryParams(url, opts.data as Record<string, unknown>)
+    if (opts.data && typeof opts.data === "object") {
+      url = appendQueryParams(url, opts.data as Record<string, unknown>);
     }
   } else if (opts.data != null) {
-    init.body = encodeBody(opts.data, headers.get('content-type') ?? '')
+    init.body = encodeBody(opts.data, headers.get("content-type") ?? "");
   }
 
-  const controller = new AbortController()
-  init.signal = controller.signal
+  const controller = new AbortController();
+  init.signal = controller.signal;
 
   // First verdict wins: a timeout/abort settles the call even though the fetch
   // promise is still pending, and the fetch's own late resolution/AbortError
   // rejection must not fire a second callback round.
-  let settled = false
+  let settled = false;
 
   function settleSuccess(res: RequestSuccessResult): void {
-    if (settled) return
-    settled = true
-    clearTimeout(timer)
-    callbacks.success?.(res)
-    callbacks.complete?.(res)
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    callbacks.success?.(res);
+    callbacks.complete?.(res);
   }
 
   function settleFail(err: RequestFailResult): void {
-    if (settled) return
-    settled = true
-    clearTimeout(timer)
-    callbacks.fail?.(err)
-    callbacks.complete?.(err)
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    callbacks.fail?.(err);
+    callbacks.complete?.(err);
   }
 
-  const timeoutMs = resolveTimeoutBudgetMs(opts.timeout)
+  const timeoutMs = resolveTimeoutBudgetMs(opts.timeout);
   const timer = setTimeout(() => {
-    settleFail({ errMsg: 'request:fail timeout' })
-    controller.abort()
-  }, timeoutMs)
+    settleFail({ errMsg: "request:fail timeout" });
+    controller.abort();
+  }, timeoutMs);
 
-  const dataType = opts.dataType ?? 'json'
-  const responseType = opts.responseType ?? 'text'
+  const dataType = opts.dataType ?? "json";
+  const responseType = opts.responseType ?? "text";
 
   fetch(url, init)
     .then(async (response) => {
-      const header: Record<string, string> = {}
+      const header: Record<string, string> = {};
       response.headers.forEach((value, key) => {
-        header[key] = value
-      })
-      const data = await decodeResponseData(response, dataType, responseType)
-      settleSuccess({ data, statusCode: response.status, header, errMsg: 'request:ok' })
+        header[key] = value;
+      });
+      const data = await decodeResponseData(response, dataType, responseType);
+      settleSuccess({
+        data,
+        statusCode: response.status,
+        header,
+        errMsg: "request:ok",
+      });
     })
     .catch((error: unknown) => {
-      const reason = error instanceof Error ? error.message : String(error)
-      settleFail({ errMsg: `request:fail ${reason || 'network error'}` })
-    })
+      const reason = error instanceof Error ? error.message : String(error);
+      settleFail({ errMsg: `request:fail ${reason || "network error"}` });
+    });
 
   return {
     abort() {
-      settleFail({ errMsg: 'request:fail abort' })
-      controller.abort()
+      settleFail({ errMsg: "request:fail abort" });
+      controller.abort();
     },
-  }
+  };
 }

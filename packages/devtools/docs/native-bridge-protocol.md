@@ -12,12 +12,12 @@ native-host 是 devtools 唯一的 simulator 运行时：Electron 充当 iOS/And
 
 dimina 在每个平台上都把 service 跑在一个**与 render 物理隔离、不带 DOM 的 JS 上下文**里，render ↔ service 通过 native 注入的 bridge 中转。native-host 走的是同一份代码路径。
 
-| 维度 | iOS | Android | HarmonyOS | native-host（Electron） |
-|---|---|---|---|---|
-| Render 容器 | WKWebView | Android WebView | ArkWeb | `<webview>`（`pageFrame.html`） |
-| Service 引擎 | JavaScriptCore（`JSContext`） | QuickJS | ArkTS `ThreadWorker` | 隐藏的 ServiceHost BrowserWindow |
-| 通信通道 | `WKScriptMessageHandler` + `evaluateScript` | `evaluateJavaScript` + 回调 | `ThreadWorker.postMessage` | 主进程 `BridgeRouter`（IPC + `webContents.send`） |
-| Bridge 注入 | Native 注入 `global.DiminaServiceBridge` | Native 注入 `global.DiminaServiceBridge` | Worker 内置 + main 注入 | preload 注入 `globalThis.DiminaServiceBridge` / `window.DiminaRenderBridge` |
+| 维度         | iOS                                         | Android                                  | HarmonyOS                  | native-host（Electron）                                                     |
+| ------------ | ------------------------------------------- | ---------------------------------------- | -------------------------- | --------------------------------------------------------------------------- |
+| Render 容器  | WKWebView                                   | Android WebView                          | ArkWeb                     | `<webview>`（`pageFrame.html`）                                             |
+| Service 引擎 | JavaScriptCore（`JSContext`）               | QuickJS                                  | ArkTS `ThreadWorker`       | 隐藏的 ServiceHost BrowserWindow                                            |
+| 通信通道     | `WKScriptMessageHandler` + `evaluateScript` | `evaluateJavaScript` + 回调              | `ThreadWorker.postMessage` | 主进程 `BridgeRouter`（IPC + `webContents.send`）                           |
+| Bridge 注入  | Native 注入 `global.DiminaServiceBridge`    | Native 注入 `global.DiminaServiceBridge` | Worker 内置 + main 注入    | preload 注入 `globalThis.DiminaServiceBridge` / `window.DiminaRenderBridge` |
 
 dimina-fe 侧的关键锚点（`dimina/` submodule，只读）：
 
@@ -33,7 +33,7 @@ native-host 在 Electron 里实现的等价物必须满足这套契约，`@dimin
 ```typescript
 interface DiminaServiceBridge {
   // Service → Native：发起 invoke（target='container' 时调 native API；target='render' 时由 native 转发）
-  invoke(msg: MessageEnvelope): unknown   // iOS/QuickJS 可同步返回
+  invoke(msg: MessageEnvelope): unknown // iOS/QuickJS 可同步返回
 
   // Service → Render：透过 native 中转，第一参 bridgeId 用于多 mini-app 实例路由
   publish(bridgeId: string, msg: MessageEnvelope): void
@@ -44,7 +44,7 @@ interface DiminaServiceBridge {
 }
 
 interface MessageEnvelope {
-  type: string                              // 见 §2.3 type 一览
+  type: string // 见 §2.3 type 一览
   target: 'service' | 'render' | 'container'
   body: Record<string, unknown>
 }
@@ -79,33 +79,33 @@ interface DiminaRenderBridge {
 
 `BridgeMessageType`（`packages/dimina-electron-runtime/src/shared/bridge-channels.ts`）以具名字面量列出主要 type，并以 `| string` 收尾——是开放联合，留给路由型扩展消息（`consoleLog` 即属此类：未具名于 `BridgeMessageType`，但由 `handleContainerMsg` 路由、由 preload 发出）。下表按发送方/接收方分类（含未具名的扩展消息）：
 
-| Type | 方向 | 含义 | container 角色 |
-|---|---|---|---|
-| `loadResource` | Container → Service / Render | 通知加载小程序资源（service js / render css+js） | 发起 |
-| `serviceResourceLoaded` | Service → Container | service 加载完上报 | 接收+聚合 |
-| `renderResourceLoaded` | Render → Container | render 加载完上报 | 接收+聚合 |
-| `resourceLoaded` | Container → Service | 两端都加载完，通知 service 创建实例 | 发起 |
-| `firstRender` | Service → Render | 首屏数据 + 组件初始 props | 透明转发 |
-| `appShow` / `appHide` | Container → Service | App 前后台生命周期 | 发起（主进程 `installAppLifecycleDriver` 按主窗口 `minimize/hide`→`appHide`、`show/restore`→`appShow` 触发，驱动 `App.onShow/onHide` 与 `wx.onAppShow/onAppHide` 监听） |
-| `stackShow` / `stackHide` | Container → Service | 页面栈进出生命周期 | 声明保留（同上，不触发） |
-| `pageShow` / `pageHide` / `pageUnload` | 模拟器壳 → 主进程 → Service | 页面成为/离开栈顶、被销毁；壳的 reducer 是唯一的生产者，主进程经 `PAGE_LIFECYCLE` 原样转发 | 转发（`handlePageLifecycle`，同时维护 `visibleBridgeId`） |
-| `pageReady` / `pageScroll` / `pageRouteDone` | Render → Service | 页面就绪与交互 | 透明转发 |
-| `pageResize` | 主进程 → Service | `bridge.setDevice()` 几何变化（尺寸或朝向）时，向当前可见页推送新 `size`/`deviceOrientation`；无可见页或几何未变化不发 | 发起（`setDevice`） |
-| `hostEnvUpdate` | 主进程 → Service | `bridge.setDevice()` 时推送完整新 `HostEnvSnapshot`（`{ systemInfo }`）。service-host preload 在转发前先把它合并进 `__diminaSpawnContext.hostEnvSnapshot`（同步 `wx.getSystemInfoSync()` 每次调用都读这里），再交给 service 更新异步 `hostEnv`；先于同一次 `setDevice` 的 `pageResize` 发出，所以 `Page.onResize` 里读到的已是新机型 | 发起（`setDevice`） |
-| `mC` / `mR` / `mU` | Render → Service | Component create / ready / unmount | 透明转发 |
-| `t` | Render → Service | 用户事件触发自定义 method | 透明转发 |
-| `u` / `ub` | Service → Render | 单条 / 批量 setData 更新 | 透明转发 |
-| `triggerCallback` | 双向 | 异步回调结果 | 透明转发 |
-| `invokeAPI` | Service → Container | 能力调用（wx.* / navigation / route / tabBar / host API） | 处理（见 §6） |
-| `h5SdkAction` | Render → Service | 内嵌 web-view 的 SDK 行为 | 透明转发 |
-| `componentError` | Render → Service | 组件错误上报 | 透明转发 |
-| `domReady` | Render → Container | DOM 初始化完成，container 可隐藏 loading | 接收 |
-| `print` | Container → Render | 调试日志注入（dev only） | 发起 |
-| `renderHostReady` | Render → Container | render-host webview preload 就绪，container 回发 `loadResource` | 接收 |
-| `serviceHostError` | Service → Container | service-host boot / `deliver` 派发阶段错误上报 | 接收 + 触发 `wx.onError` 监听（dimina service runtime 不派发 `App.onError`） |
-| `consoleLog`（扩展消息，未具名于 `BridgeMessageType`） | Service / Render → Container | guest console 捕获转发（见 §3） | 接收 |
-| `storageChanged`（扩展消息） | Service → Container | 同步 `wx.setStorageSync`/`removeStorageSync`/`clearStorageSync` 写入通知（body 为 `SyncStorageChange`，key 带 `${appId}_` 前缀） | 接收 → `ctx.onServiceStorageChanged(ap.appId, body)` → simulator-storage 推 `StorageEvent`，保持 Storage 面板实时 |
-| `wxmlChanged`（扩展消息） | Render → Container | 活动页 DOM 就地变化（render-guest MutationObserver，去抖后发） | 接收 → `emitRenderEvent({ kind:'domMutated' })` → simulator-wxml 重新 pull + push，保持 WXML 面板实时 |
+| Type                                                   | 方向                         | 含义                                                                                                                                                                                                                                                                                                                                 | container 角色                                                                                                                                                          |
+| ------------------------------------------------------ | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loadResource`                                         | Container → Service / Render | 通知加载小程序资源（service js / render css+js）                                                                                                                                                                                                                                                                                     | 发起                                                                                                                                                                    |
+| `serviceResourceLoaded`                                | Service → Container          | service 加载完上报                                                                                                                                                                                                                                                                                                                   | 接收+聚合                                                                                                                                                               |
+| `renderResourceLoaded`                                 | Render → Container           | render 加载完上报                                                                                                                                                                                                                                                                                                                    | 接收+聚合                                                                                                                                                               |
+| `resourceLoaded`                                       | Container → Service          | 两端都加载完，通知 service 创建实例                                                                                                                                                                                                                                                                                                  | 发起                                                                                                                                                                    |
+| `firstRender`                                          | Service → Render             | 首屏数据 + 组件初始 props                                                                                                                                                                                                                                                                                                            | 透明转发                                                                                                                                                                |
+| `appShow` / `appHide`                                  | Container → Service          | App 前后台生命周期                                                                                                                                                                                                                                                                                                                   | 发起（主进程 `installAppLifecycleDriver` 按主窗口 `minimize/hide`→`appHide`、`show/restore`→`appShow` 触发，驱动 `App.onShow/onHide` 与 `wx.onAppShow/onAppHide` 监听） |
+| `stackShow` / `stackHide`                              | Container → Service          | 页面栈进出生命周期                                                                                                                                                                                                                                                                                                                   | 声明保留（同上，不触发）                                                                                                                                                |
+| `pageShow` / `pageHide` / `pageUnload`                 | 模拟器壳 → 主进程 → Service  | 页面成为/离开栈顶、被销毁；壳的 reducer 是唯一的生产者，主进程经 `PAGE_LIFECYCLE` 原样转发                                                                                                                                                                                                                                           | 转发（`handlePageLifecycle`，同时维护 `visibleBridgeId`）                                                                                                               |
+| `pageReady` / `pageScroll` / `pageRouteDone`           | Render → Service             | 页面就绪与交互                                                                                                                                                                                                                                                                                                                       | 透明转发                                                                                                                                                                |
+| `pageResize`                                           | 主进程 → Service             | `bridge.setDevice()` 几何变化（尺寸或朝向）时，向当前可见页推送新 `size`/`deviceOrientation`；无可见页或几何未变化不发                                                                                                                                                                                                               | 发起（`setDevice`）                                                                                                                                                     |
+| `hostEnvUpdate`                                        | 主进程 → Service             | `bridge.setDevice()` 时推送完整新 `HostEnvSnapshot`（`{ systemInfo }`）。service-host preload 在转发前先把它合并进 `__diminaSpawnContext.hostEnvSnapshot`（同步 `wx.getSystemInfoSync()` 每次调用都读这里），再交给 service 更新异步 `hostEnv`；先于同一次 `setDevice` 的 `pageResize` 发出，所以 `Page.onResize` 里读到的已是新机型 | 发起（`setDevice`）                                                                                                                                                     |
+| `mC` / `mR` / `mU`                                     | Render → Service             | Component create / ready / unmount                                                                                                                                                                                                                                                                                                   | 透明转发                                                                                                                                                                |
+| `t`                                                    | Render → Service             | 用户事件触发自定义 method                                                                                                                                                                                                                                                                                                            | 透明转发                                                                                                                                                                |
+| `u` / `ub`                                             | Service → Render             | 单条 / 批量 setData 更新                                                                                                                                                                                                                                                                                                             | 透明转发                                                                                                                                                                |
+| `triggerCallback`                                      | 双向                         | 异步回调结果                                                                                                                                                                                                                                                                                                                         | 透明转发                                                                                                                                                                |
+| `invokeAPI`                                            | Service → Container          | 能力调用（wx.\* / navigation / route / tabBar / host API）                                                                                                                                                                                                                                                                           | 处理（见 §6）                                                                                                                                                           |
+| `h5SdkAction`                                          | Render → Service             | 内嵌 web-view 的 SDK 行为                                                                                                                                                                                                                                                                                                            | 透明转发                                                                                                                                                                |
+| `componentError`                                       | Render → Service             | 组件错误上报                                                                                                                                                                                                                                                                                                                         | 透明转发                                                                                                                                                                |
+| `domReady`                                             | Render → Container           | DOM 初始化完成，container 可隐藏 loading                                                                                                                                                                                                                                                                                             | 接收                                                                                                                                                                    |
+| `print`                                                | Container → Render           | 调试日志注入（dev only）                                                                                                                                                                                                                                                                                                             | 发起                                                                                                                                                                    |
+| `renderHostReady`                                      | Render → Container           | render-host webview preload 就绪，container 回发 `loadResource`                                                                                                                                                                                                                                                                      | 接收                                                                                                                                                                    |
+| `serviceHostError`                                     | Service → Container          | service-host boot / `deliver` 派发阶段错误上报                                                                                                                                                                                                                                                                                       | 接收 + 触发 `wx.onError` 监听（dimina service runtime 不派发 `App.onError`）                                                                                            |
+| `consoleLog`（扩展消息，未具名于 `BridgeMessageType`） | Service / Render → Container | guest console 捕获转发（见 §3）                                                                                                                                                                                                                                                                                                      | 接收                                                                                                                                                                    |
+| `storageChanged`（扩展消息）                           | Service → Container          | 同步 `wx.setStorageSync`/`removeStorageSync`/`clearStorageSync` 写入通知（body 为 `SyncStorageChange`，key 带 `${appId}_` 前缀）                                                                                                                                                                                                     | 接收 → `ctx.onServiceStorageChanged(ap.appId, body)` → simulator-storage 推 `StorageEvent`，保持 Storage 面板实时                                                       |
+| `wxmlChanged`（扩展消息）                              | Render → Container           | 活动页 DOM 就地变化（render-guest MutationObserver，去抖后发）                                                                                                                                                                                                                                                                       | 接收 → `emitRenderEvent({ kind:'domMutated' })` → simulator-wxml 重新 pull + push，保持 WXML 面板实时                                                                   |
 
 容器（bridge-router）只需要参与以下角色：
 
@@ -146,14 +146,14 @@ dimina-fe **没有 `invokeSync` 方法**——真机端同步 API 依赖宿主 J
 
 ### 2.6 Native 注入对照表（iOS / Android → Electron）
 
-| 操作 | iOS（Swift） | Android（Kotlin） | native-host（Electron） |
-|---|---|---|---|
-| `DiminaServiceBridge.invoke` 注入 | `JSContext.setObject(..., "invoke")` | `QuickJSEngine.setInvokeCallback` | `preload.cjs`: `invoke(msg) => ipcRenderer.send('dmb:service:invoke', { msg })`（不带来源页 id——一个 service host 服务整个页面栈，消息若涉及具体页面自己在 `msg.body` 里带） |
-| `DiminaServiceBridge.publish` 注入 | `JSContext.setObject(..., "publish")` | `QuickJSEngine.setPublishCallback` | `preload.cjs`: `publish(targetBridgeId, msg) => ipcRenderer.send('dmb:service:publish', { targetBridgeId, msg })` |
-| Native → Service onMessage | `evaluateScript("DiminaServiceBridge.onMessage(...)")` | `evaluateJavaScript("...")` | `preload.cjs`: `ipcRenderer.on('dmb:to-service', (_e, { msg }) => onMessageFn?.(msg))` |
-| `DiminaRenderBridge.invoke` 注入 | `WKScriptMessageHandler` | `JavascriptInterface` | `render-host/preload.cjs`: `invoke(s) => ipcRenderer.send('dmb:render:invoke', …)` |
-| `DiminaRenderBridge.publish` 注入 | — | — | `render-host/preload.cjs`: `publish(s) => ipcRenderer.send('dmb:render:publish', …)` |
-| Service → Render publish | `DMPChannelProxy.serviceToRender` → `webview.evaluateJavaScript(...)` | `Bridge.messagePublish` | bridge-router 按 bridgeId 查到 renderWc，`webContents.send('dmb:to-render', { msg })`，render preload 调 `DiminaRenderBridge.onMessage(msg)` |
+| 操作                               | iOS（Swift）                                                          | Android（Kotlin）                  | native-host（Electron）                                                                                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DiminaServiceBridge.invoke` 注入  | `JSContext.setObject(..., "invoke")`                                  | `QuickJSEngine.setInvokeCallback`  | `preload.cjs`: `invoke(msg) => ipcRenderer.send('dmb:service:invoke', { msg })`（不带来源页 id——一个 service host 服务整个页面栈，消息若涉及具体页面自己在 `msg.body` 里带） |
+| `DiminaServiceBridge.publish` 注入 | `JSContext.setObject(..., "publish")`                                 | `QuickJSEngine.setPublishCallback` | `preload.cjs`: `publish(targetBridgeId, msg) => ipcRenderer.send('dmb:service:publish', { targetBridgeId, msg })`                                                            |
+| Native → Service onMessage         | `evaluateScript("DiminaServiceBridge.onMessage(...)")`                | `evaluateJavaScript("...")`        | `preload.cjs`: `ipcRenderer.on('dmb:to-service', (_e, { msg }) => onMessageFn?.(msg))`                                                                                       |
+| `DiminaRenderBridge.invoke` 注入   | `WKScriptMessageHandler`                                              | `JavascriptInterface`              | `render-host/preload.cjs`: `invoke(s) => ipcRenderer.send('dmb:render:invoke', …)`                                                                                           |
+| `DiminaRenderBridge.publish` 注入  | —                                                                     | —                                  | `render-host/preload.cjs`: `publish(s) => ipcRenderer.send('dmb:render:publish', …)`                                                                                         |
+| Service → Render publish           | `DMPChannelProxy.serviceToRender` → `webview.evaluateJavaScript(...)` | `Bridge.messagePublish`            | bridge-router 按 bridgeId 查到 renderWc，`webContents.send('dmb:to-render', { msg })`，render preload 调 `DiminaRenderBridge.onMessage(msg)`                                 |
 
 ## 3. Guest console 捕获
 
@@ -202,7 +202,7 @@ bridge-router 的 session 数据结构（字段全集）：
 
 `logic.js` 走两条互补路径：
 
-- **service loader 自身的 importScripts**：`@dimina/service` 的 Worker-style 运行时检测到自己处于 worker 形态时，loader（dimina-fe `service/src/core/loader.js`）调 `globalThis.importScripts(\`${baseUrl}${appId}/${root}/logic.js\`)`。BrowserWindow 没有 `importScripts`，所以 `service-host/preload.cjs` 给 `globalThis.importScripts` 装了一个 shim：同步 XHR 取脚本 + 间接 `eval`（`(0, eval)(...)`）在 global scope 执行，使脚本里的 `modDefine(...)` 注册进 service loader `modRequire` 读取的同一份 AMD 注册表。
+- **service loader 自身的 importScripts**：`@dimina/service` 的 Worker-style 运行时检测到自己处于 worker 形态时，loader（dimina-fe `service/src/core/loader.js`）调 `globalThis.importScripts(\`${baseUrl}${appId}/${root}/logic.js\`)`。BrowserWindow 没有 `importScripts`，所以 `service-host/preload.cjs`给`globalThis.importScripts`装了一个 shim：同步 XHR 取脚本 + 间接`eval`（`(0, eval)(...)`）在 global scope 执行，使脚本里的 `modDefine(...)`注册进 service loader`modRequire` 读取的同一份 AMD 注册表。
 - **bridge-router 主进程预注入**：`bootServiceHost` → `injectLogicBundle` 在 service window `did-finish-load` 后，HTTP fetch logic.js 并 `serviceWc.executeJavaScript(content, true)`，**注入成功后才发** `loadResource`。fetch URL 视模式而定：本地 fallback `DiminaResourceServer`（`ap.resourceServer` 非空）取 `new URL('logic.js', resourceBaseUrl)` = `<base>logic.js`（其 root 已是 `pkgRoot/root`）；dev-server 模式取 `new URL('<appId>/<root>/logic.js', resourceBaseUrl)` = `<base><appId>/<root>/logic.js`。
   - **注入失败（fetch 非 2xx / executeJavaScript 抛错）= fail-loud**：`injectLogicBundle` 返回 `false`，`ap.logicInjected` 记为 `false`，`bootServiceHost` **不再发 service `loadResource`**（否则 `modRequire('app')` 必抛 `module app not found`，掩盖真因），改由 `reportLogicLoadFailure` 经 `ctx.diagnostics` 报 `logic-bundle-unreachable` 诊断（总线镜像主进程 console，并由 `console-forward` 注入 service-host console → 内嵌 DevTools Console 面板；host 未就绪时按 session 排队、`bootServiceHost` 经 `notifyServiceHostReady` 冲洗），`ctx.guestConsole.emit` 保留给 automation 订阅者。
   - **render 侧确定性门**：render guest 在自身 `DOMContentLoaded` 就发 `renderHostReady`，通常**早于**异步 fetch+inject 落定。`routeFromRender` 据 `ap.logicInjected` 三态处理：`false` → 跳过 render `loadResource`（避免第二条 `module <pagePath> not found`）；`null`（注入仍在途）→ 把该页 `loadResource` 挂起（`page.renderLoadPending`），由 `bootServiceHost` 落定后统一冲洗（成功才发、失败丢弃）——保证失败的 bundle 永不到达 render 侧；`true` → 立即发。
@@ -218,35 +218,42 @@ service → container 的能力调用 envelope：
 { type: 'invokeAPI', target: 'container', body: { name, params: { ...userParams, success, fail, complete } } }
 ```
 
-`bridge-router.ts` 的 `handleSimulatorApi` 按 `name` 分流到五类目标：
+`bridge-router.ts` 的 `handleSimulatorApi` 按 `name` 分流：
 
-| 类别 | 名字示例 | 路由 |
-|---|---|---|
-| Navigation Bar API（`NAV_BAR_API_NAMES`，5 个） | setNavigationBarTitle / setNavigationBarColor / show\|hideNavigationBarLoading / hideHomeButton | `simulatorWc.send(E.NAV_BAR)` → fire-and-forget `:ok` 回调（UI 异步更新） |
-| Route Action API（`NAV_ACTION_NAMES`，5 个） | navigateTo / navigateBack / redirectTo / reLaunch / switchTab | `simulatorWc.send(E.NAV_ACTION)` → DeviceShell 调 reducer + ack via `NAV_CALLBACK` |
-| TabBar Action API（`TAB_ACTION_NAMES`，8 个） | setTabBarStyle / setTabBarItem / show\|hideTabBar / set\|removeTabBarBadge / show\|hideTabBarRedDot | `simulatorWc.send(E.TAB_ACTION)` → applyTabAction + ack via `NAV_CALLBACK` |
-| Storage 异步 API（`STORAGE_API_NAMES`，5 个） | setStorage / getStorage / removeStorage / clearStorage / getStorageInfo | `ctx.storageApi.invoke(appId, name, params)` → service-host 窗口 `file://` store（与 `*Sync` 同一 store），ack success/complete |
-| Host registry / Simulator window forward（其余） | getSystemInfo / chooseImage / login / fs.* / chooseMedia / … | 优先 `ctx.simulatorApis.invoke`；落空走 `forwardApiCallToSimulator`（`E.API_CALL` request/response，`API_CALL_TIMEOUT_MS` 超时） |
+| 类别                                                                           | 名字示例                                                                                            | 路由                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Navigation Bar API（`NAV_BAR_API_NAMES`，5 个）                                | setNavigationBarTitle / setNavigationBarColor / show\|hideNavigationBarLoading / hideHomeButton     | `simulatorWc.send(E.NAV_BAR)` → fire-and-forget `:ok` 回调（UI 异步更新）                                                                                                                                                                                                                                         |
+| Route Action API（`NAV_ACTION_NAMES`，5 个）                                   | navigateTo / navigateBack / redirectTo / reLaunch / switchTab                                       | `simulatorWc.send(E.NAV_ACTION)` → DeviceShell 调 reducer + ack via `NAV_CALLBACK`                                                                                                                                                                                                                                |
+| TabBar Action API（`TAB_ACTION_NAMES`，8 个）                                  | setTabBarStyle / setTabBarItem / show\|hideTabBar / set\|removeTabBarBadge / show\|hideTabBarRedDot | `simulatorWc.send(E.TAB_ACTION)` → applyTabAction + ack via `NAV_CALLBACK`                                                                                                                                                                                                                                        |
+| Native HTTP API（`NATIVE_HTTP_API_NAMES`，2 个）                               | request / requestTaskAbort                                                                          | 主进程 `main/services/native-request`（Node http/https）直接执行——不经渲染进程 `fetch()`，因此不触发 Chromium Fetch/CORS 的 OPTIONS 预检；结果经 `invokeSimulatorApiAndCallback` ack success/fail/complete，**不**落到下面的 simulator-window forward 兜底，也不占用 `NETWORK_BUDGET_SIMULATOR_APIS` 的转发看门狗 |
+| Storage 异步 API（`STORAGE_API_NAMES`，5 个）                                  | setStorage / getStorage / removeStorage / clearStorage / getStorageInfo                             | `ctx.storageApi.invoke(appId, name, params)` → service-host 窗口 `file://` store（与 `*Sync` 同一 store），ack success/complete                                                                                                                                                                                   |
+| Host registry / Simulator window forward（其余，含 downloadFile / uploadFile） | getSystemInfo / chooseImage / login / fs.\* / chooseMedia / …                                       | 优先 `ctx.simulatorApis.invoke`；落空走 `forwardApiCallToSimulator`（`E.API_CALL` request/response，`apiCallWatchdogMs` 超时——`downloadFile`/`uploadFile` 仍按 wx 超时预算 + 5s grace，其余 API 固定 5s）                                                                                                         |
+
+`wx.request` 的两条入口共用 `nativeRequestOptions`：service 调用沿用 simulator 文档的相对 URL 基准和 Electron Session，preload 调用使用发送 frame 的文档 URL 与调用方 Session。主进程从既有 partition Referer 配置读取策略，不从当前全局项目猜测。默认超时覆盖整个跳转链与正文解码；支持 gzip/deflate/br 解压以及最多 20 次重定向，跨 origin 跳转移除凭据头。
+
+`NativeRequestTrace` 顺序为 `sent → redirect* → response? → finished/failed`。DevTools 合成 `dimina:http:` 请求 ID；重定向复用 ID 并携带 `redirectResponse`，清除前一跳 Payload 缓存。Response 与 Payload 观察数据各受 16 MiB 字符预算约束；超限省略正文，不影响业务返回，也不返回伪造的截断内容。
+
+preload 的 `RequestTask.abort()` 经 `dmb:native-request-abort` 取消；router 销毁时移除其挂在存活 WebContents 上的监听器。当前 service 上游 `request()` 仍未返回 RequestTask，`requestTaskAbort` 是主进程支持的取消入口，不能据此宣称 service JS 已具备 task 返回值。
 
 container → service 的 lifecycle 消息（`PAGE_LIFECYCLE` channel → `handlePageLifecycle` → `forwardToService`，service `onMessage` 收）。`handlePageLifecycle` 只是把它收到的 `payload.event` 原样透传给 service，事件本身由 DeviceShell reducer 产出；reducer 的 `SideEffect` lifecycle 只覆盖 `pageShow | pageHide | pageUnload`：
 
-| event | 触发点 |
-|---|---|
-| pageShow | navigateBack 完成 / switchTab cache 命中 |
-| pageHide | navigateTo 完成 / switchTab 离开当前 tab |
-| pageUnload | navigateBack 弹栈 / redirectTo / reLaunch / switchTab 丢弃不属于任何 tab 子栈的页面 |
-| stackShow / stackHide | 声明保留（`PageLifecycleEvent` / `BridgeMessageType` 含此二项；reducer 与 main 不触发） |
-| appShow / appHide | DeviceShell reducer 不产出；改由主进程 `installAppLifecycleDriver` 按主窗口可见性直接 `forwardToService`（不走 `PAGE_LIFECYCLE`） |
+| event                 | 触发点                                                                                                                            |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| pageShow              | navigateBack 完成 / switchTab cache 命中                                                                                          |
+| pageHide              | navigateTo 完成 / switchTab 离开当前 tab                                                                                          |
+| pageUnload            | navigateBack 弹栈 / redirectTo / reLaunch / switchTab 丢弃不属于任何 tab 子栈的页面                                               |
+| stackShow / stackHide | 声明保留（`PageLifecycleEvent` / `BridgeMessageType` 含此二项；reducer 与 main 不触发）                                           |
+| appShow / appHide     | DeviceShell reducer 不产出；改由主进程 `installAppLifecycleDriver` 按主窗口可见性直接 `forwardToService`（不走 `PAGE_LIFECYCLE`） |
 
 main ↔ simulator 的 `SIMULATOR_EVENTS`（`packages/dimina-electron-runtime/src/shared/bridge-channels.ts`）：
 
 ```ts
 SIMULATOR_EVENTS = {
-  DOM_READY,        // main → sim : renderHost domReady 转发，用于 mount 顺序协调
-  NAV_BAR,          // main → sim : 5 个 nav-bar 动态 API
-  NAV_ACTION,       // main → sim : 5 个路由 API
-  TAB_ACTION,       // main → sim : 8 个 tabBar 动态 API
-  API_CALL,         // main → sim : 兜底的 simulator-window-resident API call（带 requestId / timeout）
+  DOM_READY, // main → sim : renderHost domReady 转发，用于 mount 顺序协调
+  NAV_BAR, // main → sim : 5 个 nav-bar 动态 API
+  NAV_ACTION, // main → sim : 5 个路由 API
+  TAB_ACTION, // main → sim : 8 个 tabBar 动态 API
+  API_CALL, // main → sim : 兜底的 simulator-window-resident API call（带 requestId / timeout）
 }
 ```
 
@@ -291,14 +298,14 @@ TabBar 同样由 DeviceShell 渲染（`tab-bar.tsx` + `tab-bar-state.ts`），�
 
 ## 9. 文件清单
 
-| 文件 | 角色 |
-|---|---|
-| `src/service-host/preload.cjs` | service 窗口 preload：注入 `globalThis.DiminaServiceBridge`、`importScripts` shim、guest console 捕获、从 spawn URL 解 `apiNamespaces` 写 `globalThis.__diminaApiNamespaces` |
-| `src/render-host/preload.cjs` | render-host webview preload：注入 `window.DiminaRenderBridge`、`renderHostReady` 上报 |
-| `src/service-host/sync-api-patch.ts` | service.js 之后把 `*Sync` API patch 成 `sync-impls/` 本地实现 |
-| `packages/dimina-electron-runtime/src/shared/bridge-channels.ts` | `BridgeMessageType` / `BRIDGE_CHANNELS` / `SIMULATOR_EVENTS` / `TabBarConfig` 等协议常量；devtools 同名文件仅重导出 |
-| `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts` | 主进程 BridgeRouter：两级 session、`resourceLoaded` 聚合、`invokeAPI` 路由、生命周期转发、logic.js 注入；devtools 同名文件负责适配装配 |
-| `packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx` | NavigationBar 视觉实现（标题对齐 / 返回按钮 / loading / 颜色动画 / custom 隐藏） |
-| `packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts` | 页面栈纯 reducer（`navigateTo`/`Back`/`redirectTo`/`reLaunch`/`switchTab` → lifecycle/closePage effect） |
+| 文件                                                                         | 角色                                                                                                                                                                         |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/service-host/preload.cjs`                                               | service 窗口 preload：注入 `globalThis.DiminaServiceBridge`、`importScripts` shim、guest console 捕获、从 spawn URL 解 `apiNamespaces` 写 `globalThis.__diminaApiNamespaces` |
+| `src/render-host/preload.cjs`                                                | render-host webview preload：注入 `window.DiminaRenderBridge`、`renderHostReady` 上报                                                                                        |
+| `src/service-host/sync-api-patch.ts`                                         | service.js 之后把 `*Sync` API patch 成 `sync-impls/` 本地实现                                                                                                                |
+| `packages/dimina-electron-runtime/src/shared/bridge-channels.ts`             | `BridgeMessageType` / `BRIDGE_CHANNELS` / `SIMULATOR_EVENTS` / `TabBarConfig` 等协议常量；devtools 同名文件仅重导出                                                          |
+| `packages/dimina-electron-runtime/src/main/ipc/bridge-router.ts`             | 主进程 BridgeRouter：两级 session、`resourceLoaded` 聚合、`invokeAPI` 路由、生命周期转发、logic.js 注入；devtools 同名文件负责适配装配                                       |
+| `packages/dimina-electron-runtime/src/simulator-ui/navigation-bar.tsx`       | NavigationBar 视觉实现（标题对齐 / 返回按钮 / loading / 颜色动画 / custom 隐藏）                                                                                             |
+| `packages/dimina-electron-runtime/src/simulator-ui/page-stack-controller.ts` | 页面栈纯 reducer（`navigateTo`/`Back`/`redirectTo`/`reLaunch`/`switchTab` → lifecycle/closePage effect）                                                                     |
 
 > 容器拓扑与 Session 细节见 [`./electron-container.md`](./electron-container.md)；页面栈与 TabBar 见 [`./page-stack.md`](./page-stack.md) 与 [`./tab-bar.md`](./tab-bar.md)；panel / toolbar 抽象见 [`./workbench-model.md`](./workbench-model.md)。

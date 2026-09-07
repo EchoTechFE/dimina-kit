@@ -12,7 +12,7 @@
  * Installing the full elements-forward gate here would silently reroute the
  * global window's Elements panel to the wrong target. This module intercepts
  * ONLY `Network.getResponseBody` / `Network.getRequestPostData` for
- * `dimina:sim:` virtual requestIds; every other command (including all
+ * `dimina:sim:` and `dimina:http:` virtual requestIds; every other command (including all
  * DOM/CSS/Overlay/Runtime/Debugger/…) passes straight through untouched.
  *
  * ── Mechanism (same two-way poll bridge as elements-forward) ───────────────
@@ -31,7 +31,7 @@
 import type { WebContents } from 'electron'
 import { isFrontendSettled } from '../views/inject-when-ready.js'
 import type { NetworkBodyProvider } from './index.js'
-import { VIRTUAL_REQUEST_ID_PREFIX } from './index.js'
+import { BODY_REQUEST_ID_PREFIXES } from './request-ids.js'
 import { createFrontendReplyChannel, answerNetworkBodyCommand, drainOutboundBatch } from './frontend-dispatch.js'
 
 /** The only two Network.* commands this gate ever intercepts. */
@@ -55,16 +55,16 @@ const DRAIN_INTERVAL_MS = 150
  */
 export function buildNetworkOnlyHookScript(): string {
   const netMethods = JSON.stringify(NETWORK_BODY_METHODS)
-  const vprefix = JSON.stringify(VIRTUAL_REQUEST_ID_PREFIX)
+  const vprefix = JSON.stringify(BODY_REQUEST_ID_PREFIXES)
   return `(function(){try{
     if (globalThis.__diminaGlobalNetworkHookInstalled) return 'already';
     var OUT = (globalThis.__diminaGlobalNetworkOutbound = globalThis.__diminaGlobalNetworkOutbound || []);
     var NET_METHODS = ${netMethods};
-    var VPREFIX = ${vprefix};
+    var VPREFIXES = ${vprefix};
     function isNetworkBody(m){
       if (!m || !m.method) return false;
       if (NET_METHODS.indexOf(m.method) < 0) return false;
-      return !!(m.params && typeof m.params.requestId === 'string' && m.params.requestId.indexOf(VPREFIX) === 0);
+      return !!(m.params && typeof m.params.requestId === 'string' && VPREFIXES.some(function(prefix){ return m.params.requestId.indexOf(prefix) === 0; }));
     }
     var IFH = globalThis.InspectorFrontendHost;
     if (IFH && typeof IFH.sendMessageToBackend === 'function' && !IFH.__diminaGlobalNetworkWrapped){

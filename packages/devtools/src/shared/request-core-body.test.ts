@@ -14,158 +14,249 @@
  *  - responseType 'arraybuffer' (and the legacy dataType 'arraybuffer' spelling)
  *    yields an ArrayBuffer instead of decoded text/JSON.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { performRequest, type RequestFailResult, type RequestSuccessResult } from './request-core'
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  performRequest,
+  type RequestFailResult,
+  type RequestSuccessResult,
+} from "./request-core";
 
 async function flushAsyncTurns(times = 5): Promise<void> {
   for (let i = 0; i < times; i++) {
-    await Promise.resolve()
-    await new Promise((resolve) => setTimeout(resolve, 0))
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
   }
 }
 
-function okResponse(body: BodyInit = '{}'): Response {
-  return new Response(body, { status: 200 })
+function okResponse(body: BodyInit = "{}"): Response {
+  return new Response(body, { status: 200 });
 }
 
 afterEach(() => {
-  vi.unstubAllGlobals()
-})
+  vi.unstubAllGlobals();
+});
 
-describe('performRequest — method default and GET/HEAD query encoding', () => {
-  it('omitting `method` defaults to GET: an object `data` is appended as URL query params, not a body', async () => {
-    const fetchMock = vi.fn((_url: string, _init?: RequestInit) => Promise.resolve(okResponse()))
-    vi.stubGlobal('fetch', fetchMock)
+describe("performRequest — method default and GET/HEAD query encoding", () => {
+  it("omitting `method` defaults to GET: an object `data` is appended as URL query params, not a body", async () => {
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve(okResponse()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    performRequest({ url: 'https://example.com/api', data: { a: 1, b: 'x' } }, {})
-    await flushAsyncTurns()
+    performRequest(
+      { url: "https://example.com/api", data: { a: 1, b: "x" } },
+      {},
+    );
+    await flushAsyncTurns();
 
-    const [urlArg, init] = fetchMock.mock.calls[0]
-    const url = new URL(String(urlArg))
-    expect(url.searchParams.get('a')).toBe('1')
-    expect(url.searchParams.get('b')).toBe('x')
-    expect(init?.body).toBeUndefined()
-  })
+    const [urlArg, init] = fetchMock.mock.calls[0];
+    const url = new URL(String(urlArg));
+    expect(url.searchParams.get("a")).toBe("1");
+    expect(url.searchParams.get("b")).toBe("x");
+    expect(init?.body).toBeUndefined();
+  });
 
-  it('HEAD with an object `data` also appends query params and sends no body', async () => {
-    const fetchMock = vi.fn((_url: string, _init?: RequestInit) => Promise.resolve(okResponse()))
-    vi.stubGlobal('fetch', fetchMock)
+  it("HEAD with an object `data` also appends query params and sends no body", async () => {
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve(okResponse()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    performRequest({ url: 'https://example.com/api', method: 'HEAD', data: { q: 'search term' } }, {})
-    await flushAsyncTurns()
+    performRequest(
+      {
+        url: "https://example.com/api",
+        method: "HEAD",
+        data: { q: "search term" },
+      },
+      {},
+    );
+    await flushAsyncTurns();
 
-    const [urlArg, init] = fetchMock.mock.calls[0]
-    const url = new URL(String(urlArg))
-    expect(url.searchParams.get('q')).toBe('search term')
-    expect(init?.body).toBeUndefined()
-  })
-})
+    const [urlArg, init] = fetchMock.mock.calls[0];
+    const url = new URL(String(urlArg));
+    expect(url.searchParams.get("q")).toBe("search term");
+    expect(init?.body).toBeUndefined();
+  });
 
-describe('performRequest — non-GET/HEAD body encoding', () => {
-  it('a string `data` is sent as the body verbatim, untouched', async () => {
-    const fetchMock = vi.fn((_url: string, _init?: RequestInit) => Promise.resolve(okResponse()))
-    vi.stubGlobal('fetch', fetchMock)
+  it("a bodyless GET (no `data`, no `header`) sends no content-type at all — matching a real device, which never adds one to a request with no body, and keeping the request CORS-simple in the simulator's Chromium renderer", async () => {
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve(okResponse()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    performRequest({ url: 'https://example.com/api', method: 'POST', data: 'raw=body&x=1' }, {})
-    await flushAsyncTurns()
+    performRequest({ url: "https://example.com/api" }, {});
+    await flushAsyncTurns();
 
-    const init = fetchMock.mock.calls[0][1]
-    expect(init?.body).toBe('raw=body&x=1')
-  })
+    const init = fetchMock.mock.calls[0][1];
+    const headers = new Headers(init?.headers as HeadersInit);
+    expect(headers.has("content-type")).toBe(false);
+  });
 
-  it('an object `data` under the default (application/json) content-type is JSON-encoded', async () => {
-    const fetchMock = vi.fn((_url: string, _init?: RequestInit) => Promise.resolve(okResponse()))
-    vi.stubGlobal('fetch', fetchMock)
+  it("a GET whose object `data` becomes query params still sends no content-type, even though `data` was supplied", async () => {
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve(okResponse()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    performRequest({ url: 'https://example.com/api', method: 'POST', data: { a: 1, b: 'x' } }, {})
-    await flushAsyncTurns()
+    performRequest({ url: "https://example.com/api", data: { q: 1 } }, {});
+    await flushAsyncTurns();
 
-    const init = fetchMock.mock.calls[0][1]
-    expect(init?.body).toBe(JSON.stringify({ a: 1, b: 'x' }))
-  })
+    const init = fetchMock.mock.calls[0][1];
+    const headers = new Headers(init?.headers as HeadersInit);
+    expect(headers.has("content-type")).toBe(false);
+  });
+});
 
-  it('an object `data` under application/x-www-form-urlencoded is form-encoded as key=value pairs, not JSON', async () => {
-    const fetchMock = vi.fn((_url: string, _init?: RequestInit) => Promise.resolve(okResponse()))
-    vi.stubGlobal('fetch', fetchMock)
+describe("performRequest — non-GET/HEAD body encoding", () => {
+  it("a string `data` is sent as the body verbatim, untouched", async () => {
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve(okResponse()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
 
-    performRequest({
-      url: 'https://example.com/api',
-      method: 'POST',
-      header: { 'content-type': 'application/x-www-form-urlencoded' },
-      data: { a: 1, b: 'x' },
-    }, {})
-    await flushAsyncTurns()
+    performRequest(
+      { url: "https://example.com/api", method: "POST", data: "raw=body&x=1" },
+      {},
+    );
+    await flushAsyncTurns();
 
-    const init = fetchMock.mock.calls[0][1]
-    expect(typeof init?.body).toBe('string')
-    expect(init?.body).not.toContain('{')
-    const parsed = new URLSearchParams(init?.body as string)
-    expect(parsed.get('a')).toBe('1')
-    expect(parsed.get('b')).toBe('x')
-  })
-})
+    const init = fetchMock.mock.calls[0][1];
+    expect(init?.body).toBe("raw=body&x=1");
+  });
+
+  it("an object `data` under the default (application/json) content-type is JSON-encoded", async () => {
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve(okResponse()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    performRequest(
+      {
+        url: "https://example.com/api",
+        method: "POST",
+        data: { a: 1, b: "x" },
+      },
+      {},
+    );
+    await flushAsyncTurns();
+
+    const init = fetchMock.mock.calls[0][1];
+    expect(init?.body).toBe(JSON.stringify({ a: 1, b: "x" }));
+  });
+
+  it("an object `data` under application/x-www-form-urlencoded is form-encoded as key=value pairs, not JSON", async () => {
+    const fetchMock = vi.fn((_url: string, _init?: RequestInit) =>
+      Promise.resolve(okResponse()),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    performRequest(
+      {
+        url: "https://example.com/api",
+        method: "POST",
+        header: { "content-type": "application/x-www-form-urlencoded" },
+        data: { a: 1, b: "x" },
+      },
+      {},
+    );
+    await flushAsyncTurns();
+
+    const init = fetchMock.mock.calls[0][1];
+    expect(typeof init?.body).toBe("string");
+    expect(init?.body).not.toContain("{");
+    const parsed = new URLSearchParams(init?.body as string);
+    expect(parsed.get("a")).toBe("1");
+    expect(parsed.get("b")).toBe("x");
+  });
+});
 
 describe('performRequest — dataType (default "json")', () => {
-  it('parses a JSON-shaped response body into `data`', async () => {
-    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okResponse(JSON.stringify({ ok: true, n: 3 })))))
-    const success = vi.fn<(res: RequestSuccessResult) => void>()
+  it("parses a JSON-shaped response body into `data`", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(okResponse(JSON.stringify({ ok: true, n: 3 }))),
+      ),
+    );
+    const success = vi.fn<(res: RequestSuccessResult) => void>();
 
-    performRequest({ url: 'https://example.com/api' }, { success })
-    await flushAsyncTurns()
+    performRequest({ url: "https://example.com/api" }, { success });
+    await flushAsyncTurns();
 
-    expect(success).toHaveBeenCalledTimes(1)
-    expect(success.mock.calls[0][0].data).toEqual({ ok: true, n: 3 })
-  })
+    expect(success).toHaveBeenCalledTimes(1);
+    expect(success.mock.calls[0][0].data).toEqual({ ok: true, n: 3 });
+  });
 
-  it('falls back to the raw text when the response body is not valid JSON, without throwing', async () => {
-    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okResponse('not-json{{{'))))
-    const success = vi.fn<(res: RequestSuccessResult) => void>()
-    const fail = vi.fn<(err: RequestFailResult) => void>()
+  it("falls back to the raw text when the response body is not valid JSON, without throwing", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(okResponse("not-json{{{"))),
+    );
+    const success = vi.fn<(res: RequestSuccessResult) => void>();
+    const fail = vi.fn<(err: RequestFailResult) => void>();
 
-    performRequest({ url: 'https://example.com/api' }, { success, fail })
-    await flushAsyncTurns()
+    performRequest({ url: "https://example.com/api" }, { success, fail });
+    await flushAsyncTurns();
 
-    expect(fail).not.toHaveBeenCalled()
-    expect(success).toHaveBeenCalledTimes(1)
-    expect(success.mock.calls[0][0].data).toBe('not-json{{{')
-  })
+    expect(fail).not.toHaveBeenCalled();
+    expect(success).toHaveBeenCalledTimes(1);
+    expect(success.mock.calls[0][0].data).toBe("not-json{{{");
+  });
 
   it('a non-"json" dataType leaves the response body as raw text, even when it happens to be valid JSON', async () => {
-    const jsonText = JSON.stringify({ a: 1 })
-    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okResponse(jsonText))))
-    const success = vi.fn<(res: RequestSuccessResult) => void>()
+    const jsonText = JSON.stringify({ a: 1 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(okResponse(jsonText))),
+    );
+    const success = vi.fn<(res: RequestSuccessResult) => void>();
 
-    performRequest({ url: 'https://example.com/api', dataType: 'text' }, { success })
-    await flushAsyncTurns()
+    performRequest(
+      { url: "https://example.com/api", dataType: "text" },
+      { success },
+    );
+    await flushAsyncTurns();
 
-    expect(success.mock.calls[0][0].data).toBe(jsonText)
-  })
-})
+    expect(success.mock.calls[0][0].data).toBe(jsonText);
+  });
+});
 
 describe('performRequest — responseType "arraybuffer"', () => {
-  it('yields an ArrayBuffer in `data`, bypassing text/JSON decoding', async () => {
-    const bytes = new Uint8Array([1, 2, 3, 4])
-    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okResponse(bytes))))
-    const success = vi.fn<(res: RequestSuccessResult) => void>()
+  it("yields an ArrayBuffer in `data`, bypassing text/JSON decoding", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(okResponse(bytes))),
+    );
+    const success = vi.fn<(res: RequestSuccessResult) => void>();
 
-    performRequest({ url: 'https://example.com/api', responseType: 'arraybuffer' }, { success })
-    await flushAsyncTurns()
+    performRequest(
+      { url: "https://example.com/api", responseType: "arraybuffer" },
+      { success },
+    );
+    await flushAsyncTurns();
 
-    const data = success.mock.calls[0][0].data
-    expect(data).toBeInstanceOf(ArrayBuffer)
-    expect(new Uint8Array(data as ArrayBuffer)).toEqual(bytes)
-  })
+    const data = success.mock.calls[0][0].data;
+    expect(data).toBeInstanceOf(ArrayBuffer);
+    expect(new Uint8Array(data as ArrayBuffer)).toEqual(bytes);
+  });
 
   it('the legacy dataType "arraybuffer" spelling is honoured the same as responseType "arraybuffer"', async () => {
-    const bytes = new Uint8Array([9, 8, 7])
-    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(okResponse(bytes))))
-    const success = vi.fn<(res: RequestSuccessResult) => void>()
+    const bytes = new Uint8Array([9, 8, 7]);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(okResponse(bytes))),
+    );
+    const success = vi.fn<(res: RequestSuccessResult) => void>();
 
-    performRequest({ url: 'https://example.com/api', dataType: 'arraybuffer' }, { success })
-    await flushAsyncTurns()
+    performRequest(
+      { url: "https://example.com/api", dataType: "arraybuffer" },
+      { success },
+    );
+    await flushAsyncTurns();
 
-    const data = success.mock.calls[0][0].data
-    expect(data).toBeInstanceOf(ArrayBuffer)
-    expect(new Uint8Array(data as ArrayBuffer)).toEqual(bytes)
-  })
-})
+    const data = success.mock.calls[0][0].data;
+    expect(data).toBeInstanceOf(ArrayBuffer);
+    expect(new Uint8Array(data as ArrayBuffer)).toEqual(bytes);
+  });
+});

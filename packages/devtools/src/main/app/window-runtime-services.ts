@@ -1,40 +1,49 @@
-import type { BrowserWindow } from 'electron'
-import type { ConnectionRegistry, DisposableRegistry } from '@dimina-kit/electron-deck/main'
-import type { SyncStorageChange } from '../../shared/ipc-channels.js'
-import type { SenderPolicy } from '../utils/ipc-registry.js'
-import type { BridgeRouterHandle } from '../ipc/bridge-router.js'
-import type { CdpSessionBroker } from '../services/cdp-session/index.js'
-import type { InternalDevtoolsWindow } from '../windows/internal-devtools-window/index.js'
-import type { NetworkForwarder } from '../services/network-forward/index.js'
-import type { AppDataTap } from '../services/simulator-appdata/index.js'
-import type { StorageApi } from '../services/simulator-storage/index.js'
-import type { WorkspaceService } from '../services/workspace/workspace-service.js'
-import { resolveNativeAppDataKeys, resolveNativeStorageOverview } from './native-overview.js'
-import { registerMcpWindow, noteActiveBridgeId } from '../services/mcp/index.js'
-import { createRenderInspector } from '../services/render-inspect/index.js'
-import { setupSimulatorStorage } from '../services/simulator-storage/index.js'
-import { createNetworkForwarder } from '../services/network-forward/index.js'
-import { setupSimulatorWxml } from '../services/simulator-wxml/index.js'
-import { setupSimulatorAppData } from '../services/simulator-appdata/index.js'
-import { setupSimulatorCurrentPage } from '../services/simulator-current-page/index.js'
-import { toDisposable } from '@dimina-kit/electron-deck/main'
+import type { BrowserWindow } from "electron";
+import type {
+  ConnectionRegistry,
+  DisposableRegistry,
+} from "@dimina-kit/electron-deck/main";
+import type { SyncStorageChange } from "../../shared/ipc-channels.js";
+import type { SenderPolicy } from "../utils/ipc-registry.js";
+import type { BridgeRouterHandle } from "../ipc/bridge-router.js";
+import type { CdpSessionBroker } from "../services/cdp-session/index.js";
+import type { InternalDevtoolsWindow } from "../windows/internal-devtools-window/index.js";
+import type { NetworkForwarder } from "../services/network-forward/index.js";
+import type { AppDataTap } from "../services/simulator-appdata/index.js";
+import type { StorageApi } from "../services/simulator-storage/index.js";
+import type { WorkspaceService } from "../services/workspace/workspace-service.js";
+import {
+  resolveNativeAppDataKeys,
+  resolveNativeStorageOverview,
+} from "./native-overview.js";
+import {
+  registerMcpWindow,
+  noteActiveBridgeId,
+} from "../services/mcp/index.js";
+import { createRenderInspector } from "../services/render-inspect/index.js";
+import { setupSimulatorStorage } from "../services/simulator-storage/index.js";
+import { createNetworkForwarder } from "../services/network-forward/index.js";
+import { setupSimulatorWxml } from "../services/simulator-wxml/index.js";
+import { setupSimulatorAppData } from "../services/simulator-appdata/index.js";
+import { setupSimulatorCurrentPage } from "../services/simulator-current-page/index.js";
+import { toDisposable } from "@dimina-kit/electron-deck/main";
 
 /**
  * Narrow view of the context fields these services read, plus the four fields
  * they publish back onto it for bridge-router to consume.
  */
 export interface WindowRuntimeContext {
-  registry: DisposableRegistry
-  connections: ConnectionRegistry
-  cdpSessionBroker: CdpSessionBroker
-  senderPolicy: SenderPolicy
-  workspace: WorkspaceService
-  bridge?: BridgeRouterHandle
-  internalDevtoolsWindow?: InternalDevtoolsWindow
-  storageApi?: StorageApi
-  onServiceStorageChanged?: (appId: string, change: SyncStorageChange) => void
-  networkForward?: NetworkForwarder
-  appData?: AppDataTap
+  registry: DisposableRegistry;
+  connections: ConnectionRegistry;
+  cdpSessionBroker: CdpSessionBroker;
+  senderPolicy: SenderPolicy;
+  workspace: WorkspaceService;
+  bridge?: BridgeRouterHandle;
+  internalDevtoolsWindow?: InternalDevtoolsWindow;
+  storageApi?: StorageApi;
+  onServiceStorageChanged?: (appId: string, change: SyncStorageChange) => void;
+  networkForward?: NetworkForwarder;
+  appData?: AppDataTap;
 }
 
 /**
@@ -42,12 +51,14 @@ export interface WindowRuntimeContext {
  * native-host WXML/element-inspect services (which scope the active render
  * guest by appId) and the editor's per-project workspace identity.
  */
-export function createActiveAppIdResolver(context: Pick<WindowRuntimeContext, 'workspace'>): () => string | null {
+export function createActiveAppIdResolver(
+  context: Pick<WindowRuntimeContext, "workspace">,
+): () => string | null {
   return () => {
-    const session = context.workspace.getSession()
-    const appInfo = session?.appInfo as { appId?: string } | undefined
-    return appInfo?.appId ?? null
-  }
+    const session = context.workspace.getSession();
+    const appInfo = session?.appInfo as { appId?: string } | undefined;
+    return appInfo?.appId ?? null;
+  };
 }
 
 /**
@@ -72,8 +83,8 @@ export function setupWindowRuntimeServices(
     nativeOverviewProvider: null,
     projectPath,
     getAppId: getActiveAppId,
-  })
-  context.registry.add(mcpWindow.dispose)
+  });
+  context.registry.add(mcpWindow.dispose);
 
   // Native-host: the real mini-app page runs in a nested render-host
   // <webview> guest, not the localhost:7788 shell. Point the MCP
@@ -81,36 +92,41 @@ export function setupWindowRuntimeServices(
   // the visible page across navigation/tab switches. Only wired under
   // native-host so the default path stays byte-identical.
   if (context.bridge?.isNativeHost()) {
-    mcpWindow.facts.nativeHost = true
+    mcpWindow.facts.nativeHost = true;
     mcpWindow.facts.nativeOverviewProvider = async () => {
-      const appId = getActiveAppId()
-      const stack = context.bridge?.getPageStack?.(appId ?? undefined) ?? []
-      const top = stack[stack.length - 1]
+      const appId = getActiveAppId();
+      const stack = context.bridge?.getPageStack?.(appId ?? undefined) ?? [];
+      const top = stack[stack.length - 1];
       const overview = {
         currentRoute: top?.pagePath ?? null,
         pageStackDepth: stack.length,
         storageKeys: [] as string[],
         storageCount: 0,
         appDataKeys: [] as string[],
-      }
+      };
 
       if (appId) {
-        const storage = await resolveNativeStorageOverview(context, appId)
-        overview.storageKeys = storage.storageKeys
-        overview.storageCount = storage.storageCount
-        overview.appDataKeys = resolveNativeAppDataKeys(context, appId)
+        const storage = await resolveNativeStorageOverview(context, appId);
+        overview.storageKeys = storage.storageKeys;
+        overview.storageCount = storage.storageCount;
+        overview.appDataKeys = resolveNativeAppDataKeys(context, appId);
       }
 
-      return overview
-    }
-    const off = context.bridge.onRenderEvent((ev) => noteActiveBridgeId(context, ev.bridgeId))
-    context.registry.add(off)
+      return overview;
+    };
+    const off = context.bridge.onRenderEvent((ev) =>
+      noteActiveBridgeId(context, ev.bridgeId),
+    );
+    context.registry.add(off);
   }
 
   // Native-host inspector: injects the render-guest IIFE and drives WXML /
   // element-highlight against the active render-host <webview>. Reused by
   // the storage panel (element inspect) and the WXML panel service.
-  const renderInspector = createRenderInspector({ connections: context.connections, broker: context.cdpSessionBroker })
+  const renderInspector = createRenderInspector({
+    connections: context.connections,
+    broker: context.cdpSessionBroker,
+  });
 
   const storage = setupSimulatorStorage(mainWindow.webContents, {
     senderPolicy: context.senderPolicy,
@@ -131,18 +147,22 @@ export function setupWindowRuntimeServices(
     // read/write storage from the service-host window's file:// store.
     bridge: context.bridge,
     renderInspector,
-  })
-  context.registry.add(storage)
+  });
+  context.registry.add(storage);
   // Native-host: expose the async-storage runtime hook so bridge-router
   // routes async wx.setStorage/etc. to the unified service-host store.
   if (storage.storageApi) {
-    context.storageApi = storage.storageApi
-    context.registry.add(() => { context.storageApi = undefined })
+    context.storageApi = storage.storageApi;
+    context.registry.add(() => {
+      context.storageApi = undefined;
+    });
     // SYNC wx storage writes bypass main (they hit the service-host localStorage
     // directly); the service-host posts `storageChanged` and bridge-router routes
     // it here so the Storage panel stays live without a manual reload.
-    context.onServiceStorageChanged = storage.onSyncStorageChange
-    context.registry.add(() => { context.onServiceStorageChanged = undefined })
+    context.onServiceStorageChanged = storage.onSyncStorageChange;
+    context.registry.add(() => {
+      context.onServiceStorageChanged = undefined;
+    });
   }
 
   // Native-host WXML + AppData panels: main sources the data (WXML pulled
@@ -160,7 +180,8 @@ export function setupWindowRuntimeServices(
     // DevTools host exist; getServiceWc here is the fallback sink target.
     const networkForward = createNetworkForwarder({
       getServiceWc: (appId) => context.bridge?.getServiceWc(appId) ?? null,
-      getResourceServerBaseUrl: () => context.bridge?.getResourceBaseUrl?.() ?? null,
+      getResourceServerBaseUrl: () =>
+        context.bridge?.getResourceBaseUrl?.() ?? null,
       // The simulator shell's own static-asset server (serves simulator.html
       // + its JS/CSS, independent from the resource server above — see
       // NetworkForwarderBridge.getSimulatorServerBaseUrl's doc). Host is
@@ -168,58 +189,83 @@ export function setupWindowRuntimeServices(
       // buildSimulatorUrlFromSpec default. Absent (null port) when no
       // project is open.
       getSimulatorServerBaseUrl: () => {
-        const port = context.workspace?.getSession()?.port
-        return typeof port === 'number' ? `http://localhost:${port}/` : null
+        const port = context.workspace?.getSession()?.port;
+        return typeof port === "number" ? `http://localhost:${port}/` : null;
       },
       connections: context.connections,
       broker: context.cdpSessionBroker,
-    })
-    context.networkForward = networkForward
-    context.registry.add(networkForward)
-    context.registry.add(() => { context.networkForward = undefined })
+    });
+    context.networkForward = networkForward;
+    context.registry.add(networkForward);
+    context.registry.add(() => {
+      context.networkForward = undefined;
+    });
     // Global mirror: once the standalone internal
     // DevTools window builds its own front-end host, mirror the full
     // unfiltered Network stream into it. Attached AFTER context.networkForward
     // is assigned above — the callback re-reads the mutable field on every
     // fire, so ordering only matters for readability here, not correctness.
-    context.registry.add(toDisposable(
-      context.internalDevtoolsWindow?.onHostChanged((hostWc) => {
-        context.networkForward?.setGlobalDevtoolsHost(hostWc)
-      }) ?? (() => {}),
-    ))
+    context.registry.add(
+      toDisposable(
+        context.internalDevtoolsWindow?.onHostChanged((hostWc) => {
+          context.networkForward?.setGlobalDevtoolsHost(hostWc);
+        }) ?? (() => {}),
+      ),
+    );
 
     // Main-process WebSocket traffic (wx.connectSocket runs on the Node `ws`
     // transport, invisible to any webContents debugger): bridge-router fans
     // the trace stream out here, and the forwarder synthesizes it into
     // Network.webSocket* CDP events for the same Network panel sinks.
-    context.registry.add(toDisposable(
-      context.bridge?.onNativeWebSocketTrace?.((ownerId, event) => {
-        context.networkForward?.reportWebSocketTrace(ownerId, event)
-      }) ?? (() => {}),
-    ))
+    context.registry.add(
+      toDisposable(
+        context.bridge?.onNativeWebSocketTrace?.((ownerId, event) => {
+          context.networkForward?.reportWebSocketTrace(ownerId, event);
+        }) ?? (() => {}),
+      ),
+    );
 
-    context.registry.add(setupSimulatorWxml(mainWindow.webContents, {
-      senderPolicy: context.senderPolicy,
-      bridge: context.bridge,
-      inspector: renderInspector,
-      getActiveAppId,
-    }))
+    // Main-process HTTP traffic (wx.request runs on Node http/https,
+    // invisible to any webContents debugger — that's the whole point of the
+    // migration off renderer `fetch()`, since Chromium's Fetch/CORS algorithm
+    // was attaching a spurious OPTIONS preflight to it): same trace-stream
+    // fan-out as the WebSocket case above.
+    context.registry.add(
+      toDisposable(
+        context.bridge?.onNativeRequestTrace?.((ownerId, event) => {
+          context.networkForward?.reportNativeRequestTrace(ownerId, event);
+        }) ?? (() => {}),
+      ),
+    );
+
+    context.registry.add(
+      setupSimulatorWxml(mainWindow.webContents, {
+        senderPolicy: context.senderPolicy,
+        bridge: context.bridge,
+        inspector: renderInspector,
+        getActiveAppId,
+      }),
+    );
     const appDataService = setupSimulatorAppData(mainWindow.webContents, {
       senderPolicy: context.senderPolicy,
       getActiveAppId,
       // AppData-panel edit write-back target: the service-host window owning
       // the edited page bridge.
       bridge: context.bridge,
-    })
+    });
     // bridge-router feeds this via ctx.appData (service→render tap + evict).
-    context.appData = appDataService
-    context.registry.add(appDataService)
-    context.registry.add(() => { context.appData = undefined })
+    context.appData = appDataService;
+    context.registry.add(appDataService);
+    context.registry.add(() => {
+      context.appData = undefined;
+    });
     // Push the visible page route to the toolbar on every navigation (the
     // page stack lives in the DeviceShell WCV, invisible to renderer
     // <webview> nav events).
-    context.registry.add(setupSimulatorCurrentPage(mainWindow.webContents, {
-      bridge: context.bridge,
-    }))
+    context.registry.add(
+      setupSimulatorCurrentPage(mainWindow.webContents, {
+        bridge: context.bridge,
+      }),
+    );
   }
 }

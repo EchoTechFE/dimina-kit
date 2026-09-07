@@ -1,14 +1,29 @@
 import { app, BrowserWindow, ipcMain, webContents } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
+import { nativeRequestOptions } from '../services/native-request/request-context.js'
+import { createPreloadRequestOwners } from '../services/native-request/preload-owners.js'
 import { pathToFileURL } from 'node:url'
 import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
-import type { DeviceOrientation, NativeDeviceInfo, SyncStorageChange } from '../../shared/runtime-types.js'
+import type {
+  DeviceOrientation,
+  NativeDeviceInfo,
+  SyncStorageChange,
+} from '../../shared/runtime-types.js'
 import { apiCallWatchdogMs, isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { resolveRuntimeAssetPaths } from '../utils/paths.js'
-import { addMuxedInvokeHandler, addMuxedSyncListener, routerOwnsSender } from './bridge-router-ipc-mux.js'
+import {
+  addMuxedInvokeHandler,
+  addMuxedSyncListener,
+  routerOwnsSender,
+} from './bridge-router-ipc-mux.js'
 import { addMuxedDmbResourceHandler } from './bridge-router-protocol-mux.js'
-import { applyDeviceToSession, orientationOfHostEnv, spawnHostEnvFor } from './bridge-router-device-geometry.js'
+import {
+  applyDeviceToSession,
+  orientationOfHostEnv,
+  spawnHostEnvFor,
+} from './bridge-router-device-geometry.js'
 import { createSessionListenerBag } from './session-listener-bag.js'
 import type { SessionListenerBag } from './session-listener-bag.js'
 import type {
@@ -41,7 +56,10 @@ import type {
 import type { RuntimeContext } from '../runtime-context.js'
 import type { ConnectionRegistry, DebugTap, Disposable } from '@dimina-kit/electron-deck/main'
 import { createDebugTap } from '@dimina-kit/electron-deck/main'
-import { startDiminaResourceServer, type DiminaResourceServer } from '../services/dimina-resource-server.js'
+import {
+  startDiminaResourceServer,
+  type DiminaResourceServer,
+} from '../services/dimina-resource-server.js'
 import { handleDmbResourceRequest } from '../services/dmb-resource/handle-request.js'
 import type { DmbResourceSession } from '../services/dmb-resource/handle-request.js'
 import { buildRenderHostDocumentUrl } from '../services/dmb-resource/render-host-url.js'
@@ -52,7 +70,10 @@ import {
   serviceHostSpec,
 } from '../windows/service-host-window/create.js'
 import { ServiceHostPool } from '../services/service-host-pool/pool.js'
-import { createConsoleForwarder, type GuestConsoleEntry } from '../services/console-forward/index.js'
+import {
+  createConsoleForwarder,
+  type GuestConsoleEntry,
+} from '../services/console-forward/index.js'
 import { createDiagnosticsBus } from '../services/diagnostics/index.js'
 import {
   createNativeWebSocketService,
@@ -63,6 +84,15 @@ import {
   type NativeWebSocketService,
   type NativeWebSocketTrace,
 } from '../services/native-websocket/index.js'
+import {
+  createNativeRequestService,
+  type NativeRequestResult,
+  type NativeRequestService,
+  type NativeRequestTrace,
+} from '../services/native-request/index.js'
+// Re-exported so embedders (devtools network panel) can type a trace listener
+// against the single source without reaching into the service module.
+export type { NativeRequestTrace } from '../services/native-request/index.js'
 
 // Re-exported so embedders (devtools network panel) can type a trace listener
 // against the single source without reaching into the service module.
@@ -424,6 +454,9 @@ interface RouterState {
   appLifecycle: AppLifecycleController
   /** Main-process WebSocket transport. Uses Node net/tls through `ws`, never Chromium. */
   nativeWebSocket: NativeWebSocketService
+  /** Main-process HTTP transport for wx.request. Uses Node http/https, never Chromium
+   *  — no Origin header, no Fetch/CORS algorithm, no preflight. */
+  nativeRequest: NativeRequestService
   /**
    * Evict the app's accumulated AppData bridges (panel registry) for every
    * page of the session. Lives on RouterState because `disposeAppSession` is
@@ -563,7 +596,16 @@ export interface BridgeRouterHandle {
    * observation — subscribing never alters API forwarding. Each `created`
    * socketId is guaranteed exactly one terminal `closed`. Optional so partial
    * test mocks of the handle need not stub it. */
-  onNativeWebSocketTrace?(listener: (ownerId: string, event: NativeWebSocketTrace) => void): () => void
+  onNativeWebSocketTrace?(
+    listener: (ownerId: string, event: NativeWebSocketTrace) => void,
+  ): () => void
+  /** Subscribe to the native HTTP request transport's trace stream (sent /
+   * response / finished / failed per request, keyed by owner appSessionId).
+   * Pure observation — subscribing never alters request forwarding. Each
+   * `sent` requestId is guaranteed exactly one terminal event (`finished`
+   * XOR `failed`). Optional so partial test mocks of the handle need not
+   * stub it. */
+  onNativeRequestTrace?(listener: (ownerId: string, event: NativeRequestTrace) => void): () => void
   /** The currently-selected device (renderer toolbar), or null pre-selection. */
   getDevice(): NativeDeviceInfo | null
   /** Cache the selected device, push DEVICE_CHANGE to the live simulator
@@ -703,13 +745,18 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     nativeWebSocket: createNativeWebSocketService({
       idleTimeoutMs: socketIdleTimeoutMsFromEnv(),
     }),
-    evictAppDataBridges: (ap) => {
+    nativeRequest: createNativeRequestService(),
+    evictAppDataBridges: ap => {
       for (const page of ap.pages.values()) {
-        ctx.events.emit('app-data-evict', { appId: ap.appId, bridgeId: page.bridgeId })
+        ctx.events.emit('app-data-evict', {
+          appId: ap.appId,
+          bridgeId: page.bridgeId,
+        })
       }
     },
   }
   ctx.registry.add(() => state.nativeWebSocket.dispose())
+  ctx.registry.add(() => state.nativeRequest.dispose())
 
   // Opt-in (default OFF) pre-warm pool for service-host windows. When enabled,
   // handleSpawn acquires a warm window instead of constructing one per spawn.
@@ -729,7 +776,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
           defaultSpec: serviceHostSpec(undefined, undefined, runtimeAssets),
           maxPoolSize: PREWARM_MAX_POOL_SIZE,
         })
-        .catch((error) => {
+        .catch(error => {
           console.warn('[bridge-router] webview pool warm-up failed:', error)
         })
     }, 500)
@@ -777,17 +824,21 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     }
     event.returnValue = reply
   }
-  ctx.registry.add(addMuxedSyncListener(C.NATIVE_HOST_ENABLED, {
-    claims: ownsSender,
-    handle: onNativeHostQuery,
-  }))
+  ctx.registry.add(
+    addMuxedSyncListener(C.NATIVE_HOST_ENABLED, {
+      claims: ownsSender,
+      handle: onNativeHostQuery,
+    }),
+  )
 
   // Subscribers to render-side activity (domReady / active-page). Panels that
   // pull from the active render guest (WXML) re-read on these.
   const renderEventListeners = new Set<(event: RenderEvent) => void>()
   const emitRenderEvent = (event: RenderEvent): void => {
     for (const listener of renderEventListeners) {
-      try { listener(event) } catch (error) {
+      try {
+        listener(event)
+      } catch (error) {
         console.warn('[bridge-router] render-event listener threw:', error)
       }
     }
@@ -801,7 +852,9 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   const emitServiceHostReady = (event: ServiceHostReadyEvent): void => {
     state.lastServiceHostReady = event
     for (const listener of serviceHostReadyListeners) {
-      try { listener(event) } catch (error) {
+      try {
+        listener(event)
+      } catch (error) {
         console.warn('[bridge-router] service-host-ready listener threw:', error)
       }
     }
@@ -812,15 +865,37 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   // The service exposes a SINGLE tracer; the router fans out from here, so the
   // service itself never knows how many observers exist. Pure subscription:
   // no forwarding path awaits or reorders on this channel.
-  const nativeWebSocketTraceListeners = new Set<(ownerId: string, event: NativeWebSocketTrace) => void>()
+  const nativeWebSocketTraceListeners = new Set<
+    (ownerId: string, event: NativeWebSocketTrace) => void
+  >()
   state.nativeWebSocket.setTracer((ownerId, event) => {
     for (const listener of nativeWebSocketTraceListeners) {
-      try { listener(ownerId, event) } catch (error) {
+      try {
+        listener(ownerId, event)
+      } catch (error) {
         console.warn('[bridge-router] websocket-trace listener threw:', error)
       }
     }
   })
   ctx.registry.add(() => nativeWebSocketTraceListeners.clear())
+
+  // Subscribers to the native HTTP request trace stream (devtools Network
+  // panel) — same fan-out shape as the WebSocket trace stream above, for the
+  // same reason: wx.request now runs on Node http/https in this process, so
+  // no webContents.debugger can observe it either.
+  const nativeRequestTraceListeners = new Set<
+    (ownerId: string, event: NativeRequestTrace) => void
+  >()
+  state.nativeRequest.setTracer((ownerId, event) => {
+    for (const listener of nativeRequestTraceListeners) {
+      try {
+        listener(ownerId, event)
+      } catch (error) {
+        console.warn('[bridge-router] request-trace listener threw:', error)
+      }
+    }
+  })
+  ctx.registry.add(() => nativeRequestTraceListeners.clear())
 
   // Expose a thin accessor over RouterState so other main services (storage,
   // automation, appdata) can resolve live render/service WebContents without
@@ -828,44 +903,44 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   // windows on respawn, so cached handles go stale.
   const bridgeHandle: BridgeRouterHandle = {
     isNativeHost: () => true,
-    resolveRenderWc: (bridgeId) => {
+    resolveRenderWc: bridgeId => {
       const page = state.pageSessions.get(bridgeId)
       return page?.renderWc && !page.renderWc.isDestroyed() ? page.renderWc : null
     },
-    getServiceWc: (appId) => {
+    getServiceWc: appId => {
       const ap = resolveCurrentApp(state, ctx, appId)
       return ap && !ap.serviceWc.isDestroyed() ? ap.serviceWc : null
     },
-    getServiceWcForBridge: (bridgeId) => {
+    getServiceWcForBridge: bridgeId => {
       const page = state.pageSessions.get(bridgeId)
       if (!page) return null
       const ap = state.appSessions.get(page.appSessionId)
       return ap && !ap.serviceWc.isDestroyed() ? ap.serviceWc : null
     },
-    getActiveBridgeId: (appId) => {
+    getActiveBridgeId: appId => {
       const ap = resolveCurrentApp(state, ctx, appId)
       return ap ? resolveActiveBridgeId(ap) : null
     },
-    getPageStack: (appId) => {
+    getPageStack: appId => {
       const ap = resolveCurrentApp(state, ctx, appId)
       return ap?.pageStack ?? null
     },
-    getResourceBaseUrl: (appId) => {
+    getResourceBaseUrl: appId => {
       const ap = resolveCurrentApp(state, ctx, appId)
       return ap?.resourceBaseUrl ?? null
     },
-    getActiveRenderWc: (appId) => {
+    getActiveRenderWc: appId => {
       const ap = resolveCurrentApp(state, ctx, appId)
       if (!ap) return null
       const bridgeId = resolveActiveBridgeId(ap)
       const page = bridgeId ? state.pageSessions.get(bridgeId) : undefined
       return page?.renderWc && !page.renderWc.isDestroyed() ? page.renderWc : null
     },
-    onRenderEvent: (listener) => {
+    onRenderEvent: listener => {
       renderEventListeners.add(listener)
       return () => renderEventListeners.delete(listener)
     },
-    onServiceHostReady: (listener) => {
+    onServiceHostReady: listener => {
       serviceHostReadyListeners.add(listener)
       // Missed-signal catch-up (mirrors host-toolbar-port-channel.ts's
       // `onReady`): a subscriber registering AFTER the session it cares
@@ -882,19 +957,25 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
           if (!serviceHostReadyListeners.has(listener)) return
           const ap = state.appSessions.get(candidate.appSessionId)
           if (!ap || ap.serviceWc.isDestroyed() || ap.serviceWc.id !== candidate.serviceWcId) return
-          try { listener(candidate) } catch (error) {
+          try {
+            listener(candidate)
+          } catch (error) {
             console.warn('[bridge-router] service-host-ready catch-up listener threw:', error)
           }
         })
       }
       return () => serviceHostReadyListeners.delete(listener)
     },
-    onNativeWebSocketTrace: (listener) => {
+    onNativeWebSocketTrace: listener => {
       nativeWebSocketTraceListeners.add(listener)
       return () => nativeWebSocketTraceListeners.delete(listener)
     },
+    onNativeRequestTrace: listener => {
+      nativeRequestTraceListeners.add(listener)
+      return () => nativeRequestTraceListeners.delete(listener)
+    },
     getDevice: () => currentDevice,
-    setDevice: (device) => {
+    setDevice: device => {
       currentDevice = device
       // Push to the live simulator WC(s) so a mounted DeviceShell re-renders the
       // bezel/status-bar/notch. Pre-spawn there is no session yet — the initial
@@ -918,7 +999,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
         }
       }
     },
-    disposeSessionsForSimulator: (simulatorWcId) => {
+    disposeSessionsForSimulator: simulatorWcId => {
       // Snapshot ids first: disposeAppSession mutates state.appSessions.
       const ids: string[] = []
       for (const [id, ap] of state.appSessions) {
@@ -931,7 +1012,7 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
       // after full teardown. disposeAppSession logs those tail failures
       // internally, so this resolves rather than rejecting on them — it is a
       // completion signal, not an error channel.
-      return Promise.all(ids.map((id) => disposeAppSession(state, id))).then(() => {})
+      return Promise.all(ids.map(id => disposeAppSession(state, id))).then(() => {})
     },
     debugTap: state.debugTap,
     census: (): BridgeResourceCensus => {
@@ -1032,7 +1113,9 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     }
   }
   ipcMain.on(C.ACTIVE_PAGE, onActivePage)
-  ctx.registry.add(() => { ipcMain.removeListener(C.ACTIVE_PAGE, onActivePage) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.ACTIVE_PAGE, onActivePage)
+  })
 
   // DeviceShell → main: the full ordered page stack (bottom→top). Stored so
   // automation's App.getPageStack can report a multi-page stack (main has no
@@ -1044,23 +1127,33 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     ap.pageStack = payload.stack
   }
   ipcMain.on(C.PAGE_STACK, onPageStack)
-  ctx.registry.add(() => { ipcMain.removeListener(C.PAGE_STACK, onPageStack) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.PAGE_STACK, onPageStack)
+  })
 
-  ctx.registry.add(addMuxedInvokeHandler(C.SPAWN, {
-    claims: ownsSender,
-    handle: (event, opts): Promise<SpawnResult> => handleSpawn(state, ctx, event, opts as SpawnRequest),
-  }))
+  ctx.registry.add(
+    addMuxedInvokeHandler(C.SPAWN, {
+      claims: ownsSender,
+      handle: (event, opts): Promise<SpawnResult> =>
+        handleSpawn(state, ctx, event, opts as SpawnRequest),
+    }),
+  )
 
-  ctx.registry.add(addMuxedInvokeHandler(C.PAGE_OPEN, {
-    claims: ownsSender,
-    handle: (event, opts): Promise<PageOpenResult> => handlePageOpen(state, event, opts as PageOpenRequest),
-  }))
+  ctx.registry.add(
+    addMuxedInvokeHandler(C.PAGE_OPEN, {
+      claims: ownsSender,
+      handle: (event, opts): Promise<PageOpenResult> =>
+        handlePageOpen(state, event, opts as PageOpenRequest),
+    }),
+  )
 
   const onPageClose = (event: IpcMainEvent, payload: PageClosePayload): void => {
     handlePageClose(state, event.sender, payload)
   }
   ipcMain.on(C.PAGE_CLOSE, onPageClose)
-  ctx.registry.add(() => { ipcMain.removeListener(C.PAGE_CLOSE, onPageClose) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.PAGE_CLOSE, onPageClose)
+  })
 
   const onPageLifecycle = (event: IpcMainEvent, payload: PageLifecyclePayload): void => {
     handlePageLifecycle(state, event.sender, payload)
@@ -1069,18 +1162,25 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     if (payload.event === 'pageUnload') {
       const ap = state.appSessions.get(payload.appSessionId)
       if (ap && senderBoundToSession(state, event.sender, ap)) {
-        ctx.events.emit('app-data-evict', { appId: ap.appId, bridgeId: payload.bridgeId })
+        ctx.events.emit('app-data-evict', {
+          appId: ap.appId,
+          bridgeId: payload.bridgeId,
+        })
       }
     }
   }
   ipcMain.on(C.PAGE_LIFECYCLE, onPageLifecycle)
-  ctx.registry.add(() => { ipcMain.removeListener(C.PAGE_LIFECYCLE, onPageLifecycle) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.PAGE_LIFECYCLE, onPageLifecycle)
+  })
 
   const onNavCallback = (event: IpcMainEvent, payload: NavCallbackPayload): void => {
     handleNavCallback(state, event.sender, payload)
   }
   ipcMain.on(C.NAV_CALLBACK, onNavCallback)
-  ctx.registry.add(() => { ipcMain.removeListener(C.NAV_CALLBACK, onNavCallback) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.NAV_CALLBACK, onNavCallback)
+  })
 
   const onDispose = (event: IpcMainEvent, payload: DisposePayload): void => {
     const target = resolveAppByBridgeId(state, payload.bridgeId)
@@ -1090,7 +1190,9 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     // for every session it hosts, so an older session's own dispose stays
     // valid while a newer spawn shares the wc.)
     if (!senderBoundToSession(state, event.sender, target) && appByWc(state, event.sender)) {
-      console.warn(`[bridge-router] DISPOSE rejected: sender not bound to target ${target.appSessionId}`)
+      console.warn(
+        `[bridge-router] DISPOSE rejected: sender not bound to target ${target.appSessionId}`,
+      )
       return
     }
     // AppData bridge eviction happens inside disposeAppSession (single
@@ -1098,7 +1200,9 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     void disposeAppSession(state, target.appSessionId)
   }
   ipcMain.on(C.DISPOSE, onDispose)
-  ctx.registry.add(() => { ipcMain.removeListener(C.DISPOSE, onDispose) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.DISPOSE, onDispose)
+  })
 
   // debugTap (see foundation.md) ingress recorder — near-free no-op unless DIMINA_DEBUG_TAP=1.
   // Hung on the bridge dispatch chokepoint so the cross-wc message flow is
@@ -1131,7 +1235,9 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     routeFromService(state, ap, page, payload.msg, ctx)
   }
   ipcMain.on(C.SERVICE_INVOKE, onServiceInvoke)
-  ctx.registry.add(() => { ipcMain.removeListener(C.SERVICE_INVOKE, onServiceInvoke) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.SERVICE_INVOKE, onServiceInvoke)
+  })
 
   const onServicePublish = (event: IpcMainEvent, payload: ServicePublishPayload): void => {
     tapIn(C.SERVICE_PUBLISH, event.sender, payload)
@@ -1141,10 +1247,15 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     // Native-host AppData panel: tap the service→render setData stream centrally
     // (the simulator guest has no Worker to sniff under native-host). Cheap —
     // the tap ignores non-ub/non-page_* messages.
-    ctx.events.emit('app-data-message', { appId: ap.appId, message: payload.msg })
+    ctx.events.emit('app-data-message', {
+      appId: ap.appId,
+      message: payload.msg,
+    })
   }
   ipcMain.on(C.SERVICE_PUBLISH, onServicePublish)
-  ctx.registry.add(() => { ipcMain.removeListener(C.SERVICE_PUBLISH, onServicePublish) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.SERVICE_PUBLISH, onServicePublish)
+  })
 
   const onRenderInvoke = (event: IpcMainEvent, payload: RenderInvokePayload): void => {
     tapIn(C.RENDER_INVOKE, event.sender, payload)
@@ -1155,7 +1266,9 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     routeFromRender(state, ap, page, payload.msg, ctx)
   }
   ipcMain.on(C.RENDER_INVOKE, onRenderInvoke)
-  ctx.registry.add(() => { ipcMain.removeListener(C.RENDER_INVOKE, onRenderInvoke) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.RENDER_INVOKE, onRenderInvoke)
+  })
 
   const onRenderPublish = (event: IpcMainEvent, payload: RenderPublishPayload): void => {
     tapIn(C.RENDER_PUBLISH, event.sender, payload)
@@ -1166,22 +1279,28 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
     forwardToService(ap, payload.msg)
   }
   ipcMain.on(C.RENDER_PUBLISH, onRenderPublish)
-  ctx.registry.add(() => { ipcMain.removeListener(C.RENDER_PUBLISH, onRenderPublish) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.RENDER_PUBLISH, onRenderPublish)
+  })
 
-  ctx.registry.add(addMuxedInvokeHandler(C.SIMULATOR_API, {
-    claims: ownsSender,
-    handle: (_event, payload) => {
-      const call = payload as { name: string; params: unknown }
-      return ctx.simulatorApis.invoke(call.name, call.params)
-    },
-  }))
+  ctx.registry.add(
+    addMuxedInvokeHandler(C.SIMULATOR_API, {
+      claims: ownsSender,
+      handle: (_event, payload) => {
+        const call = payload as { name: string; params: unknown }
+        return ctx.simulatorApis.invoke(call.name, call.params)
+      },
+    }),
+  )
 
   const onApiResponse = (event: IpcMainEvent, payload: ApiResponsePayload): void => {
     tapIn(C.API_RESPONSE, event.sender, payload)
     handleApiResponse(state, event.sender, payload)
   }
   ipcMain.on(C.API_RESPONSE, onApiResponse)
-  ctx.registry.add(() => { ipcMain.removeListener(C.API_RESPONSE, onApiResponse) })
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.API_RESPONSE, onApiResponse)
+  })
 
   ctx.registry.add(async () => {
     // Clear any in-flight pending API timers before tearing down sessions so a
@@ -1191,9 +1310,46 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
   })
 
   ctx.registry.add(async () => {
-    await Promise.all(
-      Array.from(state.appSessions.keys()).map(id => disposeAppSession(state, id)),
-    )
+    await Promise.all(Array.from(state.appSessions.keys()).map(id => disposeAppSession(state, id)))
+  })
+
+  // Preload-rendered windows (e.g. Web Workspace preview) run wx.request
+  // directly in the renderer context, not through a service-host. Route them
+  // through the same native-request service so they also avoid Chromium
+  // Fetch/CORS. Every workbench window installs its own router, so — like
+  // SPAWN/PAGE_OPEN/SIMULATOR_API above — the invoke channel is muxed
+  // (bridge-router-ipc-mux.ts) and dispatched to the router that owns the
+  // calling webContents.
+  //
+  // Cleanup: the owner key is this router's own `preload:<wc.id>` — disjoint
+  // from every other router's, since webContents ids are process-wide unique
+  // — so aborting on destroy only ever touches requests THIS router started.
+  // Registered lazily on first use (once per wc) instead of a separate
+  // "attach" channel, since a `once('destroyed', …)` costs nothing to arm
+  // speculatively but a dedicated handshake message would need its own
+  // ordering guarantee against the first NATIVE_REQUEST call.
+  const preloadOwners = createPreloadRequestOwners(state.nativeRequest)
+  ctx.registry.add(() => preloadOwners.dispose())
+  ctx.registry.add(
+    addMuxedInvokeHandler(C.NATIVE_REQUEST, {
+      claims: ownsSender,
+      handle: (event, ...args): Promise<NativeRequestResult> => {
+        const requestId = String(args[0] ?? '')
+        const params = (args[1] ?? {}) as Record<string, unknown>
+        preloadOwners.ensure(event.sender)
+        const options = nativeRequestOptions(params, event.sender, event.senderFrame?.url)
+        return state.nativeRequest.request(`preload:${event.sender.id}`, requestId, options)
+      },
+    }),
+  )
+
+  const onNativeRequestAbort = (event: IpcMainEvent, requestId: string): void => {
+    if (!ownsSender(event)) return
+    state.nativeRequest.abort(`preload:${event.sender.id}`, requestId)
+  }
+  ipcMain.on(C.NATIVE_REQUEST_ABORT, onNativeRequestAbort)
+  ctx.registry.add(() => {
+    ipcMain.removeListener(C.NATIVE_REQUEST_ABORT, onNativeRequestAbort)
   })
 }
 
@@ -1225,7 +1381,11 @@ function startLaunchTimer(state: RouterState, ctx: RuntimeContext, ap: AppSessio
       message: reason,
       appSessionId: ap.appSessionId,
     })
-    pushRuntimeStatus(ctx, ap, { phase: 'launch-failed', code: 'timeout', reason })
+    pushRuntimeStatus(ctx, ap, {
+      phase: 'launch-failed',
+      code: 'timeout',
+      reason,
+    })
   }, LAUNCH_TIMEOUT_MS)
 }
 
@@ -1252,7 +1412,11 @@ function markSessionRunning(ctx: RuntimeContext, ap: AppSession, page: PageSessi
 function pushRuntimeStatus(
   ctx: RuntimeContext,
   session: Pick<AppSession, 'appId' | 'pageFallback'>,
-  status: { phase: 'launching' | 'running' | 'launch-failed' | 'crashed'; code?: string; reason?: string },
+  status: {
+    phase: 'launching' | 'running' | 'launch-failed' | 'crashed'
+    code?: string
+    reason?: string
+  },
 ): void {
   ctx.events.emit('session-status', {
     appId: session.appId,
@@ -1275,9 +1439,8 @@ async function handleSpawn(
 
   const simulatorWc = resolveSimulatorWebContents(ctx, opts.simulatorWcId, event.sender)
   const pagePath = normalizePagePath(opts.pagePath || 'pages/index/index')
-  const workspaceProjectPath = typeof ctx.workspace.getProjectPath === 'function'
-    ? ctx.workspace.getProjectPath()
-    : ''
+  const workspaceProjectPath =
+    typeof ctx.workspace.getProjectPath === 'function' ? ctx.workspace.getProjectPath() : ''
   const pkgRoot = path.resolve(opts.pkgRoot || workspaceProjectPath || process.cwd())
   const root = opts.root || 'main'
   // Host-config custom API namespaces (RuntimeContext is the single owner).
@@ -1299,7 +1462,9 @@ async function handleSpawn(
   let resourceServer: DiminaResourceServer | null = null
   let resourceBaseUrl: string
   if (opts.resourceBaseUrl) {
-    resourceBaseUrl = opts.resourceBaseUrl.endsWith('/') ? opts.resourceBaseUrl : `${opts.resourceBaseUrl}/`
+    resourceBaseUrl = opts.resourceBaseUrl.endsWith('/')
+      ? opts.resourceBaseUrl
+      : `${opts.resourceBaseUrl}/`
   } else {
     resourceServer = await startDiminaResourceServer(path.resolve(pkgRoot, root))
     resourceBaseUrl = resourceServer.baseUrl
@@ -1359,14 +1524,21 @@ async function handleSpawn(
     if (ap) clearLaunchTimer(ap)
     pushRuntimeStatus(
       ctx,
-      ap ?? { appId, pageFallback: pageFallbackApplied ? { requested: pagePath, resolved: resolvedPagePath } : null },
-      { phase: 'launch-failed', code: 'service-host-navigation-failed', reason: message },
+      ap ?? {
+        appId,
+        pageFallback: pageFallbackApplied
+          ? { requested: pagePath, resolved: resolvedPagePath }
+          : null,
+      },
+      {
+        phase: 'launch-failed',
+        code: 'service-host-navigation-failed',
+        reason: message,
+      },
     )
   }
   if (state.pool) {
-    const acquired = await state.pool.acquire(
-      serviceHostSpec(undefined, undefined, runtimeAssets),
-    )
+    const acquired = await state.pool.acquire(serviceHostSpec(undefined, undefined, runtimeAssets))
     serviceWindow = acquired.win
     poolEntryId = acquired.entryId
     hostEnv = resolveHostEnv()
@@ -1392,7 +1564,8 @@ async function handleSpawn(
     }
     serviceWindow = createServiceHostWindow({
       ...freshWindowOptions,
-      onLoadFailed: err => reportServiceHostNavigationFailed(buildServiceHostSpawnUrl(freshWindowOptions), err),
+      onLoadFailed: err =>
+        reportServiceHostNavigationFailed(buildServiceHostSpawnUrl(freshWindowOptions), err),
     })
   }
 
@@ -1560,7 +1733,10 @@ async function handleSpawn(
       message: `Service host renderer process gone for appSessionId=${appSessionId}`,
       appSessionId,
     })
-    pushRuntimeStatus(ctx, appSession, { phase: 'crashed', code: 'service-host-crashed' })
+    pushRuntimeStatus(ctx, appSession, {
+      phase: 'crashed',
+      code: 'service-host-crashed',
+    })
   }
   appSession.listenerBag.on(serviceWindow.webContents, 'render-process-gone', onServiceCrashed)
 
@@ -1601,7 +1777,9 @@ async function handlePageOpen(
   // Only enforced against a real compiled manifest ('app-config') — a
   // 'fallback' manifest has no compiled truth to validate membership against.
   if (ap.manifest.source === 'app-config' && !ap.manifest.pages.includes(pagePath)) {
-    throw new Error(`[bridge-router] PAGE_OPEN rejected: page-not-found "${pagePath}" is not in the compiled manifest`)
+    throw new Error(
+      `[bridge-router] PAGE_OPEN rejected: page-not-found "${pagePath}" is not in the compiled manifest`,
+    )
   }
   const bridgeId = opts.bridgeId || newBridgeId()
   const windowConfig = resolvePageWindowConfig(ap.appConfig, pagePath)
@@ -1639,7 +1817,7 @@ function handlePageClose(state: RouterState, sender: WebContents, payload: PageC
   // deep-linked launch. It stays uncloseable only while it is the session's
   // sole page: emptying a session of pages is DISPOSE's job, not PAGE_CLOSE's.
   if (page.isRoot && ap.pages.size <= 1) {
-    console.warn('[bridge-router] PAGE_CLOSE refused on the session\'s only page; use DISPOSE')
+    console.warn("[bridge-router] PAGE_CLOSE refused on the session's only page; use DISPOSE")
     return
   }
   if (!senderBoundToSession(state, sender, ap)) {
@@ -1649,7 +1827,11 @@ function handlePageClose(state: RouterState, sender: WebContents, payload: PageC
   disposePageSession(state, ap, page)
 }
 
-function handlePageLifecycle(state: RouterState, sender: WebContents, payload: PageLifecyclePayload): void {
+function handlePageLifecycle(
+  state: RouterState,
+  sender: WebContents,
+  payload: PageLifecyclePayload,
+): void {
   const ap = state.appSessions.get(payload.appSessionId)
   if (!ap) return
   if (!senderBoundToSession(state, sender, ap)) return
@@ -1660,8 +1842,8 @@ function handlePageLifecycle(state: RouterState, sender: WebContents, payload: P
   if (payload.event === 'pageShow') {
     ap.visibleBridgeId = payload.bridgeId
   } else if (
-    (payload.event === 'pageHide' || payload.event === 'pageUnload')
-    && ap.visibleBridgeId === payload.bridgeId
+    (payload.event === 'pageHide' || payload.event === 'pageUnload') &&
+    ap.visibleBridgeId === payload.bridgeId
   ) {
     ap.visibleBridgeId = null
   }
@@ -1673,7 +1855,11 @@ function handlePageLifecycle(state: RouterState, sender: WebContents, payload: P
   })
 }
 
-function handleNavCallback(state: RouterState, sender: WebContents, payload: NavCallbackPayload): void {
+function handleNavCallback(
+  state: RouterState,
+  sender: WebContents,
+  payload: NavCallbackPayload,
+): void {
   const ap = state.appSessions.get(payload.appSessionId)
   if (!ap) return
   if (!senderBoundToSession(state, sender, ap)) return
@@ -1689,7 +1875,11 @@ function handleNavCallback(state: RouterState, sender: WebContents, payload: Nav
 
 // ── Service-host boot & per-page resource handshake ──────────────────────────
 
-async function bootServiceHost(state: RouterState, ap: AppSession, ctx: RuntimeContext): Promise<void> {
+async function bootServiceHost(
+  state: RouterState,
+  ap: AppSession,
+  ctx: RuntimeContext,
+): Promise<void> {
   // Liveness guard: never boot a session that was already disposed. With pooling,
   // the service window is recycled, so a stale did-finish-load listener from an
   // early-disposed prior owner could otherwise fire here and inject the wrong
@@ -1715,7 +1905,11 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: RuntimeC
   // `ServiceHostReadyEvent`'s doc comment) — other main-process consumers
   // (the right-panel DevTools attach) need this exact signal too and must
   // not poll `getServiceWc` on a fixed retry budget for it.
-  state.emitServiceHostReady({ appId: ap.appId, appSessionId: ap.appSessionId, serviceWcId: ap.serviceWc.id })
+  state.emitServiceHostReady({
+    appId: ap.appId,
+    appSessionId: ap.appSessionId,
+    serviceWcId: ap.serviceWc.id,
+  })
   ap.logicInjected = await injectLogicBundle(ap)
   if (!ap.logicInjected) {
     // The compiled logic.js never executed, so `modDefine` registered nothing.
@@ -1726,7 +1920,11 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: RuntimeC
     // gates on the same flag in `routeFromRender`.
     const reason = reportLogicLoadFailure(ap, ctx)
     clearLaunchTimer(ap)
-    pushRuntimeStatus(ctx, ap, { phase: 'launch-failed', code: 'logic-bundle-unreachable', reason })
+    pushRuntimeStatus(ctx, ap, {
+      phase: 'launch-failed',
+      code: 'logic-bundle-unreachable',
+      reason,
+    })
     return
   }
   // A root page absent from the compiled manifest — most commonly a page the
@@ -1798,7 +1996,9 @@ function sendRenderLoadResource(ap: AppSession, page: PageSession): void {
   // found`, blanking the simulator (a page the developer deleted, then
   // hot-reloaded to). bootServiceHost surfaces the one-shot diagnostic.
   if (!pageInManifest(ap, page.pagePath)) return
-  page.renderWc.send(C.TO_RENDER, { msg: makeLoadResource(ap, page, 'render') })
+  page.renderWc.send(C.TO_RENDER, {
+    msg: makeLoadResource(ap, page, 'render'),
+  })
   page.renderLoadSent = true
 }
 
@@ -1845,22 +2045,27 @@ async function injectLogicBundle(ap: AppSession): Promise<boolean> {
  * duplicating the wording.
  */
 function reportLogicLoadFailure(ap: AppSession, ctx: RuntimeContext): string {
-  const hint = ap.appId === 'unknown'
-    ? ' appId could not be resolved (it fell back to "unknown") — the mini-program likely failed to compile or its project manifest/app config is missing.'
-    : ''
+  const hint =
+    ap.appId === 'unknown'
+      ? ' appId could not be resolved (it fell back to "unknown") — the mini-program likely failed to compile or its project manifest/app config is missing.'
+      : ''
   const shortReason = `[dimina-kit] Failed to load the mini-program logic bundle from ${logicBundleUrl(ap)}.`
-  const message
-    = `${shortReason} `
-    + 'The service runtime has no registered modules, so no page can mount.'
-    + hint
-    + ` Verify the project compiled successfully and that the resource server serves "${ap.appId}/${ap.root}/".`
+  const message =
+    `${shortReason} ` +
+    'The service runtime has no registered modules, so no page can mount.' +
+    hint +
+    ` Verify the project compiled successfully and that the resource server serves "${ap.appId}/${ap.root}/".`
   ctx.diagnostics?.report({
     severity: 'error',
     code: 'logic-bundle-unreachable',
     message,
     appSessionId: ap.appSessionId,
   })
-  ctx.guestConsole?.emit({ source: 'service', level: 'error', args: [message] })
+  ctx.guestConsole?.emit({
+    source: 'service',
+    level: 'error',
+    args: [message],
+  })
   return shortReason
 }
 
@@ -1889,9 +2094,9 @@ function reportPageNotFound(
   pagePath: string,
   fallbackTo?: string,
 ): void {
-  const base
-    = `Page[${pagePath}] not found. May be caused by: 1. Forgetting to add page route in app.json. `
-    + '2. Invoking Page() in async task.'
+  const base =
+    `Page[${pagePath}] not found. May be caused by: 1. Forgetting to add page route in app.json. ` +
+    '2. Invoking Page() in async task.'
   const message = fallbackTo ? `${base} Falling back to "${fallbackTo}".` : base
   ctx.diagnostics?.report({
     severity: 'error',
@@ -1899,7 +2104,11 @@ function reportPageNotFound(
     message,
     appSessionId,
   })
-  ctx.guestConsole?.emit({ source: 'service', level: 'error', args: [message] })
+  ctx.guestConsole?.emit({
+    source: 'service',
+    level: 'error',
+    args: [message],
+  })
 }
 
 function maybeSendResourceLoaded(ctx: RuntimeContext, ap: AppSession, page: PageSession): void {
@@ -2013,10 +2222,21 @@ function routeFromRender(
  * (they never call `console.*`), so this diagnostics report is the only way
  * one reaches the Console panel / main log.
  */
-function reportServiceUncaughtError(ctx: RuntimeContext, ap: AppSession, body: GuestConsoleEntry): void {
+function reportServiceUncaughtError(
+  ctx: RuntimeContext,
+  ap: AppSession,
+  body: GuestConsoleEntry,
+): void {
   const severity = body.level === 'error' ? 'error' : body.level === 'warn' ? 'warn' : 'info'
-  const message = Array.isArray(body.args) ? body.args.map(a => String(a)).join(' ') : String(body.args ?? '')
-  ctx.diagnostics?.report({ severity, code: 'service-uncaught-error', message, appSessionId: ap.appSessionId })
+  const message = Array.isArray(body.args)
+    ? body.args.map(a => String(a)).join(' ')
+    : String(body.args ?? '')
+  ctx.diagnostics?.report({
+    severity,
+    code: 'service-uncaught-error',
+    message,
+    appSessionId: ap.appSessionId,
+  })
 }
 
 function handleContainerMsg(
@@ -2042,7 +2262,11 @@ function handleContainerMsg(
       if (!ap.simulatorWc.isDestroyed()) {
         ap.simulatorWc.send(E.DOM_READY, { bridgeId: page.bridgeId })
       }
-      state.emitRenderEvent({ kind: 'domReady', appId: ap.appId, bridgeId: page.bridgeId })
+      state.emitRenderEvent({
+        kind: 'domReady',
+        appId: ap.appId,
+        bridgeId: page.bridgeId,
+      })
       markSessionRunning(ctx, ap, page)
       break
     case 'invokeAPI':
@@ -2096,7 +2320,11 @@ function handleContainerMsg(
       // the active page's DOM mutated in place (setData). Surface it as a render
       // event so the WXML panel service re-pulls + pushes — same pipeline as
       // domReady/activePage. Trust `page.bridgeId` (sender-resolved), not the body.
-      state.emitRenderEvent({ kind: 'domMutated', appId: ap.appId, bridgeId: page.bridgeId })
+      state.emitRenderEvent({
+        kind: 'domMutated',
+        appId: ap.appId,
+        bridgeId: page.bridgeId,
+      })
       break
     default:
       break
@@ -2189,7 +2417,12 @@ const APP_LIFECYCLE_UNREGISTER: Record<string, AppLifecycleEvent> = {
   offError: 'onError',
 }
 
-function handleNavBarApi(ap: AppSession, page: PageSession, name: string, params: Record<string, unknown>): void {
+function handleNavBarApi(
+  ap: AppSession,
+  page: PageSession,
+  name: string,
+  params: Record<string, unknown>,
+): void {
   if (!ap.simulatorWc.isDestroyed()) {
     ap.simulatorWc.send(E.NAV_BAR, {
       bridgeId: page.bridgeId,
@@ -2251,11 +2484,21 @@ interface NavTargetVerdict {
 function checkNavTarget(ap: AppSession, name: string, targetPagePath: string): NavTargetVerdict {
   if (ap.manifest.source !== 'app-config') return { ok: true }
   if (!ap.manifest.pages.includes(targetPagePath)) {
-    return { ok: false, errMsg: `${name}:fail page "${targetPagePath}" is not found`, reportNotFound: true }
+    return {
+      ok: false,
+      errMsg: `${name}:fail page "${targetPagePath}" is not found`,
+      reportNotFound: true,
+    }
   }
   if (name === 'switchTab') {
-    const inTabBar = ap.manifest.tabBar?.list.some(item => normalizePagePath(item.pagePath) === targetPagePath) ?? false
-    if (!inTabBar) return { ok: false, errMsg: 'switchTab:fail can not switch to no-tabBar page' }
+    const inTabBar =
+      ap.manifest.tabBar?.list.some(item => normalizePagePath(item.pagePath) === targetPagePath) ??
+      false
+    if (!inTabBar)
+      return {
+        ok: false,
+        errMsg: 'switchTab:fail can not switch to no-tabBar page',
+      }
   }
   return { ok: true }
 }
@@ -2286,7 +2529,12 @@ function handleNavActionApi(
   sendActionOrFail(ap, E.NAV_ACTION, payload, name, params)
 }
 
-function handleTabActionApi(ap: AppSession, page: PageSession, name: string, params: Record<string, unknown>): void {
+function handleTabActionApi(
+  ap: AppSession,
+  page: PageSession,
+  name: string,
+  params: Record<string, unknown>,
+): void {
   const payload: TabActionPayload = {
     appSessionId: ap.appSessionId,
     bridgeId: page.bridgeId,
@@ -2327,7 +2575,11 @@ function handleAppLifecycleToggle(
 // pageScrollTo acts on the page's render guest (scroll its document), which
 // only the main process can reach — run the scroll script in the invoking
 // page's render webContents rather than forwarding to the simulator.
-function handlePageScrollApi(ap: AppSession, page: PageSession, params: Record<string, unknown>): void {
+function handlePageScrollApi(
+  ap: AppSession,
+  page: PageSession,
+  params: Record<string, unknown>,
+): void {
   const renderWc = page.renderWc
   if (renderWc && !renderWc.isDestroyed()) {
     void renderWc.executeJavaScript(buildPageScrollScript(params)).catch(() => {})
@@ -2349,9 +2601,10 @@ async function invokeSimulatorApiAndCallback(
 ): Promise<void> {
   try {
     const result = await invoke()
-    const errMsg = result && typeof result === 'object' && 'errMsg' in result
-      ? String((result as { errMsg?: unknown }).errMsg ?? '')
-      : ''
+    const errMsg =
+      result && typeof result === 'object' && 'errMsg' in result
+        ? String((result as { errMsg?: unknown }).errMsg ?? '')
+        : ''
     if (errMsg.startsWith(`${name}:fail`)) {
       sendCallback(ap, params.fail, result)
       sendCallback(ap, params.complete, result)
@@ -2391,13 +2644,15 @@ const NATIVE_WEBSOCKET_API_NAMES = new Set([
   ...NATIVE_WEBSOCKET_OFF_EVENTS.keys(),
 ])
 
+const NATIVE_HTTP_API_NAMES = new Set(['request', 'requestTaskAbort'])
+
 function socketConnectTimeout(ap: AppSession, rawTimeout: unknown): number | undefined {
   if (typeof rawTimeout === 'number' && rawTimeout >= 1) return rawTimeout
   const configured = ap.appConfig.app?.networkTimeout?.connectSocket
-  return typeof configured === 'number'
-    && Number.isFinite(configured)
-    && configured >= 1
-    && configured <= 0x7fff_ffff
+  return typeof configured === 'number' &&
+    Number.isFinite(configured) &&
+    configured >= 1 &&
+    configured <= 0x7fff_ffff
     ? configured
     : undefined
 }
@@ -2445,11 +2700,8 @@ async function handleNativeWebSocketApi(
       // for the same development-build fallback.
       containerReferer: `https://servicedimina.com/${ap.appId}/${DEVTOOLS_APP_VERSION}/page-frame.html`,
     }
-    await invokeSimulatorApiAndCallback(
-      ap,
-      name,
-      params,
-      async () => state.nativeWebSocket.connect(ap.appSessionId, options),
+    await invokeSimulatorApiAndCallback(ap, name, params, async () =>
+      state.nativeWebSocket.connect(ap.appSessionId, options),
     )
     return
   }
@@ -2460,11 +2712,8 @@ async function handleNativeWebSocketApi(
       data: params.data,
       isBuffer: params.isBuffer === true,
     }
-    await invokeSimulatorApiAndCallback(
-      ap,
-      name,
-      params,
-      () => state.nativeWebSocket.send(ap.appSessionId, options),
+    await invokeSimulatorApiAndCallback(ap, name, params, () =>
+      state.nativeWebSocket.send(ap.appSessionId, options),
     )
     return
   }
@@ -2474,11 +2723,30 @@ async function handleNativeWebSocketApi(
     code: params.code as number | undefined,
     reason: params.reason as string | undefined,
   }
-  await invokeSimulatorApiAndCallback(
-    ap,
-    name,
-    params,
-    async () => state.nativeWebSocket.close(ap.appSessionId, options),
+  await invokeSimulatorApiAndCallback(ap, name, params, async () =>
+    state.nativeWebSocket.close(ap.appSessionId, options),
+  )
+}
+
+async function handleNativeHttpApi(
+  state: RouterState,
+  ap: AppSession,
+  name: string,
+  params: Record<string, unknown>,
+): Promise<void> {
+  const requestId = String(
+    params.requestId ?? params.taskId ?? `${ap.appSessionId}:${name}:${randomUUID()}`,
+  )
+
+  if (name === 'requestTaskAbort') {
+    state.nativeRequest.abort(ap.appSessionId, requestId)
+    return
+  }
+
+  // This call ran in the simulator document before migration; preserve its URL base and session policy.
+  const options = nativeRequestOptions(params, ap.simulatorWc)
+  await invokeSimulatorApiAndCallback(ap, name, params, () =>
+    state.nativeRequest.request(ap.appSessionId, requestId, options),
   )
 }
 
@@ -2522,6 +2790,11 @@ async function handleSimulatorApi(
     return
   }
 
+  if (NATIVE_HTTP_API_NAMES.has(name)) {
+    await handleNativeHttpApi(state, ap, name, params)
+    return
+  }
+
   // Native-host storage unification: route async wx.setStorage/getStorage/etc.
   // to the service-host window's file:// store (the same store the *Sync APIs +
   // the Storage panel use), instead of forwarding to the simulator guest's
@@ -2529,7 +2802,9 @@ async function handleSimulatorApi(
   // two origins even for the running mini-app.
   if (ctx.storageApi && STORAGE_API_NAMES.has(name)) {
     const storageApi = ctx.storageApi
-    await invokeSimulatorApiAndCallback(ap, name, params, () => storageApi.invoke(ap.appId, name, params))
+    await invokeSimulatorApiAndCallback(ap, name, params, () =>
+      storageApi.invoke(ap.appId, name, params),
+    )
     return
   }
 
@@ -2539,7 +2814,9 @@ async function handleSimulatorApi(
   // MiniApp owns the DOM-touching defaults (wx.getSystemInfo, chooseImage,
   // chooseMedia, fs.*, …) and the bridge-router can't run those itself.
   if (ctx.simulatorApis.has(name)) {
-    await invokeSimulatorApiAndCallback(ap, name, params, () => ctx.simulatorApis.invoke(name, params))
+    await invokeSimulatorApiAndCallback(ap, name, params, () =>
+      ctx.simulatorApis.invoke(name, params),
+    )
     return
   }
 
@@ -2578,16 +2855,19 @@ function forwardApiCallToSimulator(
   const keep = params.keep === true || isPersistentSimulatorApi(name)
   const timer = keep
     ? undefined
-    : setTimeout(() => {
-        const pending = state.pendingApiCalls.get(requestId)
-        if (!pending) return
-        state.pendingApiCalls.delete(requestId)
-        const target = state.appSessions.get(pending.appSessionId)
-        if (!target) return
-        const fail = { errMsg: `${pending.name}:fail no handler (timeout)` }
-        sendCallback(target, pending.callbacks.fail, fail)
-        sendCallback(target, pending.callbacks.complete, fail)
-      }, apiCallWatchdogMs(name, params))
+    : setTimeout(
+        () => {
+          const pending = state.pendingApiCalls.get(requestId)
+          if (!pending) return
+          state.pendingApiCalls.delete(requestId)
+          const target = state.appSessions.get(pending.appSessionId)
+          if (!target) return
+          const fail = { errMsg: `${pending.name}:fail no handler (timeout)` }
+          sendCallback(target, pending.callbacks.fail, fail)
+          sendCallback(target, pending.callbacks.complete, fail)
+        },
+        apiCallWatchdogMs(name, params),
+      )
 
   state.pendingApiCalls.set(requestId, {
     appSessionId: ap.appSessionId,
@@ -2706,12 +2986,16 @@ function newRequestId(): string {
 }
 
 function extractCallbacks(params: Record<string, unknown>): NavActionPayload['callbacks'] {
-  return { success: params.success, fail: params.fail, complete: params.complete }
+  return {
+    success: params.success,
+    fail: params.fail,
+    complete: params.complete,
+  }
 }
 
 function normalizeParams(params: unknown): Record<string, unknown> {
   return params && typeof params === 'object' && !Array.isArray(params)
-    ? params as Record<string, unknown>
+    ? (params as Record<string, unknown>)
     : { value: params }
 }
 
@@ -2726,7 +3010,11 @@ function sendCallback(ap: AppSession, id: unknown, args: unknown): void {
 
 // ── Resource helpers ────────────────────────────────────────────────────────
 
-function makeLoadResource(ap: AppSession, page: PageSession, target: 'service' | 'render'): MessageEnvelope {
+function makeLoadResource(
+  ap: AppSession,
+  page: PageSession,
+  target: 'service' | 'render',
+): MessageEnvelope {
   return {
     type: 'loadResource',
     target,
@@ -2776,7 +3064,9 @@ function forwardToService(ap: AppSession, msg: MessageEnvelope): void {
 function forwardToRender(ap: AppSession, msg: MessageEnvelope, targetBridgeId?: string): void {
   const renderBridgeId = targetBridgeId || readBridgeId(msg)
   if (!renderBridgeId) {
-    throw new Error('[bridge-router] cannot route to render: missing bridgeId in body and no explicit target')
+    throw new Error(
+      '[bridge-router] cannot route to render: missing bridgeId in body and no explicit target',
+    )
   }
   const page = ap.pages.get(renderBridgeId)
   if (!page) return
@@ -2786,7 +3076,11 @@ function forwardToRender(ap: AppSession, msg: MessageEnvelope, targetBridgeId?: 
   }
 }
 
-function ensureRenderBound(state: RouterState, sender: WebContents, bridgeId: string): PageSession | undefined {
+function ensureRenderBound(
+  state: RouterState,
+  sender: WebContents,
+  bridgeId: string,
+): PageSession | undefined {
   const page = state.pageSessions.get(bridgeId)
   if (!page) return undefined
   // A destroyed sender is never a valid owner, even when it's still the
@@ -2802,12 +3096,15 @@ function ensureRenderBound(state: RouterState, sender: WebContents, bridgeId: st
     // behalf. Cleared once that webContents is actually destroyed (below).
     if (page.supersededRenderWcIds.has(sender.id)) return undefined
     if (page.renderWc && page.renderWc !== sender && !page.renderWc.isDestroyed()) {
-      console.warn(`[bridge-router] page ${bridgeId} render webview swap (wc ${page.renderWc.id} → ${sender.id})`)
+      console.warn(
+        `[bridge-router] page ${bridgeId} render webview swap (wc ${page.renderWc.id} → ${sender.id})`,
+      )
       page.supersededRenderWcIds.add(page.renderWc.id)
       // The replaced guest loses both ownership and the reverse lookup in the
       // same step, so census-style bindings counts reflect the swap
       // immediately instead of waiting for the old guest's own destroy to fire.
-      if (state.wcIdToBridgeId.get(page.renderWc.id) === bridgeId) state.wcIdToBridgeId.delete(page.renderWc.id)
+      if (state.wcIdToBridgeId.get(page.renderWc.id) === bridgeId)
+        state.wcIdToBridgeId.delete(page.renderWc.id)
     }
     page.renderWc = sender
     state.wcIdToBridgeId.set(sender.id, bridgeId)
@@ -2834,7 +3131,11 @@ function ensureRenderBound(state: RouterState, sender: WebContents, bridgeId: st
     // page binding its guest is likewise not an activity a panel needs to
     // react to.
     const ap = state.appSessions.get(page.appSessionId)
-    if (ap && resolveActiveBridgeId(ap) === bridgeId && findAppSessionByAppId(state, ap.appId) === ap) {
+    if (
+      ap &&
+      resolveActiveBridgeId(ap) === bridgeId &&
+      findAppSessionByAppId(state, ap.appId) === ap
+    ) {
       state.emitRenderEvent({
         kind: 'activePage',
         appId: ap.appId,
@@ -2847,7 +3148,11 @@ function ensureRenderBound(state: RouterState, sender: WebContents, bridgeId: st
   return page
 }
 
-function pageFromMsg(state: RouterState, ap: AppSession, msg: MessageEnvelope): PageSession | undefined {
+function pageFromMsg(
+  state: RouterState,
+  ap: AppSession,
+  msg: MessageEnvelope,
+): PageSession | undefined {
   const target = readBridgeId(msg)
   if (!target) return undefined
   const page = ap.pages.get(target)
@@ -2977,7 +3282,11 @@ function closeSessionPages(state: RouterState, ap: AppSession): void {
       // rather than leaving the outgoing project's guest alive to be
       // screenshotted or re-resolved by the next project. Idempotent with the
       // cascade (guarded on isDestroyed).
-      try { page.renderWc.close() } catch { /* guest already gone */ }
+      try {
+        page.renderWc.close()
+      } catch {
+        /* guest already gone */
+      }
     }
     state.pageSessions.delete(page.bridgeId)
   }
@@ -3007,7 +3316,7 @@ async function releaseServiceWindow(
     if (ap.onServiceBoot && !ap.serviceWindow.isDestroyed()) {
       ap.serviceWindow.webContents.removeListener('did-finish-load', ap.onServiceBoot)
     }
-    await state.pool.release(ap.poolEntryId, ap.serviceWindow).catch((error) => {
+    await state.pool.release(ap.poolEntryId, ap.serviceWindow).catch(error => {
       console.warn('[bridge-router] pool release failed:', error)
     })
   } else if (ap.poolEntryId !== null && state.pool && opts.serviceAlreadyClosed) {
@@ -3023,7 +3332,11 @@ async function releaseServiceWindow(
   }
 }
 
-function unbindSessionFromSharedMaps(state: RouterState, ap: AppSession, appSessionId: string): void {
+function unbindSessionFromSharedMaps(
+  state: RouterState,
+  ap: AppSession,
+  appSessionId: string,
+): void {
   // Value-checked unbind for the service wc: this delete runs after the
   // pool-release await above, so on the pool path the next spawn may have
   // already re-acquired the SAME window and rebound its wc id — only remove
@@ -3064,6 +3377,7 @@ async function disposeAppSession(
   void registryHandle?.dispose()
   state.appLifecycle.dispose(appSessionId)
   state.nativeWebSocket.disposeOwner(appSessionId)
+  state.nativeRequest.disposeOwner(appSessionId)
 
   // Evict AppData bridges FIRST — eviction enumerates `ap.pages`, which the
   // page teardown below progressively empties (and finally clears).
@@ -3090,7 +3404,7 @@ async function disposeAppSession(
   // Only the local fallback server needs closing; the dev-server base is owned
   // by the workspace session, not this app session.
   if (ap.resourceServer) {
-    await ap.resourceServer.close().catch((error) => {
+    await ap.resourceServer.close().catch(error => {
       console.warn('[bridge-router] resource server close failed:', error)
     })
   }
@@ -3112,7 +3426,10 @@ async function loadAppConfig(
   // `resourceBase` is the dir/URL that directly contains `app-config.json`:
   // the dev server's `<base><appId>/<root>/` (http) or the local fallback
   // server root (also http). Both are HTTP, so a single fetch path covers them.
-  const cfgUrl = new URL('app-config.json', resourceBase.endsWith('/') ? resourceBase : `${resourceBase}/`).toString()
+  const cfgUrl = new URL(
+    'app-config.json',
+    resourceBase.endsWith('/') ? resourceBase : `${resourceBase}/`,
+  ).toString()
   try {
     const res = await fetch(cfgUrl)
     if (!res.ok) {
@@ -3121,7 +3438,7 @@ async function loadAppConfig(
       onUnreachable?.({ url: cfgUrl, error })
       return {}
     }
-    return await res.json() as RawAppConfig
+    return (await res.json()) as RawAppConfig
   } catch (error) {
     console.warn('[bridge-router] failed to fetch/parse app-config.json:', error)
     onUnreachable?.({ url: cfgUrl, error })
@@ -3141,13 +3458,17 @@ function buildAppManifest(appConfig: RawAppConfig, fallbackEntry: string): AppMa
   // without updating app.json), so it loses to `pages[0]` — the same rule
   // `resolveRootPagePath` applies to a launch request.
   const declaredEntry = appConfig.app?.entryPagePath
-  const entryIsMember = !!declaredEntry
-    && compiledPages.some(page => normalizePagePath(page) === normalizePagePath(declaredEntry))
-  const entry = entryIsMember ? declaredEntry! : (compiledPages[0] || fallbackEntry)
+  const entryIsMember =
+    !!declaredEntry &&
+    compiledPages.some(page => normalizePagePath(page) === normalizePagePath(declaredEntry))
+  const entry = entryIsMember ? declaredEntry! : compiledPages[0] || fallbackEntry
   const pages = hasCompiledPages ? compiledPages : [entry]
-  const tabBar = appConfig.app?.tabBar && Array.isArray(appConfig.app.tabBar.list) && appConfig.app.tabBar.list.length > 0
-    ? appConfig.app.tabBar
-    : undefined
+  const tabBar =
+    appConfig.app?.tabBar &&
+    Array.isArray(appConfig.app.tabBar.list) &&
+    appConfig.app.tabBar.list.length > 0
+      ? appConfig.app.tabBar
+      : undefined
   return {
     entryPagePath: normalizePagePath(entry),
     pages: pages.map(normalizePagePath),
@@ -3191,18 +3512,16 @@ function resolvePageWindowConfig(appConfig: RawAppConfig, pagePath: string): Pag
     navigationBarTitleText:
       pageWindow.navigationBarTitleText ?? appWindow.navigationBarTitleText ?? '',
     navigationBarBackgroundColor:
-      pageWindow.navigationBarBackgroundColor ?? appWindow.navigationBarBackgroundColor ?? '#ffffff',
+      pageWindow.navigationBarBackgroundColor ??
+      appWindow.navigationBarBackgroundColor ??
+      '#ffffff',
     navigationBarTextStyle:
       pageWindow.navigationBarTextStyle ?? appWindow.navigationBarTextStyle ?? 'black',
-    navigationStyle:
-      pageWindow.navigationStyle ?? appWindow.navigationStyle ?? 'default',
+    navigationStyle: pageWindow.navigationStyle ?? appWindow.navigationStyle ?? 'default',
     homeButton: pageWindow.homeButton ?? appWindow.homeButton,
-    backgroundColor:
-      pageWindow.backgroundColor ?? appWindow.backgroundColor,
-    backgroundTextStyle:
-      pageWindow.backgroundTextStyle ?? appWindow.backgroundTextStyle,
-    enablePullDownRefresh:
-      pageWindow.enablePullDownRefresh ?? appWindow.enablePullDownRefresh,
+    backgroundColor: pageWindow.backgroundColor ?? appWindow.backgroundColor,
+    backgroundTextStyle: pageWindow.backgroundTextStyle ?? appWindow.backgroundTextStyle,
+    enablePullDownRefresh: pageWindow.enablePullDownRefresh ?? appWindow.enablePullDownRefresh,
     disableScroll: pageWindow.disableScroll ?? appWindow.disableScroll,
   }
 }
@@ -3238,14 +3557,25 @@ function installResourceProtocolHandlers(
   // The registrars this scheme lives on are process-wide, so the handler is
   // muxed (see bridge-router-protocol-mux.ts). The request's bridgeId names the
   // session, and only the router that owns that session can resolve it.
-  ctx.registry.add(addMuxedDmbResourceHandler({
-    claims: (requestUrl) => {
-      let bridgeId: string
-      try { bridgeId = new URL(requestUrl).hostname } catch { return false }
-      return resolveSession(bridgeId) !== null
-    },
-    handle: (request) => handleDmbResourceRequest({ requestUrl: request.url, sdkRoot, resolveSession }),
-  }))
+  ctx.registry.add(
+    addMuxedDmbResourceHandler({
+      claims: requestUrl => {
+        let bridgeId: string
+        try {
+          bridgeId = new URL(requestUrl).hostname
+        } catch {
+          return false
+        }
+        return resolveSession(bridgeId) !== null
+      },
+      handle: request =>
+        handleDmbResourceRequest({
+          requestUrl: request.url,
+          sdkRoot,
+          resolveSession,
+        }),
+    }),
+  )
 }
 
 function makeHostEnv(snapshot: Partial<HostEnvSnapshot> | undefined): HostEnvSnapshot {

@@ -74,31 +74,43 @@
  *     transport) arrive as trace events via `reportWebSocketTrace` and are
  *     synthesized into `Network.webSocket*` CDP messages (see websocket.ts).
  */
-import type { WebContents } from 'electron'
-import { SyncDisposableRegistry, toDisposable, type ConnectionRegistry, type Disposable } from '@dimina-kit/electron-deck/main'
-import { isFrontendSettled } from '../views/inject-when-ready.js'
-import { packDispatchBatch } from './dispatch-batch.js'
-import { PrefetchCache, DEFAULT_PER_ENTRY_MAX_CHARS } from './body-cache.js'
-import { PROBE_DEVTOOLS_API, MAX_SINGLE_DISPATCH_CHARS, CHUNK_CHARS, buildChunkedDispatchScript } from './frontend-dispatch.js'
-import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } from '../cdp-session/index.js'
-import { isUserFacingRequest } from './user-facing.js'
-import { installGlobalNetworkBodyGate } from './global-body-gate.js'
-import { WebSocketTraceSynthesizer } from './websocket.js'
-import type { NativeWebSocketTrace } from '../../ipc/bridge-router.js'
+import type { WebContents } from "electron";
+import {
+  SyncDisposableRegistry,
+  toDisposable,
+  type ConnectionRegistry,
+  type Disposable,
+} from "@dimina-kit/electron-deck/main";
+import { isFrontendSettled } from "../views/inject-when-ready.js";
+import { packDispatchBatch } from "./dispatch-batch.js";
+import { PrefetchCache, DEFAULT_PER_ENTRY_MAX_CHARS } from "./body-cache.js";
+import {
+  PROBE_DEVTOOLS_API,
+  MAX_SINGLE_DISPATCH_CHARS,
+  CHUNK_CHARS,
+  buildChunkedDispatchScript,
+} from "./frontend-dispatch.js";
+import {
+  createCdpSessionBroker,
+  type CdpSessionBroker,
+  type CdpSessionLease,
+} from "../cdp-session/index.js";
+import { isUserFacingRequest } from "./user-facing.js";
+import { installGlobalNetworkBodyGate } from "./global-body-gate.js";
+import { WebSocketTraceSynthesizer } from "./websocket.js";
+import { RequestTraceSynthesizer } from "./http.js";
+import type {
+  NativeRequestTrace,
+  NativeWebSocketTrace,
+} from "../../ipc/bridge-router.js";
 
-/**
- * Namespace prefix of every virtual requestId this forwarder injects into the
- * DevTools front-end. SINGLE SOURCE for the literal: the front-end outbound
- * gate (elements-forward) keys its `Network.getResponseBody` /
- * `Network.getRequestPostData` interception on this exact prefix, so the two
- * modules can never drift apart on what counts as "one of ours".
- */
-export const VIRTUAL_REQUEST_ID_PREFIX = 'dimina:sim:'
+import { VIRTUAL_REQUEST_ID_PREFIX } from "./request-ids.js";
+export { VIRTUAL_REQUEST_ID_PREFIX } from "./request-ids.js";
 
 /** CDP `Network.getResponseBody` result shape (served from the prefetch cache). */
 export interface CdpResponseBody {
-  body: string
-  base64Encoded: boolean
+  body: string;
+  base64Encoded: boolean;
 }
 
 /**
@@ -110,22 +122,22 @@ export interface CdpResponseBody {
  * real CDP backend produces for an unknown requestId.
  */
 export interface NetworkBodyProvider {
-  getResponseBody(requestId: string): Promise<CdpResponseBody>
-  getRequestPostData(requestId: string): Promise<{ postData: string }>
+  getResponseBody(requestId: string): Promise<CdpResponseBody>;
+  getRequestPostData(requestId: string): Promise<{ postData: string }>;
 }
 
 /** Which layer a captured request came from (tags the fallback log line). */
-export type NetworkSource = 'service' | 'render'
+export type NetworkSource = "service" | "render";
 
 /** A normalized completed network request, used only by the console fallback. */
 export interface NetworkRequestRecord {
-  source: NetworkSource
-  url: string
-  method: string
+  source: NetworkSource;
+  url: string;
+  method: string;
   /** HTTP status, or 0 when the request failed before a response. */
-  status: number
+  status: number;
   /** Failure text for `loadingFailed`, else undefined. */
-  errorText?: string
+  errorText?: string;
 }
 
 /**
@@ -135,13 +147,13 @@ export interface NetworkRequestRecord {
  */
 export interface NetworkForwarderBridge {
   /** The SERVICE HOST wc — fallback console sink target. */
-  getServiceWc(appId?: string): WebContents | null
+  getServiceWc(appId?: string): WebContents | null;
   /**
    * The wc hosting the right-panel Chrome DevTools FRONT-END (the one we inject
    * `window.DevToolsAPI.dispatchMessage` into). Set by the ViewManager via
    * `setDevtoolsHost`. Null until the DevTools host view exists.
    */
-  getDevtoolsWc?(): WebContents | null
+  getDevtoolsWc?(): WebContents | null;
   /**
    * The dimina resource server's baseUrl (e.g. `'http://127.0.0.1:54321/'`),
    * when running — consulted by `isUserFacingRequest` so the framework
@@ -149,7 +161,7 @@ export interface NetworkForwarderBridge {
    * Absent → that origin check is simply skipped (the scheme rule alone
    * still filters out file:// / difile:// / devtools:// framework loads).
    */
-  getResourceServerBaseUrl?(): string | null
+  getResourceServerBaseUrl?(): string | null;
   /**
    * The simulator's own static-asset server baseUrl (serves `simulator.html`
    * + its JS/CSS — a devkit-owned server, independent from the resource
@@ -161,7 +173,7 @@ export interface NetworkForwarderBridge {
    * misclassified as the developer's business traffic. Absent → that origin
    * check is simply skipped.
    */
-  getSimulatorServerBaseUrl?(): string | null
+  getSimulatorServerBaseUrl?(): string | null;
   /**
    * Optional connection-layer registry (`@dimina-kit/electron-deck/main`). When
    * present, per-webContents teardowns route through `acquire(wc).own(d)` so the
@@ -169,7 +181,7 @@ export interface NetworkForwarderBridge {
    * the bespoke `wc.once('destroyed', cleanup)`). Omitted → the legacy
    * `once('destroyed')` fallback is used, so existing callers compile unchanged.
    */
-  connections?: ConnectionRegistry
+  connections?: ConnectionRegistry;
   /**
    * Shared CDP session broker (see cdp-session/index.ts) that owns every
    * render-guest AND simulator debugger session's attach/detach lifecycle —
@@ -181,7 +193,7 @@ export interface NetworkForwarderBridge {
    * `attachSimulator` go through it — see detachSimulator's docstring for why
    * the simulator path never forces a physical detach either.
    */
-  broker?: CdpSessionBroker
+  broker?: CdpSessionBroker;
 }
 
 export interface NetworkForwarder extends Disposable {
@@ -191,9 +203,9 @@ export interface NetworkForwarder extends Disposable {
    * relaunch / pool swap) detaches the previous one first. No-op if the wc is
    * destroyed or its debugger is already claimed (DevTools / another client).
    */
-  attachSimulator(wc: WebContents): void
+  attachSimulator(wc: WebContents): void;
   /** Detach from the current simulator WCV (without disposing the forwarder). */
-  detachSimulator(): void
+  detachSimulator(): void;
   /**
    * Wire a render-host guest wc (pageFrame) for Network capture — page-level
    * resource loads (images/fonts/page fetch) that never touch the simulator's
@@ -207,13 +219,13 @@ export interface NetworkForwarder extends Disposable {
    * virtual-id namespace prefix (distinct epochs keep them collision-free) and
    * the same body prefetch cache.
    */
-  attachRenderGuest(wc: WebContents): void
+  attachRenderGuest(wc: WebContents): void;
   /**
    * Point the forwarder at the WebContents hosting the DevTools FRONT-END (the
    * primary, native-Network-tab sink). Pass null when that view is torn down so
    * we fall back to the console line. Re-callable across DevTools re-creates.
    */
-  setDevtoolsHost(wc: WebContents | null): void
+  setDevtoolsHost(wc: WebContents | null): void;
   /**
    * Point the forwarder at the WebContents hosting the standalone internal
    * (app-wide) DevTools window's front-end — the global mirror sink.
@@ -224,12 +236,12 @@ export interface NetworkForwarder extends Disposable {
    * failed dispatch is silently dropped — nobody depends on this path having
    * a fallback). Pass null when the window closes.
    */
-  setGlobalDevtoolsHost(wc: WebContents | null): void
+  setGlobalDevtoolsHost(wc: WebContents | null): void;
   /**
    * Manually surface a request that no `webContents.debugger` can observe
    * (e.g. a main-process direct send). Uses the console fallback sink.
    */
-  report(record: NetworkRequestRecord): void
+  report(record: NetworkRequestRecord): void;
   /**
    * Surface one main-process WebSocket trace event (wx.connectSocket traffic
    * lives on the Node `ws` transport, invisible to any debugger) as a
@@ -238,14 +250,27 @@ export interface NetworkForwarder extends Disposable {
    * plus the user-facing native sink when the socket's url classified
    * user-facing. Best-effort like every injection point — never throws.
    */
-  reportWebSocketTrace(sessionId: string, event: NativeWebSocketTrace): void
+  reportWebSocketTrace(sessionId: string, event: NativeWebSocketTrace): void;
+  /**
+   * Surface one main-process HTTP request trace event (wx.request traffic
+   * runs on Node http/https, invisible to any debugger, precisely so it
+   * skips Chromium's Fetch/CORS algorithm and its OPTIONS preflight) as a
+   * synthesized `Network.request*`/`Network.loading*` CDP event, through the
+   * SAME channels as forwarded simulator traffic: the global mirror
+   * unfiltered, plus the user-facing native sink when the request's url
+   * classified user-facing. `finished` primes the body cache (the response is
+   * already fully buffered in-process, no CDP round-trip needed); `sent`
+   * primes the post-data cache when the request carried a body. Best-effort
+   * like every injection point — never throws.
+   */
+  reportNativeRequestTrace(sessionId: string, event: NativeRequestTrace): void;
   /**
    * Body/post-data lookups for the virtual requestIds this forwarder injected,
    * backed by the loadingFinished-time prefetch cache. Keyed by virtual id, so
    * entries stay valid across detach/re-attach (each attach epoch mints
    * non-colliding ids); dispose() drops them all.
    */
-  readonly bodies: NetworkBodyProvider
+  readonly bodies: NetworkBodyProvider;
 }
 
 // ── requestId namespacing (pure, testable) ──────────────────────────────────
@@ -258,35 +283,35 @@ export interface NetworkForwarder extends Disposable {
  * included for that reason (rewrite-only today, not forwarded).
  */
 export const REWRITE_REQUEST_ID_METHODS: ReadonlySet<string> = new Set([
-  'Network.requestWillBeSent',
-  'Network.requestWillBeSentExtraInfo',
-  'Network.responseReceived',
-  'Network.responseReceivedExtraInfo',
-  'Network.dataReceived',
-  'Network.loadingFinished',
-  'Network.loadingFailed',
-  'Network.requestServedFromCache',
-  'Network.resourceChangedPriority',
+  "Network.requestWillBeSent",
+  "Network.requestWillBeSentExtraInfo",
+  "Network.responseReceived",
+  "Network.responseReceivedExtraInfo",
+  "Network.dataReceived",
+  "Network.loadingFinished",
+  "Network.loadingFailed",
+  "Network.requestServedFromCache",
+  "Network.resourceChangedPriority",
   // 二期 (when WebSocket/EventSource forwarding lands): Network.webSocket*,
   // Network.eventSourceMessageReceived — keep ids namespaced once added here.
-])
+]);
 
 /** The Network.* methods this one-shot pass forwards to the front-end. */
 export const FORWARDED_METHODS: ReadonlySet<string> = new Set([
-  'Network.requestWillBeSent',
-  'Network.requestWillBeSentExtraInfo',
-  'Network.responseReceived',
-  'Network.responseReceivedExtraInfo',
-  'Network.loadingFinished',
-  'Network.loadingFailed',
+  "Network.requestWillBeSent",
+  "Network.requestWillBeSentExtraInfo",
+  "Network.responseReceived",
+  "Network.responseReceivedExtraInfo",
+  "Network.loadingFinished",
+  "Network.loadingFailed",
   // `dataReceived` deliberately omitted (二期) — see header.
-])
+]);
 
 /** Methods that mark a request finished, so its id mapping can age out. */
 const TERMINAL_METHODS: ReadonlySet<string> = new Set([
-  'Network.loadingFinished',
-  'Network.loadingFailed',
-])
+  "Network.loadingFinished",
+  "Network.loadingFailed",
+]);
 
 /**
  * Bounded, TTL'd raw→virtual requestId map with an active/retired split.
@@ -303,8 +328,11 @@ const TERMINAL_METHODS: ReadonlySet<string> = new Set([
  * touches the retired pool.
  */
 export class RequestIdNamespace {
-  private readonly map = new Map<string, { virtual: string; expires: number; active: boolean }>()
-  private seq = 0
+  private readonly map = new Map<
+    string,
+    { virtual: string; expires: number; active: boolean }
+  >();
+  private seq = 0;
 
   constructor(
     private readonly epoch: string,
@@ -324,20 +352,20 @@ export class RequestIdNamespace {
    * active entry never "expires" no matter how long it stays in flight.
    */
   resolve(rawId: string): string {
-    const t = this.now()
-    const existing = this.map.get(rawId)
+    const t = this.now();
+    const existing = this.map.get(rawId);
     if (existing && (existing.active || existing.expires > t)) {
       // Refresh recency (LRU) on touch; refresh TTL only for retired entries
       // (active entries don't use TTL at all).
-      if (!existing.active) existing.expires = t + this.ttlMs
-      this.map.delete(rawId)
-      this.map.set(rawId, existing)
-      return existing.virtual
+      if (!existing.active) existing.expires = t + this.ttlMs;
+      this.map.delete(rawId);
+      this.map.set(rawId, existing);
+      return existing.virtual;
     }
-    const virtual = `${VIRTUAL_REQUEST_ID_PREFIX}${this.epoch}:${this.seq++}:${rawId}`
-    this.map.set(rawId, { virtual, expires: t + this.ttlMs, active: true })
-    this.evict(t)
-    return virtual
+    const virtual = `${VIRTUAL_REQUEST_ID_PREFIX}${this.epoch}:${this.seq++}:${rawId}`;
+    this.map.set(rawId, { virtual, expires: t + this.ttlMs, active: true });
+    this.evict(t);
+    return virtual;
   }
 
   /**
@@ -345,38 +373,38 @@ export class RequestIdNamespace {
    * pool with a fresh TTL, where it becomes eligible for TTL/LRU eviction.
    */
   retire(rawId: string): void {
-    const e = this.map.get(rawId)
+    const e = this.map.get(rawId);
     if (e) {
-      e.active = false
-      e.expires = this.now() + this.ttlMs
+      e.active = false;
+      e.expires = this.now() + this.ttlMs;
     }
   }
 
   private evict(t: number): void {
     // Drop expired retired entries first (active entries never expire).
     for (const [k, v] of this.map) {
-      if (!v.active && v.expires <= t) this.map.delete(k)
+      if (!v.active && v.expires <= t) this.map.delete(k);
     }
     // Then LRU-trim the RETIRED pool to the cap. Active entries are exempt:
     // we walk in insertion/refresh order and skip any still-active entry, so an
     // in-flight request is never evicted even past the cap.
-    if (this.map.size <= this.max) return
+    if (this.map.size <= this.max) return;
     for (const [k, v] of this.map) {
-      if (this.map.size <= this.max) break
-      if (!v.active) this.map.delete(k)
+      if (this.map.size <= this.max) break;
+      if (!v.active) this.map.delete(k);
     }
   }
 
   /** Total entries (active + retired). */
   get size(): number {
-    return this.map.size
+    return this.map.size;
   }
 
   /** Entries still in flight (resolved, not yet retired). */
   get activeSize(): number {
-    let n = 0
-    for (const v of this.map.values()) if (v.active) n++
-    return n
+    let n = 0;
+    for (const v of this.map.values()) if (v.active) n++;
+    return n;
   }
 }
 
@@ -391,12 +419,12 @@ export function rewriteRequestId(
   params: unknown,
   ns: RequestIdNamespace,
 ): { method: string; params: unknown } {
-  if (!REWRITE_REQUEST_ID_METHODS.has(method)) return { method, params }
-  const p = params as { requestId?: unknown } | null | undefined
-  if (!p || typeof p.requestId !== 'string') return { method, params }
-  const virtual = ns.resolve(p.requestId)
-  if (TERMINAL_METHODS.has(method)) ns.retire(p.requestId)
-  return { method, params: { ...(p as object), requestId: virtual } }
+  if (!REWRITE_REQUEST_ID_METHODS.has(method)) return { method, params };
+  const p = params as { requestId?: unknown } | null | undefined;
+  if (!p || typeof p.requestId !== "string") return { method, params };
+  const virtual = ns.resolve(p.requestId);
+  if (TERMINAL_METHODS.has(method)) ns.retire(p.requestId);
+  return { method, params: { ...(p as object), requestId: virtual } };
 }
 
 // ── DevTools front-end injection (the primary sink) ─────────────────────────
@@ -409,13 +437,15 @@ export function rewriteRequestId(
  * when the API isn't there yet, so the main side knows to retry / fall back.
  */
 function buildDispatchScript(messages: string[]): string {
-  const arr = JSON.stringify(messages)
-  return `(()=>{try{`
-    + `if(!${PROBE_DEVTOOLS_API})return false;`
-    + `const ms=JSON.parse(${JSON.stringify(arr)});`
-    + `for(const m of ms){try{window.DevToolsAPI.dispatchMessage(m)}catch(_){}}`
-    + `return true;`
-    + `}catch(_){return false}})()`
+  const arr = JSON.stringify(messages);
+  return (
+    `(()=>{try{` +
+    `if(!${PROBE_DEVTOOLS_API})return false;` +
+    `const ms=JSON.parse(${JSON.stringify(arr)});` +
+    `for(const m of ms){try{window.DevToolsAPI.dispatchMessage(m)}catch(_){}}` +
+    `return true;` +
+    `}catch(_){return false}})()`
+  );
 }
 
 /**
@@ -425,7 +455,7 @@ function buildDispatchScript(messages: string[]): string {
  * whole batch. We pack greedily up to this many chars, then flush and start a
  * new batch, so each `executeJavaScript` stays well-sized.
  */
-const MAX_BATCH_CHARS = 512 * 1024
+const MAX_BATCH_CHARS = 512 * 1024;
 
 // ── console fallback sink ───────────────────────────────────────────────────
 
@@ -435,54 +465,61 @@ const MAX_BATCH_CHARS = 512 * 1024
  * captured value is ever interpolated into executable JS (data-not-code).
  */
 function buildForwardScript(record: NetworkRequestRecord): string {
-  const json = JSON.stringify(record)
-  return `(()=>{try{const r=JSON.parse(${JSON.stringify(json)});`
-    + `const tag='[网络]['+r.source+']';`
-    + `const head=r.method+' '+(r.status||'-')+' '+r.url;`
-    + `if(r.errorText){console.warn(tag,head,r.errorText)}`
-    + `else if(r.status>=400){console.warn(tag,head)}`
-    + `else{console.log(tag,head)}`
-    + `}catch(_){}})()`
+  const json = JSON.stringify(record);
+  return (
+    `(()=>{try{const r=JSON.parse(${JSON.stringify(json)});` +
+    `const tag='[网络]['+r.source+']';` +
+    `const head=r.method+' '+(r.status||'-')+' '+r.url;` +
+    `if(r.errorText){console.warn(tag,head,r.errorText)}` +
+    `else if(r.status>=400){console.warn(tag,head)}` +
+    `else{console.log(tag,head)}` +
+    `}catch(_){}})()`
+  );
 }
 
 /** CDP `Network.requestWillBeSent` params slice the fallback + prefetch read. */
 interface RequestWillBeSent {
-  requestId: string
-  request: { url: string; method: string; hasPostData?: boolean; postData?: string }
+  requestId: string;
+  request: {
+    url: string;
+    method: string;
+    hasPostData?: boolean;
+    postData?: string;
+  };
 }
 /** CDP `Network.responseReceived` params slice the fallback reads. */
 interface ResponseReceived {
-  requestId: string
-  response: { status: number }
+  requestId: string;
+  response: { status: number };
 }
 /** CDP `Network.loadingFailed` params slice the fallback reads. */
 interface LoadingFailed {
-  requestId: string
-  errorText?: string
-  canceled?: boolean
+  requestId: string;
+  errorText?: string;
+  canceled?: boolean;
 }
 
 /** Pending-request bookkeeping for the console fallback between events. */
 interface Pending {
-  url: string
-  method: string
-  status: number
+  url: string;
+  method: string;
+  status: number;
 }
 
 /** Cap so a long session can't grow the fallback pending map unboundedly. */
-const MAX_PENDING = 1000
+const MAX_PENDING = 1000;
 
 /** Cap on the native dispatch queue (chars-agnostic count) while no/ready host. */
-const MAX_DISPATCH_QUEUE = 2000
+const MAX_DISPATCH_QUEUE = 2000;
 /**
  * How long we wait for `window.DevToolsAPI.dispatchMessage` to answer ready once
  * a host wc IS set, before giving up on the native path for that host and
  * degrading to the console sink. Prevents the infinite-requeue-never-fallback
  * loop when a host exists but its front-end never finishes booting.
  */
-const DEVTOOLS_READY_TIMEOUT_MS = 5_000
+const DEVTOOLS_READY_TIMEOUT_MS = 5_000;
 /** Poll interval while probing for the front-end API to become ready. */
-const READY_RETRY_MS = 100
+const READY_RETRY_MS = 100;
 
 /**
  * Per-host native-sink state. The forwarder routes EACH request to exactly one
@@ -499,19 +536,23 @@ const READY_RETRY_MS = 100
  *  - 'degraded' : ready timed out for this host. Native path abandoned (queue
  *                 dropped, marked so the hot path stops retrying); console used.
  */
-type SinkState = 'idle' | 'probing' | 'ready' | 'degraded'
+type SinkState = "idle" | "probing" | "ready" | "degraded";
 
-export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkForwarder {
-  const registry = new SyncDisposableRegistry()
-  let disposed = false
+export function createNetworkForwarder(
+  bridge: NetworkForwarderBridge,
+): NetworkForwarder {
+  const registry = new SyncDisposableRegistry();
+  let disposed = false;
 
   // ── Response body / post-data prefetch (serves the front-end's clicks) ─────
   // Keyed by VIRTUAL requestId and owned by the forwarder (not the attach):
   // epochs make ids non-colliding, so entries stay servable across a simulator
   // detach/re-attach while the panel still shows the old rows. Bounded + TTL'd
   // in the cache itself.
-  const bodyCache = new PrefetchCache<CdpResponseBody>((v) => v.body.length)
-  const postDataCache = new PrefetchCache<{ postData: string }>((v) => v.postData.length)
+  const bodyCache = new PrefetchCache<CdpResponseBody>((v) => v.body.length);
+  const postDataCache = new PrefetchCache<{ postData: string }>(
+    (v) => v.postData.length,
+  );
 
   // ── Prefetch admission control ──────────────────────────────────────────────
   // Every completed request (simulator + all render guests combined — this
@@ -529,8 +570,8 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // spike. `primeWithAdmission`'s bookkeeping only counts a slot when the cache
   // actually started a new fetch (PrefetchCache.prime()'s idempotent no-op
   // return doesn't consume one).
-  const MAX_CONCURRENT_PREFETCHES = 32
-  let pendingPrefetchCount = 0
+  const MAX_CONCURRENT_PREFETCHES = 32;
+  let pendingPrefetchCount = 0;
   /**
    * `fetch` MUST be an `async` function (both current call sites in
    * `prefetchBodies` are). An `async` function can never throw synchronously —
@@ -541,31 +582,48 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * slot forever (`PrefetchCache.prime` catches that synchronous throw and
    * still reports `started: true`), so never pass one here.
    */
-  function primeWithAdmission<V>(cache: PrefetchCache<V>, id: string, fetch: () => Promise<V>): void {
-    if (pendingPrefetchCount >= MAX_CONCURRENT_PREFETCHES) return
-    pendingPrefetchCount++
-    let released = false
-    const release = (): void => { if (!released) { released = true; pendingPrefetchCount-- } }
-    const started = cache.prime(id, () => fetch().then(
-      (v) => { release(); return v },
-      (err: unknown) => { release(); throw err },
-    ))
-    if (!started) release()
+  function primeWithAdmission<V>(
+    cache: PrefetchCache<V>,
+    id: string,
+    fetch: () => Promise<V>,
+  ): void {
+    if (pendingPrefetchCount >= MAX_CONCURRENT_PREFETCHES) return;
+    pendingPrefetchCount++;
+    let released = false;
+    const release = (): void => {
+      if (!released) {
+        released = true;
+        pendingPrefetchCount--;
+      }
+    };
+    const started = cache.prime(id, () =>
+      fetch().then(
+        (v) => {
+          release();
+          return v;
+        },
+        (err: unknown) => {
+          release();
+          throw err;
+        },
+      ),
+    );
+    if (!started) release();
   }
 
   // The simulator WCV we currently have a debugger session on, our broker
   // lease for it, and the per-attach teardown (message listener). Null when
   // not attached.
-  let simWc: WebContents | null = null
-  let simLease: CdpSessionLease | null = null
-  let attachDisposables: SyncDisposableRegistry | null = null
+  let simWc: WebContents | null = null;
+  let simLease: CdpSessionLease | null = null;
+  let attachDisposables: SyncDisposableRegistry | null = null;
 
   // Render-host guests wired for capture: wc.id → SYNCHRONOUS per-guest
   // teardown (message listener + broker lease). Attach/detach ownership for
   // these sessions lives entirely in the shared broker now (see cdp-session/
   // index.ts) — this map only tracks OUR OWN wiring (the 'message' listener
   // wireNetworkCapture installs), not who may detach the underlying session.
-  const guestWired = new Map<number, SyncDisposableRegistry>()
+  const guestWired = new Map<number, SyncDisposableRegistry>();
   // wc.id → the generation token of the most recently scheduled render-guest
   // retry (acquire refused, or an established session got detached).
   // `guestWired` alone cannot de-duplicate repeat `attachRenderGuest` calls
@@ -580,71 +638,73 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // chains. A monotonic generation token lets a fired timer recognize its own
   // staleness (its captured token no longer matches the current one) and
   // no-op instead of touching state it no longer owns.
-  const guestRetryGeneration = new Map<number, number>()
-  let nextRenderGuestRetryGeneration = 0
+  const guestRetryGeneration = new Map<number, number>();
+  let nextRenderGuestRetryGeneration = 0;
   // Own (and dispose on this forwarder's own dispose()) a private broker only
   // when the caller didn't supply a shared one.
-  const ownsBroker = !bridge.broker
-  const broker = bridge.broker ?? createCdpSessionBroker({ connections: bridge.connections })
+  const ownsBroker = !bridge.broker;
+  const broker =
+    bridge.broker ??
+    createCdpSessionBroker({ connections: bridge.connections });
 
   // The DevTools front-end host wc (primary sink), set by the ViewManager.
-  let devtoolsWc: WebContents | null = null
+  let devtoolsWc: WebContents | null = null;
   // Teardown for the wc 'destroyed' watcher on the current host (clears the host).
-  let devtoolsHostDisposable: Disposable | null = null
+  let devtoolsHostDisposable: Disposable | null = null;
 
   // ── Global mirror sink ──────────────────────────────────────────────────────
   // The standalone internal (app-wide) DevTools window's front-end host wc.
   // Deliberately NO probing/ready/degraded state machine and NO console
   // fallback — see setGlobalDevtoolsHost's doc comment.
-  let globalDevtoolsWc: WebContents | null = null
-  let globalDevtoolsHostDisposable: Disposable | null = null
+  let globalDevtoolsWc: WebContents | null = null;
+  let globalDevtoolsHostDisposable: Disposable | null = null;
   // Dedicated network-only outbound gate (body/post-data lookups) for the
   // CURRENT global host — never elements-forward's gate, see
   // global-body-gate.ts's header for why. Stopped whenever the host changes
   // or clears.
-  let globalBodyGateStop: (() => void) | null = null
+  let globalBodyGateStop: (() => void) | null = null;
   // Bounded in-order hold for global-mirror messages arriving while the
   // global host's front-end has not settled yet (its boot window) — without
   // it those events are silently unrecoverable, breaking the window's
   // full-stream promise. Scoped strictly to the CURRENT host: cleared when
   // the host changes/clears, never replayed into a different host.
-  const MAX_GLOBAL_PENDING_QUEUE = 2000
-  let globalPendingQueue: string[] = []
-  let globalPendingOverflowWarned = false
-  let globalFlushTimer: ReturnType<typeof setTimeout> | null = null
+  const MAX_GLOBAL_PENDING_QUEUE = 2000;
+  let globalPendingQueue: string[] = [];
+  let globalPendingOverflowWarned = false;
+  let globalFlushTimer: ReturnType<typeof setTimeout> | null = null;
   // Wall-clock bound on the settle-poll (not on the queue itself): a
   // front-end that never settles stops being polled after this, and the
   // still-held queue flushes via the next incoming event instead.
-  const GLOBAL_FLUSH_POLL_MAX_MS = 60_000
+  const GLOBAL_FLUSH_POLL_MAX_MS = 60_000;
 
   function clearGlobalPending(): void {
-    globalPendingQueue = []
-    globalPendingOverflowWarned = false
+    globalPendingQueue = [];
+    globalPendingOverflowWarned = false;
     if (globalFlushTimer) {
-      clearTimeout(globalFlushTimer)
-      globalFlushTimer = null
+      clearTimeout(globalFlushTimer);
+      globalFlushTimer = null;
     }
   }
 
   function scheduleGlobalFlush(startedAt = Date.now()): void {
-    if (globalFlushTimer) return
-    if (Date.now() - startedAt >= GLOBAL_FLUSH_POLL_MAX_MS) return
+    if (globalFlushTimer) return;
+    if (Date.now() - startedAt >= GLOBAL_FLUSH_POLL_MAX_MS) return;
     // unref'd like scheduleRenderGuestRetry's timer: a settle-poll must
     // never be what keeps the process (or a test file) alive.
     globalFlushTimer = setTimeout(() => {
-      globalFlushTimer = null
-      if (globalPendingQueue.length === 0) return
+      globalFlushTimer = null;
+      if (globalPendingQueue.length === 0) return;
       if (!globalDevtoolsWc || globalDevtoolsWc.isDestroyed()) {
-        clearGlobalPending()
-        return
+        clearGlobalPending();
+        return;
       }
       if (!isFrontendSettled(globalDevtoolsWc)) {
-        scheduleGlobalFlush(startedAt)
-        return
+        scheduleGlobalFlush(startedAt);
+        return;
       }
-      flushGlobalPending()
-    }, READY_RETRY_MS)
-    globalFlushTimer.unref?.()
+      flushGlobalPending();
+    }, READY_RETRY_MS);
+    globalFlushTimer.unref?.();
   }
 
   /** Drain the pending queue into the (settled) global host, oldest first,
@@ -654,78 +714,91 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * giant executeJavaScript overflows the IPC/script limit and the whole
    * call rejects into a silent drop. */
   function flushGlobalPending(): void {
-    if (globalPendingQueue.length === 0) return
-    const target = globalDevtoolsWc
+    if (globalPendingQueue.length === 0) return;
+    const target = globalDevtoolsWc;
     if (!target || target.isDestroyed()) {
-      clearGlobalPending()
-      return
+      clearGlobalPending();
+      return;
     }
     while (globalPendingQueue.length > 0) {
-      const { batch, chunked, remaining } = packDispatchBatch(globalPendingQueue, MAX_SINGLE_DISPATCH_CHARS, MAX_BATCH_CHARS)
-      globalPendingQueue = remaining
-      for (const msg of chunked) dispatchChunked(target, msg)
+      const { batch, chunked, remaining } = packDispatchBatch(
+        globalPendingQueue,
+        MAX_SINGLE_DISPATCH_CHARS,
+        MAX_BATCH_CHARS,
+      );
+      globalPendingQueue = remaining;
+      for (const msg of chunked) dispatchChunked(target, msg);
       if (batch.length > 0) {
-        target.executeJavaScript(buildDispatchScript(batch), true).catch(() => { /* best-effort */ })
+        target.executeJavaScript(buildDispatchScript(batch), true).catch(() => {
+          /* best-effort */
+        });
       }
     }
-    globalPendingOverflowWarned = false
+    globalPendingOverflowWarned = false;
   }
 
   function enqueueGlobalPending(json: string): void {
     if (globalPendingQueue.length >= MAX_GLOBAL_PENDING_QUEUE) {
-      globalPendingQueue.shift()
+      globalPendingQueue.shift();
       // Not silent: dropping past the cap means the window's full-stream
       // promise is degraded — say so once per overflow episode, not per event.
       if (!globalPendingOverflowWarned) {
-        globalPendingOverflowWarned = true
-        console.warn(`[network-forward] global mirror queue overflow (cap ${MAX_GLOBAL_PENDING_QUEUE}): dropping oldest events while the debug window front-end is still loading`)
+        globalPendingOverflowWarned = true;
+        console.warn(
+          `[network-forward] global mirror queue overflow (cap ${MAX_GLOBAL_PENDING_QUEUE}): dropping oldest events while the debug window front-end is still loading`,
+        );
       }
     }
-    globalPendingQueue.push(json)
-    scheduleGlobalFlush()
+    globalPendingQueue.push(json);
+    scheduleGlobalFlush();
   }
 
   function applyGlobalDevtoolsHost(host: WebContents | null): void {
-    globalDevtoolsHostDisposable?.dispose()
-    globalDevtoolsHostDisposable = null
-    globalBodyGateStop?.()
-    globalBodyGateStop = null
+    globalDevtoolsHostDisposable?.dispose();
+    globalDevtoolsHostDisposable = null;
+    globalBodyGateStop?.();
+    globalBodyGateStop = null;
     // Queued events belong to the PREVIOUS host's boot window — never carry
     // them across a host change (or into "no host").
-    clearGlobalPending()
-    globalDevtoolsWc = host && !host.isDestroyed() ? host : null
-    if (!globalDevtoolsWc) return
-    const target = globalDevtoolsWc
+    clearGlobalPending();
+    globalDevtoolsWc = host && !host.isDestroyed() ? host : null;
+    if (!globalDevtoolsWc) return;
+    const target = globalDevtoolsWc;
     const onHostDestroyed = (): void => {
-      if (globalDevtoolsWc === target) globalDevtoolsWc = null
-      globalBodyGateStop?.()
-      globalBodyGateStop = null
-      clearGlobalPending()
-    }
-    const reg = bridge.connections
-    if (reg && typeof target.once === 'function') {
-      const owned = reg.acquire(target).own(onHostDestroyed)
-      globalDevtoolsHostDisposable = toDisposable(() => owned.dispose())
+      if (globalDevtoolsWc === target) globalDevtoolsWc = null;
+      globalBodyGateStop?.();
+      globalBodyGateStop = null;
+      clearGlobalPending();
+    };
+    const reg = bridge.connections;
+    if (reg && typeof target.once === "function") {
+      const owned = reg.acquire(target).own(onHostDestroyed);
+      globalDevtoolsHostDisposable = toDisposable(() => owned.dispose());
     } else {
-      if (typeof target.once === 'function') target.once('destroyed', onHostDestroyed)
+      if (typeof target.once === "function")
+        target.once("destroyed", onHostDestroyed);
       globalDevtoolsHostDisposable = toDisposable(() => {
-        try { target.removeListener?.('destroyed', onHostDestroyed) } catch { /* gone */ }
-      })
+        try {
+          target.removeListener?.("destroyed", onHostDestroyed);
+        } catch {
+          /* gone */
+        }
+      });
     }
     globalBodyGateStop = installGlobalNetworkBodyGate(target, {
       getResponseBody: (requestId) => bodyCache.lookup(requestId),
       getRequestPostData: (requestId) => postDataCache.lookup(requestId),
-    })
+    });
   }
 
   /** Best-effort mirror of one raw CDP message into the global host. */
   function dispatchToGlobal(method: string, params: unknown): void {
-    if (!globalDevtoolsWc || globalDevtoolsWc.isDestroyed()) return
-    let json: string
+    if (!globalDevtoolsWc || globalDevtoolsWc.isDestroyed()) return;
+    let json: string;
     try {
-      json = JSON.stringify({ method, params })
+      json = JSON.stringify({ method, params });
     } catch {
-      return
+      return;
     }
     // Same settled gate every other injection point in this file uses: an
     // unsettled front-end wipes its state on load anyway, and executeJavaScript
@@ -734,26 +807,30 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // those injection points, the events here are NOT re-derivable later, so
     // they queue for a post-settle flush instead of dropping.
     if (!isFrontendSettled(globalDevtoolsWc)) {
-      enqueueGlobalPending(json)
-      return
+      enqueueGlobalPending(json);
+      return;
     }
     // Anything still queued flushes first so delivery order matches arrival.
-    flushGlobalPending()
+    flushGlobalPending();
     // Oversized single messages take the chunked transport, mirroring the
     // native sink's flushDispatch — see flushGlobalPending's doc.
     if (json.length > MAX_SINGLE_DISPATCH_CHARS) {
-      dispatchChunked(globalDevtoolsWc, json)
-      return
+      dispatchChunked(globalDevtoolsWc, json);
+      return;
     }
-    globalDevtoolsWc.executeJavaScript(buildDispatchScript([json]), true).catch(() => { /* best-effort */ })
+    globalDevtoolsWc
+      .executeJavaScript(buildDispatchScript([json]), true)
+      .catch(() => {
+        /* best-effort */
+      });
   }
 
   // ── Native-sink state machine ─────────────────────────────────────────────
-  let sink: SinkState = 'idle'
+  let sink: SinkState = "idle";
   // Buffered completed-request records while 'probing' — flushed to console if we
   // degrade, dropped if we go ready (so a request shows in exactly one sink).
-  let probeConsoleBuffer: NetworkRequestRecord[] = []
-  let readyTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+  let probeConsoleBuffer: NetworkRequestRecord[] = [];
+  let readyTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
   // Wall-clock deadline for the CURRENT probe, set once when 'probing' begins.
   // scheduleReadyRetry() re-checks this on every retry so the retry chain is
   // itself authoritative on giving up — it does not depend on winning a race
@@ -763,42 +840,48 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // "Aborting after running 10000 timers" abort in `network-forward`'s
   // ready-timeout test). readyTimeoutTimer stays as a backstop for hosts that
   // never retry at all (e.g. the queue drains before the deadline).
-  let probeDeadline: number | null = null
+  let probeDeadline: number | null = null;
 
   // ── Batched native dispatch into the DevTools front-end ───────────────────
   // Queued raw CDP messages (already namespaced + JSON-stringified) awaiting a
   // microtask flush — coalescing many events into one executeJavaScript avoids
   // high-frequency IPC.
-  let dispatchQueue: string[] = []
-  let flushScheduled = false
-  let readyRetryTimer: ReturnType<typeof setTimeout> | null = null
+  let dispatchQueue: string[] = [];
+  let flushScheduled = false;
+  let readyRetryTimer: ReturnType<typeof setTimeout> | null = null;
 
   function resolveDevtoolsWc(): WebContents | null {
-    const wc = devtoolsWc ?? bridge.getDevtoolsWc?.() ?? null
-    return wc && !wc.isDestroyed() ? wc : null
+    const wc = devtoolsWc ?? bridge.getDevtoolsWc?.() ?? null;
+    return wc && !wc.isDestroyed() ? wc : null;
   }
 
   /** Enter the 'probing' state and arm the ready-timeout (idempotent). */
   function beginProbing(): void {
-    if (sink === 'probing') return
-    sink = 'probing'
-    probeDeadline = Date.now() + DEVTOOLS_READY_TIMEOUT_MS
-    if (readyTimeoutTimer) clearTimeout(readyTimeoutTimer)
+    if (sink === "probing") return;
+    sink = "probing";
+    probeDeadline = Date.now() + DEVTOOLS_READY_TIMEOUT_MS;
+    if (readyTimeoutTimer) clearTimeout(readyTimeoutTimer);
     readyTimeoutTimer = setTimeout(() => {
-      readyTimeoutTimer = null
+      readyTimeoutTimer = null;
       // Still not ready after the grace period → abandon native for this host.
-      if (sink === 'probing') degradeToConsole()
-    }, DEVTOOLS_READY_TIMEOUT_MS)
+      if (sink === "probing") degradeToConsole();
+    }, DEVTOOLS_READY_TIMEOUT_MS);
   }
 
   /** Native path confirmed live: console buffer is moot, drop it. */
   function markReady(): void {
-    sink = 'ready'
-    probeDeadline = null
-    if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
-    if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
+    sink = "ready";
+    probeDeadline = null;
+    if (readyTimeoutTimer) {
+      clearTimeout(readyTimeoutTimer);
+      readyTimeoutTimer = null;
+    }
+    if (readyRetryTimer) {
+      clearTimeout(readyRetryTimer);
+      readyRetryTimer = null;
+    }
     // Native rendered these requests; their buffered console copies would dup.
-    probeConsoleBuffer = []
+    probeConsoleBuffer = [];
   }
 
   /**
@@ -807,20 +890,26 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * and flush the buffered completed-request records to the console sink.
    */
   function degradeToConsole(): void {
-    sink = 'degraded'
-    probeDeadline = null
-    dispatchQueue = []
-    if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
-    if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
-    const buffered = probeConsoleBuffer
-    probeConsoleBuffer = []
-    for (const r of buffered) forwardToConsole(r)
+    sink = "degraded";
+    probeDeadline = null;
+    dispatchQueue = [];
+    if (readyTimeoutTimer) {
+      clearTimeout(readyTimeoutTimer);
+      readyTimeoutTimer = null;
+    }
+    if (readyRetryTimer) {
+      clearTimeout(readyRetryTimer);
+      readyRetryTimer = null;
+    }
+    const buffered = probeConsoleBuffer;
+    probeConsoleBuffer = [];
+    for (const r of buffered) forwardToConsole(r);
   }
 
   function scheduleFlush(): void {
-    if (flushScheduled) return
-    flushScheduled = true
-    queueMicrotask(flushDispatch)
+    if (flushScheduled) return;
+    flushScheduled = true;
+    queueMicrotask(flushDispatch);
   }
 
   /** Trim the native queue to its cap, preferring to keep request-opening events.
@@ -830,36 +919,42 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * silently drops events for an unknown requestId); we drop the oldest
    * NON-opening (low-value / completion) events first. */
   function trimQueue(): void {
-    if (dispatchQueue.length <= MAX_DISPATCH_QUEUE) return
+    if (dispatchQueue.length <= MAX_DISPATCH_QUEUE) return;
     const isOpener = (json: string): boolean =>
-      json.includes('"Network.requestWillBeSent"')
-      || json.includes('"Network.requestWillBeSentExtraInfo"')
-      || json.includes('"Network.webSocketCreated"')
+      json.includes('"Network.requestWillBeSent"') ||
+      json.includes('"Network.requestWillBeSentExtraInfo"') ||
+      json.includes('"Network.webSocketCreated"');
     // First pass: drop oldest non-opener events.
-    const kept: string[] = []
-    let over = dispatchQueue.length - MAX_DISPATCH_QUEUE
+    const kept: string[] = [];
+    let over = dispatchQueue.length - MAX_DISPATCH_QUEUE;
     for (const json of dispatchQueue) {
-      if (over > 0 && !isOpener(json)) { over--; continue }
-      kept.push(json)
+      if (over > 0 && !isOpener(json)) {
+        over--;
+        continue;
+      }
+      kept.push(json);
     }
     // If openers alone still exceed the cap, fall back to dropping oldest openers.
     if (kept.length > MAX_DISPATCH_QUEUE) {
-      dispatchQueue = kept.slice(kept.length - MAX_DISPATCH_QUEUE)
+      dispatchQueue = kept.slice(kept.length - MAX_DISPATCH_QUEUE);
     } else {
-      dispatchQueue = kept
+      dispatchQueue = kept;
     }
   }
 
   function flushDispatch(): void {
-    flushScheduled = false
-    if (dispatchQueue.length === 0) return
-    if (sink === 'degraded') { dispatchQueue = []; return }
-    const wc = resolveDevtoolsWc()
+    flushScheduled = false;
+    if (dispatchQueue.length === 0) return;
+    if (sink === "degraded") {
+      dispatchQueue = [];
+      return;
+    }
+    const wc = resolveDevtoolsWc();
     if (!wc) {
       // Host went away mid-flight. Keep the queue bounded (the cap applies on
       // EVERY path, not just no-host) and wait — setDevtoolsHost re-arms probing.
-      trimQueue()
-      return
+      trimQueue();
+      return;
     }
     if (!isFrontendSettled(wc)) {
       // An unsettled front-end can't run the dispatch script anyway — and every
@@ -869,91 +964,99 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       // isLoading() probe diverges from the internal isLoadingMainFrame gate).
       // Hold the (bounded) queue; the next event's flush or the ready-retry
       // delivers after the load.
-      trimQueue()
-      scheduleReadyRetry()
-      return
+      trimQueue();
+      scheduleReadyRetry();
+      return;
     }
-    if (sink === 'idle') beginProbing()
+    if (sink === "idle") beginProbing();
 
     // Pack greedily up to MAX_BATCH_CHARS so one executeJavaScript stays sized;
     // oversized single messages go via the chunked transport (see packDispatchBatch).
-    const { batch, chunked, remaining } = packDispatchBatch(dispatchQueue, MAX_SINGLE_DISPATCH_CHARS, MAX_BATCH_CHARS)
-    for (const msg of chunked) dispatchChunked(wc, msg)
+    const { batch, chunked, remaining } = packDispatchBatch(
+      dispatchQueue,
+      MAX_SINGLE_DISPATCH_CHARS,
+      MAX_BATCH_CHARS,
+    );
+    for (const msg of chunked) dispatchChunked(wc, msg);
 
     if (batch.length === 0) {
       // Only chunked messages were processed this turn; continue with the rest.
-      dispatchQueue = remaining
-      if (dispatchQueue.length > 0) scheduleFlush()
-      return
+      dispatchQueue = remaining;
+      if (dispatchQueue.length > 0) scheduleFlush();
+      return;
     }
 
-    let script: string
+    let script: string;
     try {
-      script = buildDispatchScript(batch)
+      script = buildDispatchScript(batch);
     } catch {
-      dispatchQueue = remaining
-      if (dispatchQueue.length > 0) scheduleFlush()
-      return
+      dispatchQueue = remaining;
+      if (dispatchQueue.length > 0) scheduleFlush();
+      return;
     }
     // Hold the rest of the queue (un-flushed) until this batch resolves so a
     // not-ready answer can re-queue the in-flight batch ahead of it in order.
-    dispatchQueue = remaining
-    if (remaining.length > 0) scheduleFlush()
-    wc.executeJavaScript(script, true).then((ok: unknown) => {
-      if (ok === true) {
-        if (sink !== 'ready') markReady()
-        return
-      }
-      // API not present yet — front-end still booting. Re-queue this batch ahead
-      // of any newer events and poll until ready (or the timeout degrades us).
-      if (sink === 'degraded') return
-      dispatchQueue = batch.concat(dispatchQueue)
-      trimQueue()
-      scheduleReadyRetry()
-    }).catch(() => {
-      // wc navigated / torn down mid-call, OR the script overflowed IPC. Re-queue
-      // (bounded) and let the next flush re-resolve the host. Best-effort; the
-      // ready-timeout still governs giving up. Backoff is via the retry timer.
-      if (sink === 'degraded') return
-      dispatchQueue = batch.concat(dispatchQueue)
-      trimQueue()
-      scheduleReadyRetry()
-    })
+    dispatchQueue = remaining;
+    if (remaining.length > 0) scheduleFlush();
+    wc.executeJavaScript(script, true)
+      .then((ok: unknown) => {
+        if (ok === true) {
+          if (sink !== "ready") markReady();
+          return;
+        }
+        // API not present yet — front-end still booting. Re-queue this batch ahead
+        // of any newer events and poll until ready (or the timeout degrades us).
+        if (sink === "degraded") return;
+        dispatchQueue = batch.concat(dispatchQueue);
+        trimQueue();
+        scheduleReadyRetry();
+      })
+      .catch(() => {
+        // wc navigated / torn down mid-call, OR the script overflowed IPC. Re-queue
+        // (bounded) and let the next flush re-resolve the host. Best-effort; the
+        // ready-timeout still governs giving up. Backoff is via the retry timer.
+        if (sink === "degraded") return;
+        dispatchQueue = batch.concat(dispatchQueue);
+        trimQueue();
+        scheduleReadyRetry();
+      });
   }
 
   function dispatchChunked(wc: WebContents, msg: string): void {
-    const totalSize = msg.length
-    const chunks: string[] = []
+    const totalSize = msg.length;
+    const chunks: string[] = [];
     for (let i = 0; i < msg.length; i += CHUNK_CHARS) {
-      chunks.push(msg.slice(i, i + CHUNK_CHARS))
+      chunks.push(msg.slice(i, i + CHUNK_CHARS));
     }
-    let script: string
+    let script: string;
     try {
-      script = buildChunkedDispatchScript(chunks, totalSize)
+      script = buildChunkedDispatchScript(chunks, totalSize);
     } catch {
-      return
+      return;
     }
-    wc.executeJavaScript(script, true).catch(() => { /* best-effort */ })
+    wc.executeJavaScript(script, true).catch(() => {
+      /* best-effort */
+    });
   }
 
   function scheduleReadyRetry(): void {
-    if (readyRetryTimer || sink === 'ready' || sink === 'degraded') return
+    if (readyRetryTimer || sink === "ready" || sink === "degraded") return;
     // Self-terminate on the same deadline readyTimeoutTimer enforces, instead of
     // trusting that timer to win a same-instant race against this one (see the
     // comment on `probeDeadline`'s declaration).
     if (probeDeadline !== null && Date.now() >= probeDeadline) {
-      degradeToConsole()
-      return
+      degradeToConsole();
+      return;
     }
     readyRetryTimer = setTimeout(() => {
-      readyRetryTimer = null
-      if (sink === 'degraded') return
+      readyRetryTimer = null;
+      if (sink === "degraded") return;
       if (probeDeadline !== null && Date.now() >= probeDeadline) {
-        degradeToConsole()
-        return
+        degradeToConsole();
+        return;
       }
-      if (dispatchQueue.length > 0) scheduleFlush()
-    }, READY_RETRY_MS)
+      if (dispatchQueue.length > 0) scheduleFlush();
+    }, READY_RETRY_MS);
   }
 
   /** Queue one raw (already-namespaced) CDP message for native dispatch. */
@@ -963,33 +1066,33 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // requests — queueing them would let them double-render if a host later
     // arrives / swaps in. resolveDevtoolsWc() guards the idle case where a host
     // is set on the bridge but applyDevtoolsHost hasn't run yet.
-    if (sink === 'degraded') return
-    if (sink === 'idle' && !resolveDevtoolsWc()) return
-    let json: string
+    if (sink === "degraded") return;
+    if (sink === "idle" && !resolveDevtoolsWc()) return;
+    let json: string;
     try {
-      json = JSON.stringify({ method, params })
+      json = JSON.stringify({ method, params });
     } catch {
       // A value CDP serialized but we can't re-serialize — drop, never throw.
-      return
+      return;
     }
-    dispatchQueue.push(json)
-    trimQueue()
-    scheduleFlush()
+    dispatchQueue.push(json);
+    trimQueue();
+    scheduleFlush();
   }
 
   // ── console fallback ──────────────────────────────────────────────────────
 
   /** Re-emit a completed request into the service host's console (fallback). */
   function forwardToConsole(record: NetworkRequestRecord): void {
-    const wc = bridge.getServiceWc()
-    if (!wc || wc.isDestroyed()) return
-    let script: string
+    const wc = bridge.getServiceWc();
+    if (!wc || wc.isDestroyed()) return;
+    let script: string;
     try {
-      script = buildForwardScript(record)
+      script = buildForwardScript(record);
     } catch {
-      return
+      return;
     }
-    wc.executeJavaScript(script, true).catch(() => {})
+    wc.executeJavaScript(script, true).catch(() => {});
   }
 
   /**
@@ -1004,23 +1107,35 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * self-attached session) — never a single consumer switching away.
    */
   function detachSimulator(): void {
-    simWc = null
-    const lease = simLease
-    simLease = null
-    const ad = attachDisposables
-    attachDisposables = null
-    if (ad) { try { ad.disposeAll() } catch { /* best-effort teardown */ } }
-    lease?.dispose()
+    simWc = null;
+    const lease = simLease;
+    simLease = null;
+    const ad = attachDisposables;
+    attachDisposables = null;
+    if (ad) {
+      try {
+        ad.disposeAll();
+      } catch {
+        /* best-effort teardown */
+      }
+    }
+    lease?.dispose();
     // Drop any queued-but-unflushed messages so a new attach starts clean, and
     // reset the native-sink state machine (the next attach re-probes the host).
-    dispatchQueue = []
-    probeConsoleBuffer = []
+    dispatchQueue = [];
+    probeConsoleBuffer = [];
     // A new simulator attach restarts the native sink: 'idle' until the next
     // event re-probes the (possibly already-set) host.
-    sink = 'idle'
-    probeDeadline = null
-    if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
-    if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
+    sink = "idle";
+    probeDeadline = null;
+    if (readyRetryTimer) {
+      clearTimeout(readyRetryTimer);
+      readyRetryTimer = null;
+    }
+    if (readyTimeoutTimer) {
+      clearTimeout(readyTimeoutTimer);
+      readyTimeoutTimer = null;
+    }
   }
 
   /**
@@ -1033,24 +1148,29 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * semantics) — the capture pipeline is identical, only session ownership
    * differs. The 'message' listener teardown is registered on `attach`.
    */
-  function wireNetworkCapture(wc: WebContents, source: NetworkSource, attach: SyncDisposableRegistry, epoch: string): void {
-    const ns = new RequestIdNamespace(epoch)
+  function wireNetworkCapture(
+    wc: WebContents,
+    source: NetworkSource,
+    attach: SyncDisposableRegistry,
+    epoch: string,
+  ): void {
+    const ns = new RequestIdNamespace(epoch);
 
     // Fallback bookkeeping: requestId → in-flight request, for the console line
     // when the native dispatch path is unusable.
-    const pending = new Map<string, Pending>()
+    const pending = new Map<string, Pending>();
 
     // User-facing classification, decided ONCE at
     // requestWillBeSent (the only event carrying a url) and consulted by every
     // later event on the same rawId — later events (responseReceived/
     // loadingFinished/loadingFailed) carry no url, so they cannot re-derive
     // the verdict; they must remember it.
-    const userFacingByRawId = new Map<string, boolean>()
+    const userFacingByRawId = new Map<string, boolean>();
 
     // Raw ids whose requestWillBeSent announced a post body that was NOT
     // inlined (`hasPostData` without `postData`) — the only case the front-end
     // round-trips `Network.getRequestPostData`. Consumed at loadingFinished.
-    const postDataWanted = new Set<string>()
+    const postDataWanted = new Set<string>();
 
     /**
      * Prefetch the response body (and, when flagged, the post data) from this
@@ -1060,17 +1180,22 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
      * (idle-without-host / degraded) there is no panel to click, so buffering
      * bodies would only burn memory.
      */
-    const prefetchBodies = (rawId: string, encodedDataLength?: number): void => {
+    const prefetchBodies = (
+      rawId: string,
+      encodedDataLength?: number,
+    ): void => {
       // Skip only when NEITHER consumer can use the body: the user-facing
       // sink is unusable (degraded, or idle with no host) AND the global
       // mirror has no host either. Either alone is enough reason to prefetch
       // — global-body-gate answers Network.getResponseBody/getRequestPostData
       // from this same cache, and it must not 404 just because the
       // user-facing sink happens to be closed/degraded.
-      const userSinkUsable = sink !== 'degraded' && !(sink === 'idle' && !resolveDevtoolsWc())
-      const globalUsable = globalDevtoolsWc !== null && !globalDevtoolsWc.isDestroyed()
-      if (!userSinkUsable && !globalUsable) return
-      const virtualId = ns.resolve(rawId)
+      const userSinkUsable =
+        sink !== "degraded" && !(sink === "idle" && !resolveDevtoolsWc());
+      const globalUsable =
+        globalDevtoolsWc !== null && !globalDevtoolsWc.isDestroyed();
+      if (!userSinkUsable && !globalUsable) return;
+      const virtualId = ns.resolve(rawId);
       // Skip the CDP round-trip entirely for a response already known (from
       // the wire size CDP reports at completion) to exceed the cache's own
       // per-entry ceiling — no point materializing a full body into main-
@@ -1078,85 +1203,121 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       // is a best-effort heuristic (encodedDataLength is the ON-THE-WIRE size;
       // a decompressed body can be larger), not a hard guarantee — the
       // concurrency cap below is what actually bounds worst-case memory.
-      const knownOversized = typeof encodedDataLength === 'number' && encodedDataLength > DEFAULT_PER_ENTRY_MAX_CHARS
+      const knownOversized =
+        typeof encodedDataLength === "number" &&
+        encodedDataLength > DEFAULT_PER_ENTRY_MAX_CHARS;
       if (!knownOversized) {
-        primeWithAdmission(bodyCache, virtualId, async (): Promise<CdpResponseBody> => {
-          const raw: unknown = await wc.debugger.sendCommand('Network.getResponseBody', { requestId: rawId })
-          const r = raw as { body?: unknown, base64Encoded?: unknown } | null | undefined
-          if (!r || typeof r.body !== 'string') throw new Error('response body unavailable')
-          return { body: r.body, base64Encoded: r.base64Encoded === true }
-        })
+        primeWithAdmission(
+          bodyCache,
+          virtualId,
+          async (): Promise<CdpResponseBody> => {
+            const raw: unknown = await wc.debugger.sendCommand(
+              "Network.getResponseBody",
+              { requestId: rawId },
+            );
+            const r = raw as
+              | { body?: unknown; base64Encoded?: unknown }
+              | null
+              | undefined;
+            if (!r || typeof r.body !== "string")
+              throw new Error("response body unavailable");
+            return { body: r.body, base64Encoded: r.base64Encoded === true };
+          },
+        );
       }
-      if (!postDataWanted.delete(rawId)) return
-      primeWithAdmission(postDataCache, virtualId, async (): Promise<{ postData: string }> => {
-        const raw: unknown = await wc.debugger.sendCommand('Network.getRequestPostData', { requestId: rawId })
-        const r = raw as { postData?: unknown } | null | undefined
-        if (!r || typeof r.postData !== 'string') throw new Error('post data unavailable')
-        return { postData: r.postData }
-      })
-    }
+      if (!postDataWanted.delete(rawId)) return;
+      primeWithAdmission(
+        postDataCache,
+        virtualId,
+        async (): Promise<{ postData: string }> => {
+          const raw: unknown = await wc.debugger.sendCommand(
+            "Network.getRequestPostData",
+            { requestId: rawId },
+          );
+          const r = raw as { postData?: unknown } | null | undefined;
+          if (!r || typeof r.postData !== "string")
+            throw new Error("post data unavailable");
+          return { postData: r.postData };
+        },
+      );
+    };
 
     // ── Fallback bookkeeping handlers — one per Network.* method, each kept
     // simple so `onMessage` itself stays a flat dispatch (not a branchy switch). ──
 
     function onRequestWillBeSent(params: unknown): void {
-      const p = params as RequestWillBeSent
-      if (!p?.request) return
-      if (pending.size >= MAX_PENDING) pending.clear()
-      pending.set(p.requestId, { url: p.request.url, method: p.request.method, status: 0 })
+      const p = params as RequestWillBeSent;
+      if (!p?.request) return;
+      if (pending.size >= MAX_PENDING) pending.clear();
+      pending.set(p.requestId, {
+        url: p.request.url,
+        method: p.request.method,
+        status: 0,
+      });
       // A body announced but not inlined is the one case the panel will
       // round-trip `Network.getRequestPostData` — flag it for prefetch.
-      if (p.request.hasPostData === true && typeof p.request.postData !== 'string') {
-        if (postDataWanted.size >= MAX_PENDING) postDataWanted.clear()
-        postDataWanted.add(p.requestId)
+      if (
+        p.request.hasPostData === true &&
+        typeof p.request.postData !== "string"
+      ) {
+        if (postDataWanted.size >= MAX_PENDING) postDataWanted.clear();
+        postDataWanted.add(p.requestId);
       }
     }
 
     function onResponseReceived(params: unknown): void {
-      const p = params as ResponseReceived
-      const req = pending.get(p.requestId)
-      if (req) req.status = p.response?.status ?? 0
+      const p = params as ResponseReceived;
+      const req = pending.get(p.requestId);
+      if (req) req.status = p.response?.status ?? 0;
     }
 
     /** Shared "request terminated" bookkeeping for both loadingFinished and
      *  loadingFailed: drop the classification + pending record, returning the
      *  pending entry (or undefined if it was already gone/never seen). */
     function retirePending(rawId: string): Pending | undefined {
-      userFacingByRawId.delete(rawId)
-      const req = pending.get(rawId)
-      if (!req) return undefined
-      pending.delete(rawId)
-      return req
+      userFacingByRawId.delete(rawId);
+      const req = pending.get(rawId);
+      if (!req) return undefined;
+      pending.delete(rawId);
+      return req;
     }
 
     function onLoadingFinished(params: unknown): void {
-      const p = params as { requestId: string, encodedDataLength?: number }
-      if (typeof p?.requestId === 'string') prefetchBodies(p.requestId, p.encodedDataLength)
-      const req = retirePending(p?.requestId)
-      if (!req) return
-      maybeFallback({ source, url: req.url, method: req.method, status: req.status })
-    }
-
-    function onLoadingFailed(params: unknown): void {
-      const p = params as LoadingFailed
-      postDataWanted.delete(p?.requestId)
-      const req = retirePending(p?.requestId)
-      if (!req) return
+      const p = params as { requestId: string; encodedDataLength?: number };
+      if (typeof p?.requestId === "string")
+        prefetchBodies(p.requestId, p.encodedDataLength);
+      const req = retirePending(p?.requestId);
+      if (!req) return;
       maybeFallback({
         source,
         url: req.url,
         method: req.method,
         status: req.status,
-        errorText: p.canceled ? 'canceled' : (p.errorText || 'failed'),
-      })
+      });
     }
 
-    const FALLBACK_HANDLERS: Readonly<Record<string, (params: unknown) => void>> = {
-      'Network.requestWillBeSent': onRequestWillBeSent,
-      'Network.responseReceived': onResponseReceived,
-      'Network.loadingFinished': onLoadingFinished,
-      'Network.loadingFailed': onLoadingFailed,
+    function onLoadingFailed(params: unknown): void {
+      const p = params as LoadingFailed;
+      postDataWanted.delete(p?.requestId);
+      const req = retirePending(p?.requestId);
+      if (!req) return;
+      maybeFallback({
+        source,
+        url: req.url,
+        method: req.method,
+        status: req.status,
+        errorText: p.canceled ? "canceled" : p.errorText || "failed",
+      });
     }
+
+    const FALLBACK_HANDLERS: Readonly<
+      Record<string, (params: unknown) => void>
+    > = {
+      "Network.requestWillBeSent": onRequestWillBeSent,
+      "Network.responseReceived": onResponseReceived,
+      "Network.loadingFinished": onLoadingFinished,
+      "Network.loadingFailed": onLoadingFailed,
+    };
 
     /**
      * Resolve (and, on `requestWillBeSent`, record) whether `rawId` is
@@ -1168,19 +1329,29 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
      * recorded verdict; an unknown rawId fails open (user-facing) rather
      * than silently hiding it.
      */
-    function resolveUserFacing(method: string, params: unknown, rawId: string | undefined): boolean {
-      if (method === 'Network.requestWillBeSent') {
-        const url = (params as RequestWillBeSent | null | undefined)?.request?.url
-        const verdict = typeof url === 'string'
-          ? isUserFacingRequest(url, [bridge.getResourceServerBaseUrl?.(), bridge.getSimulatorServerBaseUrl?.()])
-          : true
+    function resolveUserFacing(
+      method: string,
+      params: unknown,
+      rawId: string | undefined,
+    ): boolean {
+      if (method === "Network.requestWillBeSent") {
+        const url = (params as RequestWillBeSent | null | undefined)?.request
+          ?.url;
+        const verdict =
+          typeof url === "string"
+            ? isUserFacingRequest(url, [
+                bridge.getResourceServerBaseUrl?.(),
+                bridge.getSimulatorServerBaseUrl?.(),
+              ])
+            : true;
         if (rawId) {
-          if (userFacingByRawId.size >= MAX_PENDING) userFacingByRawId.clear()
-          userFacingByRawId.set(rawId, verdict)
+          if (userFacingByRawId.size >= MAX_PENDING) userFacingByRawId.clear();
+          userFacingByRawId.set(rawId, verdict);
         }
-        return verdict
+        return verdict;
       }
-      if (rawId && userFacingByRawId.has(rawId)) return userFacingByRawId.get(rawId)!
+      if (rawId && userFacingByRawId.has(rawId))
+        return userFacingByRawId.get(rawId)!;
       // `Network.requestWillBeSentExtraInfo` can arrive BEFORE its own
       // `requestWillBeSent` (real CDP ordering) — it carries no url, so an
       // unrecorded rawId here means "classification not yet known", not
@@ -1192,47 +1363,60 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
       // classification is even known. Every OTHER "rawId never seen" case
       // (e.g. capture attached mid-flight, no requestWillBeSent ever coming)
       // keeps failing open — there is no better signal available there.
-      if (method === 'Network.requestWillBeSentExtraInfo') return false
-      return true
+      if (method === "Network.requestWillBeSentExtraInfo") return false;
+      return true;
     }
 
-    const onMessage = (_event: Electron.Event, method: string, params: unknown): void => {
+    const onMessage = (
+      _event: Electron.Event,
+      method: string,
+      params: unknown,
+    ): void => {
       // ── Primary sink: forward the raw CDP event into the DevTools front-end ──
       if (FORWARDED_METHODS.has(method)) {
-        const rewritten = rewriteRequestId(method, params, ns)
+        const rewritten = rewriteRequestId(method, params, ns);
         // Global mirror: full, unfiltered — independent of the
         // user-facing sink's classification and state machine.
-        dispatchToGlobal(rewritten.method, rewritten.params)
+        dispatchToGlobal(rewritten.method, rewritten.params);
         // User-facing sink: only requests isUserFacingRequest() judged as the
         // developer's own business traffic — internal/framework resource
         // loads are mirrored to the global window ONLY.
-        const rawId = (params as { requestId?: unknown } | null | undefined)?.requestId
-        const userFacing = resolveUserFacing(method, params, typeof rawId === 'string' ? rawId : undefined)
+        const rawId = (params as { requestId?: unknown } | null | undefined)
+          ?.requestId;
+        const userFacing = resolveUserFacing(
+          method,
+          params,
+          typeof rawId === "string" ? rawId : undefined,
+        );
         if (userFacing) {
-          enqueueNative(rewritten.method, rewritten.params)
+          enqueueNative(rewritten.method, rewritten.params);
         }
       } else if (REWRITE_REQUEST_ID_METHODS.has(method)) {
         // Methods we namespace but don't forward (dataReceived): still resolve
         // so the id mapping stays coherent if forwarding is added later.
-        rewriteRequestId(method, params, ns)
+        rewriteRequestId(method, params, ns);
       }
 
       // ── Fallback bookkeeping (used only when native dispatch is unusable) ──
-      FALLBACK_HANDLERS[method]?.(params)
-    }
+      FALLBACK_HANDLERS[method]?.(params);
+    };
 
-    wc.debugger.on('message', onMessage)
+    wc.debugger.on("message", onMessage);
     attach.add(() => {
-      try { wc.debugger.removeListener('message', onMessage) } catch { /* wc gone */ }
-    })
+      try {
+        wc.debugger.removeListener("message", onMessage);
+      } catch {
+        /* wc gone */
+      }
+    });
   }
 
   /** Drop one guest's wiring (message listener + broker lease). Attach/detach
    *  ownership of the underlying session is entirely the broker's concern. */
   function cleanupGuest(wcId: number): void {
-    const teardown = guestWired.get(wcId)
-    guestWired.delete(wcId)
-    teardown?.disposeAll()
+    const teardown = guestWired.get(wcId);
+    guestWired.delete(wcId);
+    teardown?.disposeAll();
   }
 
   /**
@@ -1257,7 +1441,7 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * loop's real termination check (`wc.isDestroyed()` / `disposed`) has a
    * chance to observe the close having finished before the next attempt.
    */
-  const RENDER_GUEST_REATTACH_DELAY_MS = 300
+  const RENDER_GUEST_REATTACH_DELAY_MS = 300;
 
   /**
    * Schedule one more `wireRenderGuest(wc)` attempt after
@@ -1280,18 +1464,18 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * (and forking) a newer retry's bookkeeping.
    */
   function scheduleRenderGuestRetry(wc: WebContents): void {
-    if (wc.isDestroyed()) return
-    if (guestRetryGeneration.has(wc.id)) return
-    const generation = ++nextRenderGuestRetryGeneration
-    guestRetryGeneration.set(wc.id, generation)
+    if (wc.isDestroyed()) return;
+    if (guestRetryGeneration.has(wc.id)) return;
+    const generation = ++nextRenderGuestRetryGeneration;
+    guestRetryGeneration.set(wc.id, generation);
     const timer = setTimeout(() => {
-      if (guestRetryGeneration.get(wc.id) !== generation) return
-      guestRetryGeneration.delete(wc.id)
-      if (!disposed && !wc.isDestroyed()) wireRenderGuest(wc)
-    }, RENDER_GUEST_REATTACH_DELAY_MS)
+      if (guestRetryGeneration.get(wc.id) !== generation) return;
+      guestRetryGeneration.delete(wc.id);
+      if (!disposed && !wc.isDestroyed()) wireRenderGuest(wc);
+    }, RENDER_GUEST_REATTACH_DELAY_MS);
     // Best-effort: if the whole forwarder tears down before this fires, there
     // is nothing to clear it from — the disposed check above is the guard.
-    timer.unref?.()
+    timer.unref?.();
   }
 
   /**
@@ -1315,43 +1499,46 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * a stale pending window.
    */
   function wireRenderGuest(wc: WebContents): void {
-    if (guestWired.has(wc.id)) return
-    const lease = broker.acquire(wc)
+    if (guestWired.has(wc.id)) return;
+    const lease = broker.acquire(wc);
     if (!lease) {
       // Not terminal — the exclusive holder may release the session later.
       // Retry on the same cadence as the onDetach self-heal below, or this
       // guest's capture would die for its whole remaining lifetime the very
       // first time acquire() lost the race.
-      scheduleRenderGuestRetry(wc)
-      return
+      scheduleRenderGuestRetry(wc);
+      return;
     }
 
     // This wc is now genuinely wired — drop any stale pending-retry
     // generation (e.g. from an earlier detach cycle superseded by THIS
     // successful acquire) so a LATER detach can freely mint its own fresh
     // generation instead of being silently swallowed by a leftover entry.
-    guestRetryGeneration.delete(wc.id)
-    const teardown = new SyncDisposableRegistry()
-    guestWired.set(wc.id, teardown)
-    wireNetworkCapture(wc, 'render', teardown, `g${wc.id}-${Date.now()}`)
+    guestRetryGeneration.delete(wc.id);
+    const teardown = new SyncDisposableRegistry();
+    guestWired.set(wc.id, teardown);
+    wireNetworkCapture(wc, "render", teardown, `g${wc.id}-${Date.now()}`);
 
     const detachSub = lease.onDetach(() => {
-      cleanupGuest(wc.id)
-      scheduleRenderGuestRetry(wc)
-    })
+      cleanupGuest(wc.id);
+      scheduleRenderGuestRetry(wc);
+    });
     teardown.add(() => {
-      detachSub.dispose()
-      lease.dispose()
-    })
+      detachSub.dispose();
+      lease.dispose();
+    });
 
-    void lease.send('Network.enable').catch((err: unknown) => {
-      console.warn('[network-forward] guest Network.enable failed:', err instanceof Error ? err.message : err)
-    })
+    void lease.send("Network.enable").catch((err: unknown) => {
+      console.warn(
+        "[network-forward] guest Network.enable failed:",
+        err instanceof Error ? err.message : err,
+      );
+    });
   }
 
   function attachRenderGuest(wc: WebContents): void {
-    if (!wc || wc.isDestroyed()) return
-    wireRenderGuest(wc)
+    if (!wc || wc.isDestroyed()) return;
+    wireRenderGuest(wc);
   }
 
   /**
@@ -1363,39 +1550,50 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
    * simulator-storage's capture too.
    */
   function attachSimulator(wc: WebContents): void {
-    if (!wc || wc.isDestroyed()) return
-    if (simWc === wc && !wc.isDestroyed()) return
-    detachSimulator()
+    if (!wc || wc.isDestroyed()) return;
+    if (simWc === wc && !wc.isDestroyed()) return;
+    detachSimulator();
 
-    const lease = broker.acquire(wc)
+    const lease = broker.acquire(wc);
     if (!lease) {
-      console.warn('[network-forward] debugger session unavailable; simulator network not captured')
-      return
+      console.warn(
+        "[network-forward] debugger session unavailable; simulator network not captured",
+      );
+      return;
     }
 
-    simWc = wc
-    simLease = lease
-    const attach = new SyncDisposableRegistry()
-    attachDisposables = attach
+    simWc = wc;
+    simLease = lease;
+    const attach = new SyncDisposableRegistry();
+    attachDisposables = attach;
 
-    wireNetworkCapture(wc, 'service', attach, String(Date.now()))
+    wireNetworkCapture(wc, "service", attach, String(Date.now()));
 
     const detachSub = lease.onDetach(() => {
-      if (simWc !== wc) return
-      simWc = null
-      simLease = null
+      if (simWc !== wc) return;
+      simWc = null;
+      simLease = null;
       // Tear down OUR OWN wiring (wireNetworkCapture's 'message' listener) —
       // the broker already removed its own; without this, our listener would
       // keep receiving events from a session we no longer track as "current".
-      const ad = attachDisposables
-      attachDisposables = null
-      if (ad) { try { ad.disposeAll() } catch { /* best-effort teardown */ } }
-    })
-    attach.add(() => detachSub.dispose())
+      const ad = attachDisposables;
+      attachDisposables = null;
+      if (ad) {
+        try {
+          ad.disposeAll();
+        } catch {
+          /* best-effort teardown */
+        }
+      }
+    });
+    attach.add(() => detachSub.dispose());
 
-    void lease.send('Network.enable').catch((err: unknown) => {
-      console.warn('[network-forward] Network.enable failed:', err instanceof Error ? err.message : err)
-    })
+    void lease.send("Network.enable").catch((err: unknown) => {
+      console.warn(
+        "[network-forward] Network.enable failed:",
+        err instanceof Error ? err.message : err,
+      );
+    });
   }
 
   /**
@@ -1411,67 +1609,81 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // 'idle' but a host is resolvable (set via the bridge, applyDevtoolsHost not
     // run): the native path is in play, so promote to 'probing' instead of
     // console — otherwise this completion would later double-render natively.
-    if (sink === 'idle' && resolveDevtoolsWc()) beginProbing()
+    if (sink === "idle" && resolveDevtoolsWc()) beginProbing();
     switch (sink) {
-      case 'ready':
-        return
-      case 'probing':
-        if (probeConsoleBuffer.length >= MAX_PENDING) probeConsoleBuffer.shift()
-        probeConsoleBuffer.push(record)
-        return
-      case 'degraded':
-      case 'idle':
+      case "ready":
+        return;
+      case "probing":
+        if (probeConsoleBuffer.length >= MAX_PENDING)
+          probeConsoleBuffer.shift();
+        probeConsoleBuffer.push(record);
+        return;
+      case "degraded":
+      case "idle":
       default:
-        forwardToConsole(record)
+        forwardToConsole(record);
     }
   }
 
   /** Apply a new (or cleared) DevTools host: reset sink state and (re)probe. */
   function applyDevtoolsHost(wc: WebContents | null): void {
-    devtoolsHostDisposable?.dispose()
-    devtoolsHostDisposable = null
-    devtoolsWc = wc && !wc.isDestroyed() ? wc : null
+    devtoolsHostDisposable?.dispose();
+    devtoolsHostDisposable = null;
+    devtoolsWc = wc && !wc.isDestroyed() ? wc : null;
 
     // Reset the native-sink state machine for the new host.
-    if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
-    if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
-    probeDeadline = null
+    if (readyTimeoutTimer) {
+      clearTimeout(readyTimeoutTimer);
+      readyTimeoutTimer = null;
+    }
+    if (readyRetryTimer) {
+      clearTimeout(readyRetryTimer);
+      readyRetryTimer = null;
+    }
+    probeDeadline = null;
     // Records buffered while probing the OLD host are stale — drop, don't flush
     // (their native copies were already queued; on a host swap we restart clean).
-    probeConsoleBuffer = []
+    probeConsoleBuffer = [];
 
     if (!devtoolsWc) {
       // No host → 'idle': completions go straight to console; native queue is
       // moot, drop it so it can't double-render if a host later appears.
-      sink = 'idle'
-      dispatchQueue = []
-      return
+      sink = "idle";
+      dispatchQueue = [];
+      return;
     }
 
     // Host present: watch it so its destruction equals setDevtoolsHost(null)
     // WITHOUT touching view-manager (host-destroyed cleanup lives here). Begin
     // probing and flush anything already queued.
-    const host = devtoolsWc
-    const onHostDestroyed = (): void => { applyDevtoolsHost(null) }
+    const host = devtoolsWc;
+    const onHostDestroyed = (): void => {
+      applyDevtoolsHost(null);
+    };
     // Route host-destroyed teardown through the connection registry when present
     // (the Connection fires onHostDestroyed on wc destroy / reset, and the
     // returned Disposable releases the ownership early on host swap/clear);
     // otherwise keep the bespoke `once('destroyed')` watcher. The
     // `typeof host.once === 'function'` guard stays on the fallback so minimal
     // test fakes / odd hosts don't throw.
-    const reg = bridge.connections
+    const reg = bridge.connections;
     // `acquire(host)` internally arms `host.once('destroyed')`, so it must be
     // gated by the SAME `typeof host.once === 'function'` guard the fallback
     // uses — otherwise a minimal/fake DevTools host (no emitter) throws on the
     // connection path where the fallback would safely no-op.
-    if (reg && typeof host.once === 'function') {
-      const owned = reg.acquire(host).own(onHostDestroyed)
-      devtoolsHostDisposable = toDisposable(() => owned.dispose())
+    if (reg && typeof host.once === "function") {
+      const owned = reg.acquire(host).own(onHostDestroyed);
+      devtoolsHostDisposable = toDisposable(() => owned.dispose());
     } else {
-      if (typeof host.once === 'function') host.once('destroyed', onHostDestroyed)
+      if (typeof host.once === "function")
+        host.once("destroyed", onHostDestroyed);
       devtoolsHostDisposable = toDisposable(() => {
-        try { host.removeListener?.('destroyed', onHostDestroyed) } catch { /* gone */ }
-      })
+        try {
+          host.removeListener?.("destroyed", onHostDestroyed);
+        } catch {
+          /* gone */
+        }
+      });
     }
 
     // A host swap while still 'probing' the OLD host must not inherit its
@@ -1479,33 +1691,41 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // (re-)arming readyTimeoutTimer/probeDeadline for the NEW host, leaving it
     // probing forever with no timeout. Force through 'idle' so beginProbing()
     // always arms a fresh window for whichever host is now current.
-    sink = 'idle'
-    beginProbing()
-    if (dispatchQueue.length > 0) scheduleFlush()
+    sink = "idle";
+    beginProbing();
+    if (dispatchQueue.length > 0) scheduleFlush();
   }
 
-  registry.add(() => { disposed = true })
   registry.add(() => {
-    devtoolsHostDisposable?.dispose()
-    devtoolsHostDisposable = null
-    if (readyTimeoutTimer) { clearTimeout(readyTimeoutTimer); readyTimeoutTimer = null }
-    if (readyRetryTimer) { clearTimeout(readyRetryTimer); readyRetryTimer = null }
-  })
+    disposed = true;
+  });
   registry.add(() => {
-    globalDevtoolsHostDisposable?.dispose()
-    globalDevtoolsHostDisposable = null
-    globalBodyGateStop?.()
-    globalBodyGateStop = null
-    globalDevtoolsWc = null
+    devtoolsHostDisposable?.dispose();
+    devtoolsHostDisposable = null;
+    if (readyTimeoutTimer) {
+      clearTimeout(readyTimeoutTimer);
+      readyTimeoutTimer = null;
+    }
+    if (readyRetryTimer) {
+      clearTimeout(readyRetryTimer);
+      readyRetryTimer = null;
+    }
+  });
+  registry.add(() => {
+    globalDevtoolsHostDisposable?.dispose();
+    globalDevtoolsHostDisposable = null;
+    globalBodyGateStop?.();
+    globalBodyGateStop = null;
+    globalDevtoolsWc = null;
     // A live settle-poll timer at dispose time is a real-timer leak (this
     // suite's flaky-test history: undisposed timers adopted by later tests'
     // fake clocks).
-    clearGlobalPending()
-  })
+    clearGlobalPending();
+  });
   registry.add(() => {
-    bodyCache.clear()
-    postDataCache.clear()
-  })
+    bodyCache.clear();
+    postDataCache.clear();
+  });
   // Every debugger session (simulator + all render guests) must already be
   // detached and every 'message' listener already removed before `dispose()`
   // returns control to an un-awaited caller (every real call site is
@@ -1513,15 +1733,15 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // tick as dispose() must never be forwarded. `registry` is a
   // SyncDisposableRegistry, so every entry below runs to completion before
   // disposeAll() returns — no ordering dependency between them.
-  registry.add(() => detachSimulator())
+  registry.add(() => detachSimulator());
   registry.add(() => {
-    for (const wcId of [...guestWired.keys()]) cleanupGuest(wcId)
-  })
+    for (const wcId of [...guestWired.keys()]) cleanupGuest(wcId);
+  });
   // Only detach sessions we self-attached if we own the broker's lifecycle —
   // a shared/injected broker keeps serving other consumers past our dispose().
   registry.add(() => {
-    if (ownsBroker) broker.dispose()
-  })
+    if (ownsBroker) broker.dispose();
+  });
 
   // ── Main-process WebSocket trace → synthesized Network.webSocket* CDP ─────
   // One synthesizer for the forwarder's lifetime: its virtual-id epoch keeps
@@ -1529,18 +1749,66 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
   // per-socket verdict cache mirrors resolveUserFacing's decide-once rule.
   const wsSynthesizer = new WebSocketTraceSynthesizer({
     epoch: String(Date.now()),
-    internalOrigins: () => [bridge.getResourceServerBaseUrl?.(), bridge.getSimulatorServerBaseUrl?.()],
-  })
+    internalOrigins: () => [
+      bridge.getResourceServerBaseUrl?.(),
+      bridge.getSimulatorServerBaseUrl?.(),
+    ],
+  });
 
-  function reportWebSocketTrace(sessionId: string, event: NativeWebSocketTrace): void {
-    if (disposed) return
-    const message = wsSynthesizer.synthesize(sessionId, event)
-    if (!message) return
+  function reportWebSocketTrace(
+    sessionId: string,
+    event: NativeWebSocketTrace,
+  ): void {
+    if (disposed) return;
+    const message = wsSynthesizer.synthesize(sessionId, event);
+    if (!message) return;
     // Global mirror first (full, unfiltered), then the user-facing native
     // sink gated on the created-time verdict — the same routing
     // wireNetworkCapture's onMessage uses for simulator traffic.
-    dispatchToGlobal(message.method, message.params)
-    if (message.userFacing) enqueueNative(message.method, message.params)
+    dispatchToGlobal(message.method, message.params);
+    if (message.userFacing) enqueueNative(message.method, message.params);
+  }
+
+  // ── Main-process HTTP request trace → synthesized Network.request*/
+  // Network.loading* CDP ──────────────────────────────────────────────────
+  // Same shape as the WebSocket trace bridge above, for the same reason:
+  // wx.request now runs on Node http/https in this process (that's what
+  // stops Chromium's Fetch/CORS algorithm from attaching a spurious OPTIONS
+  // preflight to it), so no webContents.debugger can observe it either.
+  const httpSynthesizer = new RequestTraceSynthesizer({
+    epoch: String(Date.now()),
+    internalOrigins: () => [
+      bridge.getResourceServerBaseUrl?.(),
+      bridge.getSimulatorServerBaseUrl?.(),
+    ],
+  });
+
+  function reportNativeRequestTrace(
+    sessionId: string,
+    event: NativeRequestTrace,
+  ): void {
+    if (disposed) return;
+    const message = httpSynthesizer.synthesize(sessionId, event);
+    if (!message) return;
+    const params = message.params as { requestId: string };
+    if (event.type === "redirect") {
+      bodyCache.delete(params.requestId);
+      postDataCache.delete(params.requestId);
+    }
+    // The response is already fully buffered in-process at `finished` — prime
+    // the SAME cache a simulator-CDP prefetch would populate, so the
+    // front-end's Get Response Body click resolves without a debugger
+    // round-trip that (for this requestId) has nowhere to go.
+    if (message.body) {
+      bodyCache.prime(params.requestId, () => Promise.resolve(message.body!));
+    }
+    if (message.postData !== undefined) {
+      postDataCache.prime(params.requestId, () =>
+        Promise.resolve({ postData: message.postData! }),
+      );
+    }
+    dispatchToGlobal(message.method, message.params);
+    if (message.userFacing) enqueueNative(message.method, message.params);
   }
 
   return {
@@ -1553,10 +1821,11 @@ export function createNetworkForwarder(bridge: NetworkForwarderBridge): NetworkF
     // natively — surface it via the console fallback line.
     report: (record) => forwardToConsole(record),
     reportWebSocketTrace,
+    reportNativeRequestTrace,
     bodies: {
       getResponseBody: (requestId) => bodyCache.lookup(requestId),
       getRequestPostData: (requestId) => postDataCache.lookup(requestId),
     },
     dispose: () => registry.disposeAll(),
-  }
+  };
 }

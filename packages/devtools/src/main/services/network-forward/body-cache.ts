@@ -164,6 +164,11 @@ export class PrefetchCache<V> {
     return Promise.resolve(v)
   }
 
+  /** Retire a previous redirect hop without disturbing unrelated cached requests. */
+  delete(id: string): void {
+    this.map.delete(id)
+  }
+
   clear(): void {
     this.map.clear()
   }
