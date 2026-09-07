@@ -80,17 +80,20 @@ function hooksFor(log: LogEntry[], page: string): string[] {
   return log.filter((e) => e.page === page).map((e) => e.hook)
 }
 
+// `orientation` is a required field a real device payload always carries (the
+// devices table resolves it, and the dims below are already swapped for it) —
+// `setDevice` reads it directly rather than re-deriving it from the dims.
 function device(width: number, height: number, statusBarHeight: number): NativeDeviceInfo {
   return {
     brand: 'Apple',
     model: 'iPhone 14 Pro',
     system: 'iOS 16.3',
     platform: 'ios',
+    orientation: width > height ? 'landscape' : 'portrait',
     pixelRatio: 3,
     screenWidth: width,
     screenHeight: height,
     statusBarHeight,
-    notchType: 'dynamic-island',
     safeAreaInsets: { top: statusBarHeight, right: 0, bottom: 34, left: 0 },
   }
 }
