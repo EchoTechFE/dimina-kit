@@ -15,7 +15,14 @@
 /** Matches the Network body cache's per-entry character budget. */
 export const NATIVE_REQUEST_TRACE_MAX_CHARS = 16 * 1024 * 1024
 
-export interface NativeRequestRedirectResponse {
+export interface NativeRequestHeaders {
+  /** Final serialized fields, including Node defaults; repeated values use CDP's newline separator. */
+  requestHeaders: Record<string, string>
+  /** Verbatim HTTP/1.1 request line and header block, including its trailing CRLF. */
+  requestHeadersText: string
+}
+
+export interface NativeRequestRedirectResponse extends Partial<NativeRequestHeaders> {
   url: string
   status: number
   statusText: string
@@ -50,6 +57,8 @@ export type NativeRequestTrace =
       status: number
       statusText: string
       headers: Record<string, string>
+      requestHeaders?: Record<string, string>
+      requestHeadersText?: string
       time: number
     }
   | {
@@ -81,7 +90,7 @@ export type NativeRequestTracer = (ownerId: string, event: NativeRequestTrace) =
 export interface RequestTracer {
   sent(url: string, method: string, headers: Record<string, string>, postData?: string): void
   redirect(url: string, method: string, headers: Record<string, string>, postData: string | undefined, response: NativeRequestRedirectResponse): void
-  response(status: number, statusText: string, headers: Record<string, string>): void
+  response(status: number, statusText: string, headers: Record<string, string>, requestHeaders?: NativeRequestHeaders): void
   finished(body: string | (() => string), bodyBase64Encoded: boolean, encodedDataLength: number, decodedDataLength?: number): void
   failed(errorText: string): void
 }
@@ -118,16 +127,18 @@ class RequestTracerImpl implements RequestTracer {
     this.emit(event)
   }
 
-  response(status: number, statusText: string, headers: Record<string, string>): void {
+  response(status: number, statusText: string, headers: Record<string, string>, requestHeaders?: NativeRequestHeaders): void {
     if (!this.getTracer()) return
-    this.emit({ type: 'response', requestId: this.requestId, status, statusText, headers: { ...headers }, time: Date.now() })
+    this.emit({ type: 'response', requestId: this.requestId, status, statusText, headers: { ...headers },
+      ...(requestHeaders ? { ...requestHeaders, requestHeaders: { ...requestHeaders.requestHeaders } } : {}), time: Date.now() })
   }
 
   redirect(url: string, method: string, headers: Record<string, string>, postData: string | undefined, response: NativeRequestRedirectResponse): void {
     if (!this.getTracer()) return
     this.emit({ type: 'redirect', requestId: this.requestId, url, method, headers: { ...headers },
       ...boundedPostData(postData),
-      redirectResponse: { ...response, headers: { ...response.headers } }, time: Date.now() })
+      redirectResponse: { ...response, headers: { ...response.headers },
+        ...(response.requestHeaders ? { requestHeaders: { ...response.requestHeaders } } : {}) }, time: Date.now() })
   }
 
   finished(body: string | (() => string), bodyBase64Encoded: boolean, encodedDataLength: number, decodedDataLength = encodedDataLength): void {
