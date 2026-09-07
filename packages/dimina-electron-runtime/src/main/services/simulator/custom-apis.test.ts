@@ -26,4 +26,11 @@ describe('SimulatorApiRegistry.register name validation', () => {
     expect(registry.has('joinIsland')).toBe(true)
     await expect(registry.invoke('joinIsland', { a: 1 })).resolves.toEqual({ echo: { a: 1 } })
   })
+
+  it('passes invocation context separately from untrusted miniapp parameters', async () => {
+    const registry = createSimulatorApiRegistry()
+    registry.register('login', async (_params, context) => context?.projectPath)
+    await expect(registry.invoke('login', { projectPath: '/forged' }, { projectPath: '/actual' }))
+      .resolves.toBe('/actual')
+  })
 })

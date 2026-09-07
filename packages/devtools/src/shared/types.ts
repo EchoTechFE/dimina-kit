@@ -210,6 +210,8 @@ export interface WorkbenchHostInstance {
    * every project window, including windows opened afterwards, and no window
    * closing revokes it. It lives until the app is disposed or the returned
    * Disposable revokes it — which removes only the registration it created.
+   * The handler's optional second argument identifies the calling window's
+   * project; it is supplied by the main process, separately from miniapp params.
    */
   registerSimulatorApi(
     name: string,

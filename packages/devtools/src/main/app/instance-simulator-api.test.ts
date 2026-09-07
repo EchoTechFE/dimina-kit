@@ -284,7 +284,7 @@ describe('Requirement B: instance.registerSimulatorApi', () => {
     expect(reg.list()).toContain('host.api')
 
     const result = await reg.invoke('host.api', { v: 1 })
-    expect(handler).toHaveBeenCalledWith({ v: 1 })
+    expect(handler).toHaveBeenCalledWith({ v: 1 }, { projectPath: null })
     expect(result).toEqual({ echoed: { v: 1 } })
 
     await instance.dispose()

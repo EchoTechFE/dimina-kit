@@ -1,9 +1,8 @@
 /**
  * SIMULATOR CUSTOM APIs ARE APP-LEVEL, NOT PER-WINDOW.
  *
- * `ctx.simulatorApis` is the ONE registry owned by `AppServices` — every
- * window's context points at the same object (workbench-context.ts takes
- * `appServices.simulatorApis`). So a name registered once is visible to every
+ * `AppServices` owns the shared registrations. Each window's invocation
+ * facade adds its own project context. A name registered once is visible to every
  * window, including windows opened later: the service host reads the
  * registered names off the registry when it spawns.
  *
@@ -23,6 +22,24 @@ import {
 const state = registerRuntimeTestLifecycle()
 
 describe('simulator custom API lifetime across project windows', () => {
+  it('dispatches each window with its own project even when another window is focused', async () => {
+    const instance = await state.createDevtoolsRuntime({})
+    instance.registerSimulatorApi('projectIdentity', async (_params, context) => context?.projectPath)
+    const first = await openProjectWindow(instance, '/tmp/simApiIdentityA')
+    const second = await openProjectWindow(instance, '/tmp/simApiIdentityB')
+    await first.context.workspace.openProject('/tmp/simApiIdentityA')
+    await second.context.workspace.openProject('/tmp/simApiIdentityB')
+
+    expect(instance.context.workspace.hasActiveSession()).toBe(false)
+    second.window.emit('focus')
+    await expect(Promise.all([
+      first.context.simulatorApis.invoke('projectIdentity', { projectPath: '/forged' }),
+      second.context.simulatorApis.invoke('projectIdentity', {}),
+    ])).resolves.toEqual(['/tmp/simApiIdentityA', '/tmp/simApiIdentityB'])
+
+    await instance.dispose()
+  })
+
   it('keeps host APIs working in the windows that stay open when one window closes', async () => {
     const instance = await state.createDevtoolsRuntime({})
     const first = await openProjectWindow(instance, '/tmp/simApiA1')
