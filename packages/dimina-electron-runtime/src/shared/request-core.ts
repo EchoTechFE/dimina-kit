@@ -35,6 +35,7 @@
  * Not provided: `cookies` on the success result — fetch() cannot read
  * Set-Cookie response headers, so surfacing a fabricated list would lie.
  */
+import { buildHeaders, encodeBody } from "./request-encoding.js";
 
 export interface RequestSuccessResult {
   data: unknown;
@@ -97,23 +98,6 @@ export function resolveTimeoutBudgetMs(timeout: unknown): number {
     : DEFAULT_REQUEST_TIMEOUT_MS;
 }
 
-// `willSendBody` gates the `application/json` default: a bodyless GET/HEAD
-// must not gain a content-type it never asked for, or it stops being a
-// CORS-simple request in the simulator's Chromium renderer (see the
-// module-level contract note above).
-function buildHeaders(
-  header: Record<string, string> | undefined,
-  willSendBody: boolean,
-): Headers {
-  const headers = new Headers();
-  for (const [key, value] of Object.entries(header ?? {})) {
-    if (value != null) headers.set(key, String(value));
-  }
-  if (willSendBody && !headers.has("content-type"))
-    headers.set("content-type", "application/json");
-  return headers;
-}
-
 function appendQueryParams(url: string, data: Record<string, unknown>): string {
   // Resolve against the current document when available so page-relative URLs
   // keep working in the render-window shim.
@@ -123,20 +107,6 @@ function appendQueryParams(url: string, data: Record<string, unknown>): string {
     resolved.searchParams.append(key, String(value));
   }
   return resolved.toString();
-}
-
-function encodeBody(data: unknown, contentType: string): BodyInit {
-  if (typeof data === "string") return data;
-  if (contentType.includes("application/x-www-form-urlencoded")) {
-    const form = new URLSearchParams();
-    for (const [key, value] of Object.entries(
-      data as Record<string, unknown>,
-    )) {
-      form.append(key, String(value));
-    }
-    return form.toString();
-  }
-  return JSON.stringify(data);
 }
 
 async function decodeResponseData(

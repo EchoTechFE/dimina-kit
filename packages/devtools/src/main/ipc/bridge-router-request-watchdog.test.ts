@@ -1,23 +1,8 @@
 /**
- * The one-shot "no handler" watchdog that guards a forwarded API call
- * (`forwardApiCallToSimulator` in bridge-router.ts) currently arms a flat
- * `API_CALL_TIMEOUT_MS` (5000ms) for every call regardless of name or params.
- *
- * For `request` (and any other network-budget API: downloadFile, uploadFile)
- * this races the wx.request contract, whose real timeout budget is the
- * caller's `params.timeout` (default 60000ms). A slow-but-legitimate HTTP
- * round trip past 5s gets its pending entry deleted by the watchdog, and the
- * later-arriving `API_RESPONSE` (200 or 401 alike) is silently dropped
- * because `handleApiResponse` no-ops on a requestId it no longer has pending.
- *
- * Contract pinned: the watchdog window must scale with `apiCallWatchdogMs`
- * (shared/simulator-api-metadata.ts) — network-budget APIs get
- * `timeout-or-60000 + 5000` grace, everything else keeps the flat 5000ms.
- *
- * Seam: identical harness to bridge-router-api-fail-passthrough.test.ts
- * (exhaustive electron mock, real `installBridgeRouter` driven through
- * SPAWN → SERVICE_INVOKE(invokeAPI) → API_RESPONSE), plus fake timers per
- * bridge-router-keep-api.test.ts to control the watchdog clock precisely.
+ * Forwarded network APIs get their timeout budget plus watchdog grace;
+ * other forwarded calls get 5s. An ack disarms only the watchdog, keeping
+ * the call pending. Native wx.request owns its deadline and bypasses
+ * simulator forwarding entirely.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -463,19 +448,7 @@ describe('bridge-router — `request` never uses the simulator-forwarding watchd
   })
 })
 
-// ─── ack: a simulator-side "still working on it" signal must extend, not resolve, the pending call ──
-//
-// `handleApiResponse` currently treats ANY `API_RESPONSE` with a matching
-// `requestId` as the terminal verdict: `payload.ok` truthy -> success,
-// falsy -> fail — there is no third "acknowledged, not done yet" outcome.
-// `ApiResponsePayload` (bridge-channels.ts) has no `ack` field either. This
-// is a genuinely new (not yet implemented) wire contract, not a bug in an
-// existing one; the wire shape below (`{ requestId, ack: true }`, no `ok`)
-// is a proposal, not a pinned interface — `emitOn`'s payload parameter is
-// `unknown`, so the literal object compiles without widening
-// `ApiResponsePayload` itself. The assertions pin the OBSERVABLE behavior an
-// implementation must produce: an ack must not resolve the call, and it must
-// not prevent the real, later verdict from being delivered.
+// An ack confirms the handler is running; only its later verdict settles the call.
 describe('bridge-router — a simulator-side ack must not resolve the call, and must not block the later real verdict', () => {
   it('an ack-shaped API_RESPONSE does not fire fail/complete, does not time out, and the later real success is still delivered', async () => {
     const { simulatorWc, serviceWc, requestId } = await setup('showToast', {
