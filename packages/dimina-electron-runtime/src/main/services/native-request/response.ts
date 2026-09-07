@@ -1,10 +1,27 @@
 import { promisify } from 'node:util'
-import { brotliDecompress, gunzip, inflate } from 'node:zlib'
+import { brotliDecompress, gunzip, inflate, inflateRaw } from 'node:zlib'
+
+const inflateBody = promisify(inflate)
+const inflateRawBody = promisify(inflateRaw)
+
+async function decodeDeflate(buffer: Buffer): Promise<Buffer> {
+  try {
+    return await inflateBody(buffer)
+  } catch (error) {
+    const cmf = buffer[0] ?? 0
+    const flg = buffer[1] ?? 0
+    const zlibWrapped = buffer.length >= 2 && (cmf & 15) === 8 && (cmf >> 4) <= 7 && ((cmf << 8) | flg) % 31 === 0
+    // Browsers also accept raw DEFLATE under this encoding. A recognized
+    // zlib stream must retain checksum/truncation errors instead of retrying.
+    if (zlibWrapped || !(error instanceof Error) || !('code' in error) || error.code !== 'Z_DATA_ERROR') throw error
+    return inflateRawBody(buffer)
+  }
+}
 
 const decompressors = {
   gzip: promisify(gunzip),
   'x-gzip': promisify(gunzip),
-  deflate: promisify(inflate),
+  deflate: decodeDeflate,
   br: promisify(brotliDecompress),
 }
 
@@ -22,7 +39,8 @@ export function decodeResponseData(buffer: Buffer, dataType = 'json', responseTy
   if (responseType === 'arraybuffer' || dataType === 'arraybuffer') {
     return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
   }
-  const text = buffer.toString('utf-8')
+  // Match Fetch's UTF-8 decoding, including removal of a leading BOM.
+  const text = new TextDecoder('utf-8').decode(buffer)
   if (dataType !== 'json') return text
   try { return JSON.parse(text) } catch { return text }
 }

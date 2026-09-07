@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { brotliCompressSync, deflateSync, gzipSync } from 'node:zlib'
+import { brotliCompressSync, deflateRawSync, deflateSync, gzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it } from 'vitest'
 import { createNativeRequestService } from './index.js'
 import type { NativeRequestTrace } from './trace.js'
@@ -39,6 +39,31 @@ describe('native HTTP migration compatibility', () => {
     expect(await service.request('owner', 'r', { url: '/echo' })).toMatchObject({ errMsg: expect.stringContaining('request:fail') })
   })
 
+  it.each(['json', 'text', 'arraybuffer'])('decodes a UTF-8 BOM response as %s without changing captured bytes', async (responseKind) => {
+    const wireBody = Buffer.from('\uFEFF{"ok":true}')
+    const url = await serve((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      res.end(wireBody)
+    })
+    const { service, events } = tracedService()
+    const result = await service.request('owner', 'r', {
+      url,
+      ...(responseKind === 'arraybuffer' ? { responseType: 'arraybuffer' } : { dataType: responseKind }),
+    })
+    expect(result).toMatchObject({ statusCode: 200, errMsg: 'request:ok' })
+    if (!('data' in result)) throw new Error('missing response')
+    if (responseKind === 'arraybuffer') {
+      expect(result.data).toBeInstanceOf(ArrayBuffer)
+      expect(Buffer.from(result.data as ArrayBuffer)).toEqual(wireBody)
+    } else {
+      expect(result.data).toEqual(responseKind === 'json' ? { ok: true } : '{"ok":true}')
+    }
+    const terminal = events.at(-1)
+    expect(terminal).toMatchObject({ type: 'finished', encodedDataLength: wireBody.length })
+    if (terminal?.type !== 'finished') throw new Error('missing completion')
+    expect(Buffer.from(terminal.body!, 'base64')).toEqual(wireBody)
+  })
+
   it.each([['gzip', gzipSync], ['deflate', deflateSync], ['br', brotliCompressSync]] as const)(
     'decodes %s before JSON parsing and Network body capture', async (encoding, compress) => {
       const encoded = compress('{"ok":true}')
@@ -60,6 +85,33 @@ describe('native HTTP migration compatibility', () => {
     const { service, events } = tracedService()
     expect(await service.request('owner', 'r', { url })).toMatchObject({ errMsg: expect.stringContaining('request:fail') })
     expect(events.map((event) => event.type)).toEqual(['sent', 'response', 'failed'])
+  })
+
+  it('accepts a raw DEFLATE response while preserving its wire size in Network', async () => {
+    const encoded = deflateRawSync('{"ok":true}')
+    const url = await serve((_req, res) => {
+      res.writeHead(200, { 'content-encoding': 'deflate' })
+      res.end(encoded)
+    })
+    const { service, events } = tracedService()
+    expect(await service.request('owner', 'r', { url })).toMatchObject({ statusCode: 200, data: { ok: true } })
+    const terminal = events.at(-1)
+    expect(terminal).toMatchObject({ type: 'finished', encodedDataLength: encoded.length })
+    if (terminal?.type !== 'finished') throw new Error('missing completion')
+    expect(Buffer.from(terminal.body!, 'base64').toString()).toBe('{"ok":true}')
+  })
+
+  it.each(['checksum', 'truncated'])('rejects a standard DEFLATE response with a %s error', async (corruption) => {
+    let encoded = deflateSync('{"ok":true}')
+    if (corruption === 'checksum') encoded[encoded.length - 1]! ^= 1
+    else encoded = encoded.subarray(0, encoded.length - 1)
+    const url = await serve((_req, res) => {
+      res.writeHead(200, { 'content-encoding': 'deflate' })
+      res.end(encoded)
+    })
+    const { service, events } = tracedService()
+    expect(await service.request('owner', 'r', { url })).toMatchObject({ errMsg: expect.stringContaining('request:fail') })
+    expect(events.map(event => event.type)).toEqual(['sent', 'response', 'failed'])
   })
 
   it.each([301, 302, 303, 307, 308])('follows HTTP %s with the appropriate method and body', async (status) => {

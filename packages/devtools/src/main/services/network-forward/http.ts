@@ -145,6 +145,13 @@ export class RequestTraceSynthesizer {
               status: event.status,
               statusText: event.statusText,
               headers: event.headers,
+              // Chromium uses these together to replace provisional headers
+              // and expose the verbatim source. ExtraInfo has no raw request
+              // text and would override this response snapshot in the frontend.
+              ...(event.requestHeaders && event.requestHeadersText ? {
+                requestHeaders: event.requestHeaders,
+                requestHeadersText: event.requestHeadersText,
+              } : {}),
               mimeType: mimeTypeOf(event.headers),
               connectionReused: false,
               connectionId: 0,

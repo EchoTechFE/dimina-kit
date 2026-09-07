@@ -14,6 +14,7 @@ import {
 } from "./normalize.js";
 import type { RequestTracer } from "./trace.js";
 import { decodeContent, decodeResponseData } from "./response.js";
+import { captureRequestHeaders } from "./request-headers.js";
 
 export interface NativeRequestTransport {
   request(
@@ -128,6 +129,7 @@ export function createNativeRequestTransport(): NativeRequestTransport {
                 key, Array.isArray(value) ? value.join(", ") : value ?? "",
               ]));
               const status = res.statusCode ?? 0;
+              const requestHeaders = tracer ? captureRequestHeaders(req) : undefined;
               if ([301, 302, 303, 307, 308].includes(status) && res.headers.location) {
                 try {
                   if (redirects++ >= 20) throw new Error("too many redirects");
@@ -135,7 +137,7 @@ export function createNativeRequestTransport(): NativeRequestTransport {
                   if (!["http:", "https:"].includes(nextUrl.protocol) || nextUrl.username || nextUrl.password) {
                     throw new Error("unsupported redirect URL");
                   }
-                  const redirectResponse = { url, status, statusText: res.statusMessage ?? "", headers: responseHeaders };
+                  const redirectResponse = { url, status, statusText: res.statusMessage ?? "", headers: responseHeaders, ...requestHeaders };
                   if (nextUrl.origin !== parsed.origin) {
                     for (const key of ["authorization", "proxy-authorization", "cookie", "host"]) delete nodeHeaders[key];
                   }
@@ -156,7 +158,7 @@ export function createNativeRequestTransport(): NativeRequestTransport {
                 }
                 return;
               }
-              tracer?.response(status, res.statusMessage ?? "", responseHeaders);
+              tracer?.response(status, res.statusMessage ?? "", responseHeaders, requestHeaders);
               if (settled) return;
               const chunks: Buffer[] = [];
               res.on("data", (chunk: Buffer) => chunks.push(chunk));
