@@ -1,188 +1,102 @@
-# iOS Notch / Dynamic Island + CSS `env(safe-area-inset-*)` (native-host simulator)
+# 刘海 / 灵动岛、`env(safe-area-inset-*)` 与 JS `safeArea`（native-host simulator）
 
-The native-host simulator reproduces iOS devices with a notch / Dynamic Island,
-so that:
+simulator 要把选中的设备当真机来模拟，做到三件事：
 
-1. The device bezel shows a visual **notch / Dynamic Island** + a status bar
-   (time / signal / battery), matching the selected device profile.
-2. A mini-program page laid out edge-to-edge resolves CSS
-   `env(safe-area-inset-top|right|bottom|left)` to the device's real insets, so
-   pinned headers / tabBars / action sheets avoid the notch and home indicator
-   exactly as on-device.
-3. CSS insets follow the selected device profile. The public JS APIs currently
-   take different paths and do not all return the same `safeArea`; see below.
+1. 设备外壳画出**刘海 / 灵动岛**和状态栏（时间、信号、电池），和选中的机型一致。
+2. 贴边布局的小程序页面里，CSS `env(safe-area-inset-top|right|bottom|left)` 解析成该机型的真实内边距，吸顶头部、tabBar、action sheet 像真机一样避开刘海和 Home 指示条。
+3. JS 侧 `wx.getSystemInfoSync().safeArea` 和 CSS 内边距来自同一份机型数据。
 
-## Single source of truth: device profile
+## 单一数据源：`@devicekit/devices` 机型表
 
-`DEVICES` in `src/renderer/shared/constants.ts` is the single source of truth.
-Each entry carries the notch / safe-area fields:
+机型数据不再写在 devtools 里。`@devicekit/devices` 提供 171 台机型的 `DeviceProfile`，每条带 `os`、`screen`（竖屏尺寸）、`pixelRatio`、`statusBarHeight`、`safeAreaInsets`，横屏机型另带 `safeAreaInsetsLandscape`。刘海/灵动岛不再靠 `notchType` 枚举描述，而是由 `@devicekit/frame` 根据机型名和屏幕类别自己画。
 
-```ts
-notchType: 'none' | 'notch' | 'dynamic-island'
-safeAreaInsets: { top: number; right: number; bottom: number; left: number }
-```
+devtools 只用其中几个入口：
 
-`statusBarHeight` is kept = `safeAreaInsets.top` for `getSystemInfoSync`
-back-compat; `safeAreaInsets.top` is the canonical value. Seeded data:
-
-| device        | notchType        | top | bottom |
-|---------------|------------------|-----|--------|
-| iPhone SE     | none             | 20  | 0      |
-| iPhone X      | notch            | 44  | 34     |
-| iPhone 14     | notch            | 47  | 34     |
-| iPhone 14 Pro | dynamic-island   | 54  | 34     |
-| iPhone 16 Pro | dynamic-island   | 59  | 34     |
-| iPhone 17 Pro | dynamic-island   | 59  | 34     |
-
-`left` / `right` are `0` in portrait (landscape is out of scope).
-
-## Device-info flow (native-host)
-
-The selected device reaches the simulator UI/API state, the render-host CDP
-override, and the service-host snapshot. All three update when the user switches
-device:
-
-```
-toolbar device picker (renderer)
-  → SimulatorChannel.SetDeviceInfo (src/main/ipc/simulator.ts)
-    ├→ bridge caches device + DEVICE_CHANGE
-    │   → simulator WCV / DeviceShell visual state
-    │   → SimulatorMiniApp.currentDevice for async system-info handlers
-    ├→ safe-area service re-applies CDP override to each render-host webview
-    └→ HostEnvUpdate → service-host hostEnvSnapshot for sync handlers
-```
-
-- **Transport renderer → simulator.** The simulator is a top-level
-  `WebContentsView` (not a `<webview>` of the main window), so device changes go
-  via IPC, not `webview.send`. The toolbar picker drives
-  `SimulatorChannel.SetDeviceInfo`; main caches it on the bridge and relays
-  `DEVICE_CHANGE` to the live `simulatorWc`. `SimulatorMiniApp` records the
-  event for simulator-resident API handlers, while DeviceShell subscribes and
-  re-renders. Before the first live event, the initial device comes from the
-  `NATIVE_HOST_ENABLED` boot config cached by the bridge.
-- **DeviceShell device prop = single `device` object** (dims + platform +
-  notchType + safeAreaInsets), initialized from `miniApp.getInitialDevice()` and
-  updated from `SIMULATOR_EVENTS.DEVICE_CHANGE`. DeviceShell re-renders; the WCV
-  bounds track the bezel rect via the layout pipeline.
-
-## Visual: status bar + notch / Dynamic Island
-
-The **status bar** is the first child of `.device-shell` (above the nav-bar),
-`flex: 0 0 {safeAreaInsets.top}px`:
-
-- Left: time (static `9:41`). Right: signal / wifi / battery glyphs
-  (`.device-shell__status-icons`).
-- The nav-bar is the 44pt title row beneath the status bar.
-
-Notch shape (centered, overlapping the status bar), driven by `notchType`:
-
-- `none`: nothing (SE-class). Status bar full width.
-- `notch`: a black rounded pill anchored to the top, centered, ~`160×30`, bottom
-  corners rounded. Status icons sit on either side.
-- `dynamic-island`: a smaller black pill (~`125×37`), fully rounded, small top
-  margin (~`11px`), centered. Status icons on either side.
-
-It renders inside `.device-shell` (the positioning context), clipped by
-`border-radius: 38px; overflow: hidden`. The notch shape is keyed by `notchType`
-in `status-bar.tsx` so visual + safe-area stay consistent.
-
-## CSS `env(safe-area-inset-*)` injection — CDP `Emulation.setSafeAreaInsetsOverride`
-
-`env(safe-area-inset-*)` is UA-defined and cannot be overridden by an author
-stylesheet, so the inset comes from CDP. `src/main/services/safe-area/index.ts`
-sends `Emulation.setSafeAreaInsetsOverride` per render-host `<webview>` guest,
-driven off the simulator WCV's **`did-attach-webview`** event — the earliest
-point each guest `WebContents` is available, before the page paints.
-
-- The `wc.debugger` session itself is not owned by safe-area: it goes through
-  the shared `CdpSessionBroker` (`src/main/services/cdp-session/index.ts`). Its
-  six service consumers are safe-area, elements-forward, render-inspect,
-  network-forward, console-forward's CDP injection, and simulator-storage.
-  (`service-console` attaches to service-host separately.) `wc.debugger` is a
-  single-owner API, so without the broker any two
-  of them attaching independently would steal/detach each other's session on
-  the same guest. Per guest: `broker.acquire(wc)`
-  returns a `CdpSessionLease`; safe-area calls
-  `lease.send('Emulation.setSafeAreaInsetsOverride', { insets })` on it. `insets`
-  carries **all 8 fields** (`top/topMax/right/rightMax/bottom/bottomMax/left/
-  leftMax`, base == max) — omitting `*Max` leaves `env(safe-area-max-inset-*)`
-  at 0. Safe-area tracks each guest's page type in its own `Map<WebContents, boolean>`
-  (`isTabPage`, independent of the lease), and drops it on the guest's
-  `destroyed` event; the lease itself is dropped on the broker's `onDetach`
-  (an external tool stealing the session, or the wc dying) so the next
-  `override` re-acquires instead of sending through a dead lease.
-- **Re-apply triggers:** (1) guest attach (new page in the stack), (2) device
-  change (reapply to all attached guests).
-- **Inject only what the webview actually borders**, so the page's own `env()`
-  padding never double-counts a region the shell already covers:
-  - `top` = custom-nav page ? `device.safeAreaInsets.top` : `0` (the default nav
-    bar covers the notch with its opaque bar).
-  - `bottom` is per page TYPE:
-    - tab page → `0`. The shell tabBar extends its background through the bottom
-      inset; the page content sits above the tabBar and never borders the bottom
-      unsafe zone.
-    - non-tab page → `device.safeAreaInsets.bottom`. The page is full-bleed to
-      the device bottom; the shell reserves nothing, so the page opts in via its
-      own `env(safe-area-inset-bottom)`. The page type is read from the
-      render-host URL's `isTab` flag, captured in `will-attach-webview`
-      (`guestWc.getURL()` is empty at `did-attach`) and stored per guest so a
-      device-change reapply reuses it.
-  - `left` / `right` = `0` (portrait).
-  This keeps CSS `env()` aligned with the unsafe region actually bordering the
-  page webview. JS `safeArea` follows separate paths described below.
-- **`webContents.debugger` is exclusive.** If an external tool
-  (`--remote-debugging-port`) is attached to the render-host guest, `attach()`
-  throws and we cannot take over its session — log a warning and leave insets at
-  0. There is no CSS-only fallback.
-
-## Bottom safe area — one mechanism
-
-The home-indicator pill (`.device-shell__home-indicator`) is an absolute overlay
-pinned to the device bottom — it reserves no layout space and is transparent.
-What fills the bottom safe area depends on the page:
-
-- *tab page* → the shell tabBar's `background` extends through the bottom inset
-  (`padding-bottom` = `safeAreaInsets.bottom`, `tab-bar.tsx`), so the strip is
-  the tabBar's color and the pill sits on it.
-- *non-tab page* → the page webview is full-bleed to the device bottom (no
-  reserved strip); the pill overlays the page content.
-
-Because the DeviceShell already reserves the bottom, the page's
-`env(safe-area-inset-bottom)` is overridden to 0 on tab pages — the page's own
-`env(bottom)` must not double-count.
-
-## JS `safeArea`: the public APIs currently diverge
-
-`safeArea.bottom` is a coordinate, not an inset. On a device with a home
-indicator it should equal `windowHeight - safeAreaInsets.bottom`. The current
-public paths are:
-
-| Public API | Resolution path | Current result |
-| --- | --- | --- |
-| `wx.getSystemInfoSync()` | `sync-api-patch.ts` → service-host `sync-impls/system-info.ts` | includes `safeArea`, but sets `bottom = windowHeight` |
-| `wx.getWindowInfo()` | upstream service `hostEnvResolvers.getWindowInfo` reads the service-host `HostEnvSnapshot` locally | does not include `safeArea`, because the snapshot has no such field |
-| `wx.getSystemInfo()` / `wx.getSystemInfoAsync()` | bridge `invokeAPI` → simulator `buildSystemInfo()` | includes the device bottom inset and sets `bottom = windowHeight - bottomInset` |
-
-The simulator also exposes a local `getWindowInfo` handler whose
-`safeArea.bottom` is `windowBounds.height`, but a normal business call does not
-reach it: upstream service intercepts `getWindowInfo` in `hostEnvResolvers`
-before bridge dispatch. In contrast, the async system-info APIs are not local
-host-env resolvers and do reach `buildSystemInfo()`.
-
-The initial snapshot and later `HostEnvUpdate` payload are built by `deviceInfoToHostEnv` in
-`packages/dimina-electron-runtime/src/shared/bridge-channels.ts`; it carries
-`statusBarHeight` but neither `safeAreaInsets` nor `safeArea`. The similarly
-named devtools file only re-exports that runtime module. CSS
-`env(safe-area-inset-bottom)` is independent of these JS paths and comes from
-the CDP override.
-
-## Key files
-
-| file | role |
+| 入口 | 用途 |
 |---|---|
-| `src/renderer/shared/constants.ts` | `DEVICES` profile (notchType + safeAreaInsets) |
-| `src/main/ipc/simulator.ts` | `SimulatorChannel.SetDeviceInfo` → bridge cache → `DEVICE_CHANGE`; sends `deviceInfoToHostEnv` |
-| `packages/dimina-electron-runtime/src/shared/bridge-channels.ts` | `deviceInfoToHostEnv` (device profile → service-host host-env) |
-| `src/main/services/safe-area/index.ts` | per-guest `Emulation.setSafeAreaInsetsOverride` (driven off `did-attach-webview`) |
-| `src/simulator/device-shell/status-bar.tsx` | status bar + notch / Dynamic Island visual |
-| `src/service-host/sync-impls/system-info.ts` | `getSystemInfoSync().safeArea` |
+| `CLASSIC_DEVICES` | 工具栏设备下拉只列这份精选子集（≤20 台，同一批对象，按 iOS → Android → HarmonyOS 分组） |
+| `findDevice(name)` / `DEFAULT_DEVICE` | 按名字回查机型；找不到时回落到默认机型 |
+| `resolveDevice` / `statusBarHeightFor` / `safeAreaInsetsFor` | 按当前横竖屏解析出已经旋转过的数值 |
+| `PLATFORM_DEFAULTS` | 第一份设备信息到达前，DeviceShell 用平台默认状态栏高度占位 |
+
+## 设备信息流
+
+```
+工具栏设备 / 横竖屏选择（renderer，use-device.ts）
+  → setNativeDeviceInfo(NativeDeviceInfo)          ipc-schemas.ts 校验
+    ├→ bridge 缓存 + DEVICE_CHANGE → simulator WCV（DeviceShell → <device-frame>）
+    ├→ safe-area service 对每个 render-host guest 重发 CDP override
+    └→ HostEnvUpdate → service-host hostEnvSnapshot（getSystemInfoSync 等同步 API）
+```
+
+`NativeDeviceInfo`（`packages/dimina-electron-runtime/src/shared/runtime-types.ts`）里的数值**已经按当前方向解析好**：横屏时 `screenWidth/screenHeight` 已交换，`safeAreaInsets` 是横屏那一组。字段：
+
+- `device`：机型表里的名字，自定义或旧版 payload 没有这项；
+- `platform`：`'ios' | 'android' | 'harmony'`，`orientation`：`'portrait' | 'landscape'`；
+- `screenWidth`、`screenHeight`、`pixelRatio`、`statusBarHeight`、`safeAreaInsets`。
+
+`deviceInfoToHostEnv`（`packages/dimina-electron-runtime/src/shared/host-env.ts`）是**唯一**从设备数值推导窗口信息的地方，同步 `getSystemInfoSync`、异步 `getSystemInfo`、spawn 时的 host-env 快照和 fe 的 `hostEnvUpdate` 都用它的结果：`windowWidth = screenWidth`、`windowHeight = screenHeight − safeAreaInsets.top − safeAreaInsets.bottom`（与 dimina iOS / Android / Harmony 三端 native 一致）、`screenTop = statusBarHeight`，并透传 `safeAreaInsets`、`deviceOrientation` 和下文的 `safeArea` 矩形。切设备时 bridge 的 `setDevice` 会对每个运行中的小程序发 `hostEnvUpdate` 给 service（fe 的 `host-env.js` 合并快照），所以 `wx.getWindowInfo()` 不重启也跟着变。
+
+## 视觉：状态栏、刘海、Home 指示条
+
+`src/simulator/device-shell/device-shell.tsx` 不再自己画状态栏。它把 `NativeDeviceInfo` 交给 `@devicekit/frame/react` 的 `DeviceFrame`：
+
+- `device` 有名字时按名字取表；没有名字时用 `fallbackProfile()` 把当前方向的数值反算回竖屏 `DeviceProfile`，交给 `deviceProfile` 属性；
+- `orientation`、`embedded`、`statusBarTextStyle` 直接透传。状态栏文字颜色由 `MiniAppFrame` 的 `statusBar` render prop 通过 `StatusBarTextStyleBridge` 在 effect 里回传，避免渲染期 setState。
+
+`MiniAppFrame` 只需要知道顶部要让出 `statusBarHeight`（取 `safeAreaInsets.top`）、底部要让出 `bottomInset`（取 `safeAreaInsets.bottom`），刘海、灵动岛和 Home 指示条都由 frame 画。NavigationBar 的平台样式跟随 `device.platform`（iOS 用 iOS 样式，Android/HarmonyOS 用 Android 样式），只有设备到达前回落到 `miniApp.platform`。
+
+外壳几何由 `frameOuterSize(profile, orientation)` 决定（屏幕尺寸 + 2 × 边框），renderer 的面板宽度和自动缩放都从它推导，见 `project-runtime/lib/device-geometry.ts`。
+
+## CSS `env(safe-area-inset-*)` 注入：CDP `Emulation.setSafeAreaInsetsOverride`
+
+`env(safe-area-inset-*)` 由 UA 定义，作者样式改不了，所以走 CDP。`src/main/services/safe-area/index.ts` 在 simulator WCV 的 `did-attach-webview` 时对每个 render-host guest 发 `Emulation.setSafeAreaInsetsOverride`，这是 guest `WebContents` 可用的最早时刻，页面还没绘制。
+
+- `wc.debugger` 会话不归 safe-area 管，走共享的 `CdpSessionBroker`（`src/main/services/cdp-session/index.ts`）。`wc.debugger` 是单 owner API，没有 broker 时多个消费者会互相抢会话。safe-area 每个 guest 拿一个 `CdpSessionLease`，在上面 `send('Emulation.setSafeAreaInsetsOverride', { insets })`。`insets` 带全部 8 个字段（`top/topMax/right/rightMax/bottom/bottomMax/left/leftMax`，base 等于 max），漏掉 `*Max` 会让 `env(safe-area-max-inset-*)` 停在 0。
+- 每个 guest 的页面策略（`isTabPage` 来自 URL 的 `isTab=1`，`isCustomNav` 来自 `navStyle=custom`，两者都由 `dmb-resource-url.ts` 按页面的 `windowConfig` 写进 render-host URL）在 `will-attach-webview` 时读出并存下（`parseGuestPageInsetPolicy`）（`did-attach` 时 `getURL()` 还是空），设备切换重发时复用；guest `destroyed` 时清掉。lease 在 broker `onDetach` 时丢弃，下次 override 重新申请。
+- **重发时机**：(1) guest attach（页面栈新页面），(2) 设备或横竖屏切换（对所有已 attach 的 guest 重发）。
+- **只注入 webview 真正贴着的边**，页面自己的 `env()` padding 不会和外壳已覆盖的区域重复计算（`guestInsets()`）：
+  - `top`：自定义导航栏页（`navigationStyle: custom`，页面全出血到屏幕顶部）取设备当前方向的 `safeAreaInsets.top`；默认导航栏页为 0，因为 webview 本来就从外壳导航栏下方开始，三端 native 也是这样。
+  - `bottom`：tab 页为 0（外壳 tabBar 的背景延伸到底部内边距，页面内容不贴底）；非 tab 页取 `safeAreaInsets.bottom`（页面全出血到设备底部，自己用 `env(safe-area-inset-bottom)` 避让）。
+  - `left` / `right`：直接取设备当前方向的 `safeAreaInsets.left/right`，横屏灵动岛机型不再是 0。
+- **`webContents.debugger` 独占**。外部工具（`--remote-debugging-port`）已经 attach 时 `attach()` 会抛错，只记警告、内边距保持 0，没有纯 CSS 回退。
+
+## 底部安全区：一个机制
+
+Home 指示条由 frame 画，是绝对定位的透明覆盖层，不占布局空间。底部安全区由谁填充取决于页面：
+
+- tab 页：外壳 tabBar 的背景延伸过底部内边距（`padding-bottom = safeAreaInsets.bottom`，`tab-bar.tsx`），指示条压在 tabBar 颜色上。
+- 非 tab 页：页面 webview 全出血到设备底部，指示条压在页面内容上。
+
+因为 tab 页已经由外壳让出底部，其 `env(safe-area-inset-bottom)` 被覆盖成 0，避免页面重复避让。
+
+## JS `safeArea`
+
+`safeArea` 是屏幕坐标下的矩形，不是内边距，由 `deviceInfoToHostEnv` 生成并随快照下发：
+
+```
+left   = insets.left
+top    = insets.top
+right  = screenWidth  − insets.right
+bottom = screenHeight − insets.bottom
+width  = right − left
+height = windowHeight   （= screenHeight − insets.top − insets.bottom）
+```
+
+`src/service-host/sync-impls/system-info.ts` 收到带 `safeArea` 的快照时原样透出，同时输出 `screenTop` 和 `deviceOrientation`；旧版快照没有 `safeArea` 时才退回按 `safeAreaInsets` 或 `statusBarHeight` 自行推导。`wx.getWindowInfo()` 由上游 service 的 `hostEnvResolvers` 从同一份快照挑字段，因此含 `safeArea` 和 `screenTop`。
+
+已知差异：`platform` 对 HarmonyOS 机型给的是 `harmony`，微信和 dimina native 都是 `ohos`。
+
+## 关键文件
+
+| 文件 | 作用 |
+|---|---|
+| [`@devicekit/devices`](https://www.npmjs.com/package/@devicekit/devices) | 机型表、`CLASSIC_DEVICES`、`resolveDevice` / `statusBarHeightFor` / `safeAreaInsetsFor` |
+| [`@devicekit/frame`](https://www.npmjs.com/package/@devicekit/frame) | `<device-frame>`：外壳、状态栏、刘海/灵动岛、Home 指示条、`frameOuterSize` |
+| `src/renderer/.../project-runtime/controllers/use-device.ts` | 设备/横竖屏选择 → `NativeDeviceInfo` → `setNativeDeviceInfo` |
+| `src/renderer/.../project-runtime/lib/device-geometry.ts` | 由 `frameOuterSize` 推导面板宽度 |
+| `src/main/ipc/simulator.ts` | `SetDeviceInfo` → bridge 缓存 → `DEVICE_CHANGE`；`deviceInfoToHostEnv` |
+| `packages/dimina-electron-runtime/src/shared/host-env.ts` | `deviceInfoToHostEnv` / `makeHostEnvUpdateMessage`（`NativeDeviceInfo` → `HostEnvSnapshot`） |
+| `src/main/services/safe-area/index.ts` | 每个 guest 的 `Emulation.setSafeAreaInsetsOverride`（含 left/right） |
+| `src/simulator/device-shell/device-shell.tsx` | 把 `NativeDeviceInfo` 接到 `DeviceFrame` + `MiniAppFrame` |
+| `src/service-host/sync-impls/system-info.ts` | `getSystemInfoSync().safeArea` / `deviceOrientation` |

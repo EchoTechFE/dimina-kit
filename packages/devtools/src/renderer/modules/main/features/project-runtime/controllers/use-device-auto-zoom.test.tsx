@@ -7,7 +7,8 @@
 import { describe, it, expect } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import type React from 'react'
-import { AUTO_ZOOM, DEVICES } from '@/shared/constants'
+import { AUTO_ZOOM } from '@/shared/constants'
+import { DEFAULT_DEVICE } from '@devicekit/devices'
 import { useDevice } from './use-device'
 
 function changeEvent(value: string): React.ChangeEvent<HTMLSelectElement> {
@@ -16,12 +17,12 @@ function changeEvent(value: string): React.ChangeEvent<HTMLSelectElement> {
 
 describe('useDevice: zoom accepts the auto-fit sentinel', () => {
   it('defaults to a fixed numeric zoom', () => {
-    const { result } = renderHook(() => useDevice({ initialDevice: DEVICES[1]! }))
+    const { result } = renderHook(() => useDevice({ initialDevice: DEFAULT_DEVICE }))
     expect(result.current.zoom).toBe(85)
   })
 
   it('switches zoom to AUTO_ZOOM when the select value is "auto"', () => {
-    const { result } = renderHook(() => useDevice({ initialDevice: DEVICES[1]! }))
+    const { result } = renderHook(() => useDevice({ initialDevice: DEFAULT_DEVICE }))
 
     act(() => {
       result.current.handleZoomChange(changeEvent(AUTO_ZOOM))
@@ -31,7 +32,7 @@ describe('useDevice: zoom accepts the auto-fit sentinel', () => {
   })
 
   it('switches zoom back to a number when a fixed percent is selected afterwards', () => {
-    const { result } = renderHook(() => useDevice({ initialDevice: DEVICES[1]! }))
+    const { result } = renderHook(() => useDevice({ initialDevice: DEFAULT_DEVICE }))
 
     act(() => {
       result.current.handleZoomChange(changeEvent(AUTO_ZOOM))

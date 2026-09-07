@@ -35,10 +35,9 @@ export const SimulatorChannel = {
   CurrentPage: 'simulator:current-page',
 } as const
 
-/** iPhone bezel cutout family driving the device-shell notch visual. */
 export type {
+  DeviceOrientation,
   NativeDeviceInfo,
-  NotchType,
   SafeAreaInsets,
 } from '@dimina-kit/electron-runtime'
 

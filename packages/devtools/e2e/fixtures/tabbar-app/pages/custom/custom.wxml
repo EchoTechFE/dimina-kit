@@ -1,0 +1,6 @@
+<view class="page-marker page-custom">CUSTOM NAV PAGE</view>
+<!-- The two probes expose env(safe-area-inset-top/bottom) as computed padding
+     so the e2e can read the simulated insets straight off the rendered page. -->
+<view class="safe-probe safe-probe-top">TOP INSET PROBE</view>
+<view class="safe-probe safe-probe-bottom">BOTTOM INSET PROBE</view>
+<button class="btn nav-back-btn" bindtap="goBack">Go Back</button>

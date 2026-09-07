@@ -7,6 +7,7 @@
  */
 
 import type { MiniAppContext } from './types'
+import { deviceInfoToHostEnv } from '../shared/bridge-channels'
 import { bindCallbacks } from './simulator-api-helpers'
 import {
 	setStorageSync,
@@ -143,6 +144,21 @@ function readWindowMetrics(miniApp: MiniAppContext) {
 }
 
 function buildSystemInfo(miniApp: MiniAppContext) {
+	// With a device selected, the runtime's deviceInfoToHostEnv owns every
+	// window metric, so this forwarded async path reports exactly what the sync
+	// service-host binding and the per-spawn host-env snapshot report. Only the
+	// pre-selection default still measures the host DOM below.
+	const device = miniApp.getCurrentDevice?.()
+	if (device) {
+		return {
+			...deviceInfoToHostEnv(device),
+			language: 'zh_CN',
+			version: '8.0.5',
+			SDKVersion: '3.0.0',
+			fontSizeSetting: 16,
+			theme: window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light',
+		}
+	}
 	const { wb, di, dev, pixelRatio, screenWidth, screenHeight, windowWidth, windowHeight } = readWindowMetrics(miniApp)
 	const statusBarHeight = (di['statusBarHeight'] as number | undefined) ?? dev?.statusBarHeight ?? 0
 	// Bottom inset sourced from safeAreaInsets.bottom (the single source — the

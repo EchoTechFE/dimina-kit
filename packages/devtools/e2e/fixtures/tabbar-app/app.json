@@ -3,7 +3,8 @@
     "pages/home/home",
     "pages/cart/cart",
     "pages/me/me",
-    "pages/detail/detail"
+    "pages/detail/detail",
+    "pages/custom/custom"
   ],
   "window": {
     "navigationBarTitleText": "TabBar Fixture",

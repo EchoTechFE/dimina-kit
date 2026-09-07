@@ -1,0 +1,35 @@
+<view class="container">
+  <view class="page-title">导航栏颜色</view>
+  <view class="page-desc">本页 json 里设了深灰底白字；下面的按钮在运行时改颜色、标题和加载态。状态栏文字应跟随 frontColor 一起变黑/变白。</view>
+
+  <view class="section">
+    <view class="section-title">wx.setNavigationBarColor</view>
+    <view class="preset-list">
+      <view class="preset" wx:for="{{presets}}" wx:key="name" data-index="{{index}}" bindtap="applyPreset" style="background: {{item.backgroundColor}}; color: {{item.frontColor}};">
+        <text class="preset-name">{{item.name}}</text>
+        <text class="preset-code">{{item.frontColor}} / {{item.backgroundColor}}</text>
+      </view>
+    </view>
+    <button class="btn btn-info" bindtap="applyAnimated">带动画切换（600ms easeInOut）</button>
+    <button class="btn btn-warning" bindtap="applyInvalidFront">非法 frontColor（#ff0000）</button>
+  </view>
+
+  <view class="section">
+    <view class="section-title">标题与加载态</view>
+    <button class="btn btn-primary" bindtap="changeTitle">wx.setNavigationBarTitle</button>
+    <button class="btn btn-default" bindtap="toggleLoading">{{loading ? 'hideNavigationBarLoading' : 'showNavigationBarLoading'}}</button>
+  </view>
+
+  <view class="section">
+    <view class="section-title">当前状态</view>
+    <view class="info-row"><text class="info-label">frontColor</text><text class="info-value">{{current.frontColor}}</text></view>
+    <view class="info-row"><text class="info-label">backgroundColor</text><text class="info-value">{{current.backgroundColor}}</text></view>
+    <view class="info-row"><text class="info-label">最近一次调用</text></view>
+    <view class="result-area">{{lastResult}}</view>
+  </view>
+
+  <view class="section">
+    <view class="section-title">相关页面</view>
+    <button class="btn btn-default" bindtap="goCustomNav">取消导航栏（navigationStyle: custom）</button>
+  </view>
+</view>

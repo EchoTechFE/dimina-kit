@@ -54,20 +54,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 
 // Mirrors the presets this spec needs from devtools' own device list
-// (packages/devtools/src/renderer/shared/constants.ts DEVICES) — only the
+// (the @devicekit/devices table, as devtools' own use-device.ts consumes it) — only the
 // entries actually exercised here, converted to NativeDeviceInfo shape the
 // way devtools' own use-device.ts does (brand: 'Apple', platform: 'ios').
 function device(model: string, width: number, height: number, pixelRatio: number, statusBarHeight: number, system: string): NativeDeviceInfo {
   return {
+    device: model,
     brand: 'Apple',
     model,
     system,
     platform: 'ios',
+    orientation: 'portrait',
     pixelRatio,
     screenWidth: width,
     screenHeight: height,
     statusBarHeight,
-    notchType: 'dynamic-island',
     safeAreaInsets: { top: statusBarHeight, right: 0, bottom: 34, left: 0 },
   }
 }

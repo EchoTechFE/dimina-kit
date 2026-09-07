@@ -37,7 +37,8 @@
  */
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { SIMULATOR_EVENTS } from '../shared/bridge-channels'
+import { SIMULATOR_EVENTS, deviceInfoToHostEnv } from '../shared/bridge-channels'
+import { getSystemInfoSync as serviceHostGetSystemInfoSync } from '../service-host/sync-impls/system-info'
 import type { NativeDeviceInfo } from '../shared/ipc-channels'
 import { SimulatorMiniApp } from './simulator-mini-app'
 import { simulatorApis } from './simulator-api'
@@ -54,7 +55,7 @@ const IPHONE_14: NativeDeviceInfo = {
   screenWidth: 390,
   screenHeight: 844,
   statusBarHeight: 47,
-  notchType: 'notch',
+  orientation: 'portrait',
   safeAreaInsets: { top: 47, right: 0, bottom: 34, left: 0 },
 }
 
@@ -67,7 +68,7 @@ const PIXEL_7: NativeDeviceInfo = {
   screenWidth: 412,
   screenHeight: 915,
   statusBarHeight: 24,
-  notchType: 'none',
+  orientation: 'portrait',
   safeAreaInsets: { top: 24, right: 0, bottom: 0, left: 0 },
 }
 
@@ -80,7 +81,7 @@ const IPHONE_15_PRO: NativeDeviceInfo = {
   screenWidth: 393,
   screenHeight: 852,
   statusBarHeight: 59,
-  notchType: 'dynamic-island',
+  orientation: 'portrait',
   safeAreaInsets: { top: 59, right: 0, bottom: 34, left: 0 },
 }
 
@@ -358,5 +359,67 @@ describe('device metrics across dispose() → respawn', () => {
     const info = await callForwardedApi(miniApp, 'getSystemInfo')
     expect(info.screenWidth).toBe(IPHONE_15_PRO.screenWidth)
     expect(info.statusBarHeight).toBe(IPHONE_15_PRO.statusBarHeight)
+  })
+})
+
+// ─── one algorithm behind all three system-info paths ─────────────────────────
+//
+// The same device must produce the same window metrics whether the page asks
+// through the sync service-host binding, the async simulator-resident handler,
+// or the per-spawn host-env snapshot. deviceInfoToHostEnv owns the derivation;
+// the three paths only carry it. statusBarHeight (54) is deliberately NOT the
+// top inset (59) here, so a path that conflates screenTop with the inset fails.
+const IPHONE_15: NativeDeviceInfo = {
+  brand: 'Apple',
+  model: 'iPhone 15',
+  system: 'iOS 17.0',
+  platform: 'ios',
+  pixelRatio: 3,
+  screenWidth: 393,
+  screenHeight: 852,
+  statusBarHeight: 54,
+  orientation: 'portrait',
+  safeAreaInsets: { top: 59, right: 0, bottom: 34, left: 0 },
+}
+
+const SHARED_FIELDS = [
+  'brand', 'model', 'platform', 'system', 'pixelRatio',
+  'screenWidth', 'screenHeight', 'windowWidth', 'windowHeight',
+  'statusBarHeight', 'safeArea', 'screenTop',
+] as const
+
+function sharedFields(source: unknown): Record<string, unknown> {
+  const src = source as Record<string, unknown>
+  const picked: Record<string, unknown> = {}
+  for (const key of SHARED_FIELDS) picked[key] = src[key]
+  return picked
+}
+
+describe('system info agrees across the sync, async and spawn-snapshot paths', () => {
+  const expected = sharedFields(deviceInfoToHostEnv(IPHONE_15))
+
+  it('the service-host sync binding reports the device-derived metrics', () => {
+    const ctx = { hostEnvSnapshot: deviceInfoToHostEnv(IPHONE_15) }
+    const info = serviceHostGetSystemInfoSync.call(
+      ctx as unknown as ThisParameterType<typeof serviceHostGetSystemInfoSync>,
+    )
+
+    expect(sharedFields(info)).toEqual(expected)
+  })
+
+  it('the forwarded async getSystemInfo reports the same metrics', async () => {
+    installNativeHostMock(IPHONE_15)
+    const miniApp = await bootMiniApp()
+
+    const info = await callForwardedApi(miniApp, 'getSystemInfo')
+
+    expect(sharedFields(info)).toEqual(expected)
+  })
+
+  it('the per-spawn host-env snapshot reports the same metrics', async () => {
+    installNativeHostMock(IPHONE_15)
+    const miniApp = await bootMiniApp()
+
+    expect(sharedFields(miniApp.getHostEnvSnapshot())).toEqual(expected)
   })
 })

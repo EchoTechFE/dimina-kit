@@ -36,6 +36,11 @@ export interface RenderHostDocumentUrlOptions {
   root: string
   pagePath: string
   isTab?: boolean
+  /** The page's resolved `navigationStyle` (page ∪ app-level). Surfaced on the
+   *  URL as `navStyle` so main can pick the TOP safe-area policy at
+   *  `did-attach-webview` — only a `custom` (full-bleed) page borders the
+   *  unsafe top zone; a default-nav page starts below the shell nav bar. */
+  navigationStyle?: 'default' | 'custom'
   backgroundColor?: string
 }
 
@@ -86,6 +91,7 @@ export function buildRenderHostDocumentUrl(opts: RenderHostDocumentUrlOptions): 
   url.searchParams.set('root', opts.root)
   url.searchParams.set('pagePath', opts.pagePath)
   if (opts.isTab) url.searchParams.set('isTab', '1')
+  if (opts.navigationStyle === 'custom') url.searchParams.set('navStyle', 'custom')
   if (opts.backgroundColor) url.searchParams.set('bgColor', opts.backgroundColor)
   return url.toString()
 }

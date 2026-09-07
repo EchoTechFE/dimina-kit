@@ -3,6 +3,7 @@ import {
   DEMO_APP_DIR,
   findButtonByText,
 } from './helpers'
+import { DEVICE_NAMES } from '@devicekit/devices'
 
 test.describe('Simulator Panel', () => {
   test.describe.configure({ mode: 'serial' })
@@ -41,11 +42,11 @@ test.describe('Simulator Panel', () => {
     //
     // The observable visibility signal in the workbench DOM is the
     // SimulatorPanel itself: its device-picker `<select>` (the only `<select>`
-    // carrying the device options, e.g. `iPhone SE`) mounts when the simulator
+    // carrying the device options, e.g. `iPhone SE (3rd gen)`) mounts when the simulator
     // cell is in the compiled layout and unmounts when the cell is pruned. The
     // toolbar toggle flips `layoutStore.simulatorVisible`, which the layout
     // compile pass turns into the cell being present/absent (collapseInvisibleCells).
-    const deviceSelect = workbench.locator('select:has(option[value="iPhone SE"])')
+    const deviceSelect = workbench.locator(`select:has(option[value="${DEVICE_NAMES.iPhone_SE_3rd_gen}"])`)
     const toggle = workbench.getByTestId('layout-toolbar-toggle-simulator')
 
     await expect(deviceSelect).toHaveCount(1)

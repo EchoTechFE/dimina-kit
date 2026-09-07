@@ -23,6 +23,16 @@
         <text class="info-label">导航栏总高度</text>
         <text class="info-value">{{navHeight}}px</text>
       </view>
+      <view class="info-row">
+        <text class="info-label">env(safe-area-inset-top) 实测</text>
+        <text class="info-value">{{envTop}}</text>
+      </view>
+    </view>
+
+    <view class="section">
+      <view class="section-title">env(safe-area-inset-top) 探针</view>
+      <view class="env-top-probe" id="env-top-probe"></view>
+      <view class="desc">这条红色条的高度直接绑定 env(safe-area-inset-top)。取消导航栏后页面从屏幕顶部开始，它应当等于状态栏高度；带导航栏的页面里它是 0。</view>
     </view>
 
     <view class="section">

@@ -1,14 +1,16 @@
 import type React from 'react'
 import { useEffect, useRef } from 'react'
 import type { RefObject } from 'react'
-import { DEVICES, SIM_PANEL_PADDING, type ZoomSetting } from '@/shared/constants'
+import { DEFAULT_DEVICE, type DeviceProfile } from '@devicekit/devices'
+import { frameOuterSize } from '@devicekit/frame'
+import { computeSimPanelWidth } from '../lib/device-geometry'
 import type { AppInfo, ProjectStatus, SessionRuntimeStatusPayload } from '@/shared/api'
 import type { CompileConfig } from '@/shared/types'
 import type { AppDataPanelSource, StoragePanelSource, WxmlPanelSource } from '@dimina-kit/inspect'
 import { DEFAULT_RIGHT_PANE_STATE } from '../types'
 import type { RightPaneState, RightPaneTabId } from '../types'
 
-import { useDevice } from './use-device'
+import { useDevice, type DeviceHookResult } from './use-device'
 import { useSession } from './use-session'
 import type { CompileEvent, CompileLogEntry } from './use-session'
 import { useSimulator } from './use-simulator'
@@ -18,7 +20,7 @@ import { usePopover } from './use-popover'
 
 // ── Public shapes ───────────────────────────────────────────────────────────
 
-export type DeviceType = typeof DEVICES[number]
+export type DeviceType = DeviceProfile
 
 export type CompileStatus = ProjectStatus
 
@@ -47,15 +49,21 @@ interface SessionSlice {
   watcherDead: boolean
 }
 
-interface DeviceSlice {
-  device: DeviceType
-  zoom: ZoomSetting
-  simPanelWidth: number
-  setSimPanelWidth: (width: number) => void
-  handleDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
-  handleZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
+// The controller re-exposes the device hook's state as-is; only the splitter
+// handler is narrowed (the dock layout never passes a `side`).
+type DeviceSlice = Pick<
+  DeviceHookResult,
+  | 'device'
+  | 'orientation'
+  | 'zoom'
+  | 'simPanelWidth'
+  | 'setSimPanelWidth'
+  | 'handleDeviceChange'
+  | 'handleOrientationChange'
+  | 'handleZoomChange'
+  | 'sendDeviceInfo'
+> & {
   handleSplitterDrag: (e: React.MouseEvent) => void
-  sendDeviceInfo: (device: DeviceType) => void
 }
 
 interface SimulatorSlice {
@@ -114,7 +122,7 @@ export function useProjectRuntimeController(
 ): ProjectRuntimeController {
   const {
     projectPath,
-    initialDevice = DEVICES[1]!,
+    initialDevice = DEFAULT_DEVICE,
     initialRightPane = DEFAULT_RIGHT_PANE_STATE,
   } = props
 
@@ -133,10 +141,10 @@ export function useProjectRuntimeController(
   // openProject effect so device switches don't re-open the project.
   useEffect(() => {
     if (sessionHook.compileStatus.status === 'ready') {
-      deviceHook.setSimPanelWidth(deviceHook.device.width + SIM_PANEL_PADDING * 2)
+      deviceHook.setSimPanelWidth(computeSimPanelWidth(frameOuterSize(deviceHook.device, deviceHook.orientation).width))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deviceHook.device.width, sessionHook.compileStatus.status, deviceHook.setSimPanelWidth])
+  }, [deviceHook.device, deviceHook.orientation, sessionHook.compileStatus.status, deviceHook.setSimPanelWidth])
 
   const simulatorHook = useSimulator({
     compileStatus: sessionHook.compileStatus,
@@ -189,10 +197,12 @@ export function useProjectRuntimeController(
     },
     device: {
       device: deviceHook.device,
+      orientation: deviceHook.orientation,
       zoom: deviceHook.zoom,
       simPanelWidth: deviceHook.simPanelWidth,
       setSimPanelWidth: deviceHook.setSimPanelWidth,
       handleDeviceChange: deviceHook.handleDeviceChange,
+      handleOrientationChange: deviceHook.handleOrientationChange,
       handleZoomChange: deviceHook.handleZoomChange,
       handleSplitterDrag: deviceHook.handleSplitterDrag,
       sendDeviceInfo: deviceHook.sendDeviceInfo,

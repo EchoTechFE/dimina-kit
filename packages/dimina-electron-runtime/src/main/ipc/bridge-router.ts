@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, webContents } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv } from '../../shared/bridge-channels.js'
+import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv, makeHostEnvUpdateMessage } from '../../shared/bridge-channels.js'
 import type { NativeDeviceInfo, SyncStorageChange } from '../../shared/runtime-types.js'
 import { apiCallWatchdogMs, isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { resolveRuntimeAssetPaths } from '../utils/paths.js'
@@ -869,6 +869,12 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
       // that share one simulator WCV.
       const seen = new Set<number>()
       for (const ap of state.appSessions.values()) {
+        // A running service host learns the new device only through
+        // `hostEnvUpdate`; the stored snapshot must move with it so a later
+        // page spawn (which seeds from `ap.hostEnv`) reports the same numbers.
+        const msg = makeHostEnvUpdateMessage(ap.hostEnv, device)
+        ap.hostEnv = msg.body.systemInfo
+        forwardToService(ap, msg)
         const wc = ap.simulatorWc
         if (wc && !wc.isDestroyed() && !seen.has(wc.id)) {
           seen.add(wc.id)

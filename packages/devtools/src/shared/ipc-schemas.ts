@@ -141,15 +141,16 @@ export const SimulatorSoftReloadSchema = z.tuple([
  */
 export const SimulatorSetDeviceInfoSchema = z.tuple([
   z.object({
+    device: z.string().max(64).optional(),
     brand: z.string().max(64),
     model: z.string().max(64),
     system: z.string().max(64),
-    platform: z.string().max(32),
+    platform: z.enum(['ios', 'android', 'harmony']),
+    orientation: z.enum(['portrait', 'landscape']),
     pixelRatio: z.number().finite().positive(),
     screenWidth: z.number().int().min(100).max(4000),
     screenHeight: z.number().int().min(100).max(4000),
     statusBarHeight: z.number().finite().min(0).max(400),
-    notchType: z.enum(['none', 'notch', 'dynamic-island']),
     safeAreaInsets: z.object({
       top: z.number().finite().min(0).max(400),
       right: z.number().finite().min(0).max(400),

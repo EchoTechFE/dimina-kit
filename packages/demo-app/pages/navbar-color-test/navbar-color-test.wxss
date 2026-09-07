@@ -1,0 +1,26 @@
+.preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16rpx;
+  margin-bottom: 20rpx;
+}
+
+.preset {
+  flex: 1 1 40%;
+  display: flex;
+  flex-direction: column;
+  gap: 6rpx;
+  padding: 20rpx;
+  border-radius: 12rpx;
+  border: 2rpx solid rgba(0, 0, 0, 0.08);
+}
+
+.preset-name {
+  font-size: 28rpx;
+  font-weight: 600;
+}
+
+.preset-code {
+  font-size: 22rpx;
+  opacity: 0.8;
+}

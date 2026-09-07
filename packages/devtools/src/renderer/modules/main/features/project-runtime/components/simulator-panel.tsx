@@ -18,10 +18,16 @@ import { useDockLayoutEpoch } from "@dimina-kit/electron-deck/dock-react";
 import { cn } from "@/shared/lib/utils";
 import {
   AUTO_ZOOM,
-  DEVICES,
+  SIM_PANEL_PADDING,
   ZOOM_OPTIONS,
   type ZoomSetting,
 } from "@/shared/constants";
+import { frameOuterSize } from "@devicekit/frame";
+import {
+  CLASSIC_DEVICES,
+  type DeviceProfile,
+  type Orientation,
+} from "@devicekit/devices";
 import {
   FallbackBanner,
   RuntimeErrorOverlay,
@@ -29,16 +35,21 @@ import {
   type SimulatorRuntimeStatus,
 } from "./simulator-runtime-banners";
 
-interface Device {
-  name: string;
-  width: number;
-  height: number;
-}
+// The toolbar dropdown can't fit the full 171-device table, so it only
+// offers CLASSIC_DEVICES, grouped by platform in the order that list is
+// already sorted in (iOS → Android → HarmonyOS).
+const DEVICE_GROUPS: Array<{ label: string; devices: readonly DeviceProfile[] }> = [
+  { label: "iOS", devices: CLASSIC_DEVICES.filter((d) => d.os === "ios") },
+  { label: "Android", devices: CLASSIC_DEVICES.filter((d) => d.os === "android") },
+  { label: "HarmonyOS", devices: CLASSIC_DEVICES.filter((d) => d.os === "harmony") },
+];
 
 interface SimulatorPanelProps {
-  device: Device;
+  device: DeviceProfile;
+  orientation?: Orientation;
   zoom: ZoomSetting;
   onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  onOrientationChange?: (orientation: Orientation) => void;
   onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   compileStatus: { status: string; message: string };
   /** Visible page as `pagePath?k=v&…`, shown in the page-path bar with params
@@ -58,10 +69,11 @@ interface SimulatorPanelProps {
   onOpenInternalDevtools?: () => void;
 }
 
-// DeviceShell's scrollable desk reserves 24px on each edge and the handset has
-// a 1px border on each edge. Auto-fit must include this fixed frame or a phone
-// that numerically matches its region still overflows by a few pixels.
-const AUTO_FIT_FRAME = 2 * (24 + 1);
+// DeviceShell's scrollable desk reserves SIM_PANEL_PADDING on each edge around
+// the frame's outer box (screen + bezel + border, see frameOuterSize). Auto-fit
+// must include this fixed margin or a phone that numerically matches its region
+// still overflows by a few pixels.
+const AUTO_FIT_FRAME = 2 * SIM_PANEL_PADDING;
 
 // Resolves the auto-fit zoom percent from the measured device-region box: the
 // largest whole-percent scale (capped at 100) that lets the framed device fit
@@ -72,21 +84,23 @@ const AUTO_FIT_FRAME = 2 * (24 + 1);
 // collapsing to 0.
 function computeAutoZoom(
   bounds: Bounds,
-  device: { width: number; height: number },
+  frame: { width: number; height: number },
   fallback: number,
 ): number {
   if (bounds.width <= 0 || bounds.height <= 0) return fallback;
   const ratio = Math.min(
-    bounds.width / (device.width + AUTO_FIT_FRAME),
-    bounds.height / (device.height + AUTO_FIT_FRAME),
+    bounds.width / (frame.width + AUTO_FIT_FRAME),
+    bounds.height / (frame.height + AUTO_FIT_FRAME),
   );
   return Math.max(1, Math.min(100, Math.floor(ratio * 100)));
 }
 
 export function SimulatorPanel({
   device,
+  orientation = "portrait",
   zoom,
   onDeviceChange,
+  onOrientationChange = () => {},
   onZoomChange,
   compileStatus,
   currentPage,
@@ -136,8 +150,9 @@ export function SimulatorPanel({
   // `publish` via ref so that callback's identity can stay pinned to
   // `[publisher]` instead of being recreated on every zoom change.
   const zoomModeRef = useRef<ZoomSetting>(zoom);
-  // Device dimensions, read live inside `publish` for the same reason.
+  // Device + orientation, read live inside `publish` for the same reason.
   const deviceRef = useRef(device);
+  const orientationRef = useRef(orientation);
   const anchorHandleRef = useRef<PlacementAnchorHandle | null>(null);
 
   // Whether the simulator has reached 'ready' at least once since mount. The
@@ -182,7 +197,11 @@ export function SimulatorPanel({
         const mode = zoomModeRef.current;
         zoomRef.current =
           mode === AUTO_ZOOM
-            ? computeAutoZoom(p.bounds, deviceRef.current, zoomRef.current)
+            ? computeAutoZoom(
+                p.bounds,
+                frameOuterSize(deviceRef.current, orientationRef.current),
+                zoomRef.current,
+              )
             : mode;
       }
       publisher?.set({
@@ -235,10 +254,11 @@ export function SimulatorPanel({
   useLayoutEffect(() => {
     zoomModeRef.current = zoom;
     deviceRef.current = device;
+    orientationRef.current = orientation;
   });
   useLayoutEffect(() => {
     anchorHandleRef.current?.update({ visible: true, publish });
-  }, [zoom, device, publish]);
+  }, [zoom, device, orientation, publish]);
 
   // Follow a pure-translate layout reorder. A dock preset change (simulator
   // left↔right flip, devtools-position move) reorders this panel's slot
@@ -271,11 +291,23 @@ export function SimulatorPanel({
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">
       <div className="flex items-center gap-2 px-5 py-2 shrink-0 border-b border-border-subtle">
         <Select value={device.name} onChange={onDeviceChange}>
-          {DEVICES.map((d) => (
-            <option key={d.name} value={d.name}>
-              {d.name}
-            </option>
+          {DEVICE_GROUPS.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.devices.map((d) => (
+                <option key={d.name} value={d.name}>
+                  {d.name}
+                </option>
+              ))}
+            </optgroup>
           ))}
+        </Select>
+        <Select
+          value={orientation}
+          onChange={(e) => onOrientationChange(e.target.value as Orientation)}
+          className="w-[76px] shrink-0"
+        >
+          <option value="portrait">竖屏</option>
+          <option value="landscape">横屏</option>
         </Select>
         <Select
           value={zoom}

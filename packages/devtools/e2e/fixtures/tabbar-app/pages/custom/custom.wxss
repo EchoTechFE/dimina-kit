@@ -1,0 +1,11 @@
+.page-custom {
+  color: #eb2f96;
+}
+
+.safe-probe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+.safe-probe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}

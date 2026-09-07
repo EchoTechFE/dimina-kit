@@ -7,6 +7,9 @@
     "pages/component-test/component-test",
     "pages/swiper-test/swiper-test",
     "pages/audio-test/audio-test",
+    "pages/safe-area-test/safe-area-test",
+    "pages/navbar-color-test/navbar-color-test",
+    "pages/fullscreen-test/fullscreen-test",
     "pages/tabbar-me/tabbar-me"
   ],
   "window": {
@@ -20,8 +23,14 @@
     "backgroundColor": "#ffffff",
     "borderStyle": "black",
     "list": [
-      { "pagePath": "pages/index/index", "text": "首页" },
-      { "pagePath": "pages/tabbar-me/tabbar-me", "text": "我的" }
+      {
+        "pagePath": "pages/index/index",
+        "text": "首页"
+      },
+      {
+        "pagePath": "pages/tabbar-me/tabbar-me",
+        "text": "我的"
+      }
     ]
   }
 }
