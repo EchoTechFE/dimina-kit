@@ -110,11 +110,17 @@ export function getWindowInfo(this: MiniAppContext, { success, complete }: { suc
 export function getSystemSetting(this: MiniAppContext, { success, complete }: { success?: unknown; complete?: unknown } = {}) {
 	const { onSuccess, onComplete } = bindCallbacks(this, { success, complete })
 
+	// Orientation is derived from the selected device through
+	// `deviceInfoToHostEnv`, the same single source the sync service-host path
+	// reads via hostEnvSnapshot — a constant here would contradict
+	// getSystemInfo inside one onResize callback. 'portrait' only stands in
+	// while no device has been selected yet.
+	const device = this.getCurrentDevice?.()
 	const info = {
 		bluetoothEnabled: false,
 		locationEnabled: true,
 		wifiEnabled: true,
-		deviceOrientation: 'portrait',
+		deviceOrientation: (device && deviceInfoToHostEnv(device).deviceOrientation) || 'portrait',
 	}
 	onSuccess?.(info)
 	onComplete?.()

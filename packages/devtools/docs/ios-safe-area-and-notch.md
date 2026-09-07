@@ -35,7 +35,7 @@ devtools 只用其中几个入口：
 - `platform`：`'ios' | 'android' | 'harmony'`，`orientation`：`'portrait' | 'landscape'`；
 - `screenWidth`、`screenHeight`、`pixelRatio`、`statusBarHeight`、`safeAreaInsets`。
 
-`deviceInfoToHostEnv`（`packages/dimina-electron-runtime/src/shared/host-env.ts`）是**唯一**从设备数值推导窗口信息的地方，同步 `getSystemInfoSync`、异步 `getSystemInfo`、spawn 时的 host-env 快照和 fe 的 `hostEnvUpdate` 都用它的结果：`windowWidth = screenWidth`、`windowHeight = screenHeight − safeAreaInsets.top − safeAreaInsets.bottom`（与 dimina iOS / Android / Harmony 三端 native 一致）、`screenTop = statusBarHeight`，并透传 `safeAreaInsets`、`deviceOrientation` 和下文的 `safeArea` 矩形。切设备时 bridge 的 `setDevice` 会对每个运行中的小程序发 `hostEnvUpdate` 给 service（fe 的 `host-env.js` 合并快照），所以 `wx.getWindowInfo()` 不重启也跟着变。
+`deviceInfoToHostEnv`（`packages/dimina-electron-runtime/src/shared/host-env.ts`）是**唯一**从设备数值推导窗口信息的地方，同步 `getSystemInfoSync`、异步 `getSystemInfo`、spawn 时的 host-env 快照和 fe 的 `hostEnvUpdate` 都用它的结果：`windowWidth = screenWidth`、`windowHeight = screenHeight − safeAreaInsets.top − safeAreaInsets.bottom`（与 dimina iOS / Android / Harmony 三端 native 一致）、`screenTop = statusBarHeight`，并透传 `safeAreaInsets`、`deviceOrientation` 和下文的 `safeArea` 矩形。切设备时 bridge 的 `setDevice` 会对每个运行中的小程序发 `hostEnvUpdate` 给 service（fe 的 `host-env.js` 合并快照），所以 `wx.getWindowInfo()` 不重启也跟着变。几何真的变了（宽高或 `deviceOrientation` 有一项不同）且当前有可见页时，`setDevice` 还会在 `hostEnvUpdate` 之后接着发一条 `pageResize` 给那个可见页，`Page.onResize` 才会跑；页面隐藏时或几何没变时不发。
 
 ## 视觉：状态栏、刘海、Home 指示条
 

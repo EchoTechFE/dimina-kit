@@ -2,12 +2,13 @@ import { app, BrowserWindow, ipcMain, webContents } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv, makeHostEnvUpdateMessage } from '../../shared/bridge-channels.js'
-import type { NativeDeviceInfo, SyncStorageChange } from '../../shared/runtime-types.js'
+import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
+import type { DeviceOrientation, NativeDeviceInfo, SyncStorageChange } from '../../shared/runtime-types.js'
 import { apiCallWatchdogMs, isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { resolveRuntimeAssetPaths } from '../utils/paths.js'
 import { addMuxedInvokeHandler, addMuxedSyncListener, routerOwnsSender } from './bridge-router-ipc-mux.js'
 import { addMuxedDmbResourceHandler } from './bridge-router-protocol-mux.js'
+import { applyDeviceToSession, orientationOfHostEnv, spawnHostEnvFor } from './bridge-router-device-geometry.js'
 import { createSessionListenerBag } from './session-listener-bag.js'
 import type { SessionListenerBag } from './session-listener-bag.js'
 import type {
@@ -222,6 +223,17 @@ interface AppSession {
   /** Local fallback server; null when `resourceBaseUrl` is an external (dev) server. */
   resourceServer: DiminaResourceServer | null
   hostEnv: HostEnvSnapshot
+  /** Orientation `hostEnv`'s dims imply, seeded at spawn and kept in step by
+   *  `setDevice` — the geometry-change comparison's "did orientation flip"
+   *  half, since a same-dims-different-orientation device is still a resize. */
+  deviceOrientation: DeviceOrientation
+  /** bridgeId of the page currently shown, per the lifecycle events this
+   *  session's own PAGE_LIFECYCLE stream reports — null when no page is
+   *  visible (before the first pageShow, or after the visible page hides/
+   *  unloads with nothing shown yet). `setDevice` reads this to know which
+   *  page (if any) a geometry change's `pageResize` targets: WeChat never
+   *  delivers onResize to a hidden page. */
+  visibleBridgeId: string | null
   appConfig: RawAppConfig
   manifest: AppManifest
   pages: Map<string, PageSession>
@@ -290,6 +302,24 @@ interface AppSession {
    * `releaseDeferredServiceLoad`.
    */
   serviceLoadDeferred: boolean
+  /**
+   * Whether the service window has actually loaded `service.html` and its
+   * preload has installed the `TO_SERVICE` listener — flipped true at the top
+   * of `bootServiceHost`, the same real `did-finish-load` moment both the pool
+   * and fresh spawn paths gate their boot call on (see `bootOnServiceLoad` /
+   * the fresh `.once`). `forwardToService` queues into
+   * `pendingServiceMessages` instead of calling `send` while this is false:
+   * Electron's `send` is fire-and-forget, so a message sent while the window
+   * is still on its warm/about:blank preload (no `bridgeId`, no listener) or
+   * mid-navigation is gone for good, not buffered by Electron itself.
+   */
+  serviceHostReady: boolean
+  /** Messages `forwardToService` received before `serviceHostReady`, in
+   *  arrival order. Flushed once by `bootServiceHost` the moment it flips the
+   *  flag; discarded untouched if the session is disposed first (a stale
+   *  did-finish-load, or a pool boot listener that self-evicts on the disposed
+   *  check, never reaches the flush). */
+  pendingServiceMessages: MessageEnvelope[]
 }
 
 interface PageSession {
@@ -536,7 +566,10 @@ export interface BridgeRouterHandle {
   onNativeWebSocketTrace?(listener: (ownerId: string, event: NativeWebSocketTrace) => void): () => void
   /** The currently-selected device (renderer toolbar), or null pre-selection. */
   getDevice(): NativeDeviceInfo | null
-  /** Cache the selected device + push DEVICE_CHANGE to the live simulator WC(s). */
+  /** Cache the selected device, push DEVICE_CHANGE to the live simulator
+   *  WC(s), and mirror the change into every spawned service via
+   *  hostEnvUpdate (+ pageResize for whichever page is currently visible,
+   *  when the geometry actually changed). */
   setDevice(device: NativeDeviceInfo): void
   /**
    * Deterministically tear down every app session bound to the given simulator
@@ -869,12 +902,15 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
       // that share one simulator WCV.
       const seen = new Set<number>()
       for (const ap of state.appSessions.values()) {
-        // A running service host learns the new device only through
-        // `hostEnvUpdate`; the stored snapshot must move with it so a later
-        // page spawn (which seeds from `ap.hostEnv`) reports the same numbers.
-        const msg = makeHostEnvUpdateMessage(ap.hostEnv, device)
-        ap.hostEnv = msg.body.systemInfo
-        forwardToService(ap, msg)
+        // Mirror the change into every spawned service: hostEnv is otherwise
+        // frozen at spawn time, so wx.getSystemInfoSync() and Page.onResize
+        // would never learn about a later device/orientation switch.
+        // `applyDeviceToSession` updates `ap.hostEnv`/`ap.deviceOrientation`
+        // in place so a later page spawn (which seeds from `ap.hostEnv`)
+        // reports the same numbers, and returns the `hostEnvUpdate` (always)
+        // plus `pageResize` (only if the geometry actually moved and a page
+        // is visible) messages this session owes.
+        for (const msg of applyDeviceToSession(ap, device)) forwardToService(ap, msg)
         const wc = ap.simulatorWc
         if (wc && !wc.isDestroyed() && !seen.has(wc.id)) {
           seen.add(wc.id)
@@ -1269,17 +1305,13 @@ async function handleSpawn(
     resourceBaseUrl = resourceServer.baseUrl
   }
   // The selected device (renderer toolbar) is the authoritative source for the
-  // logical dims a spawn must report. The simulator-supplied `hostEnvSnapshot`
-  // is derived from the device baked into the simulator at BOOT time, so on a
-  // RESPAWN after a live device change it still carries the boot device. Layer
-  // the live `currentDevice` on top so every spawn/respawn reports the selected
-  // device — matching what the live `SetDeviceInfo` HostEnvUpdate pushes to an
-  // already-running service host. Pre-selection (null) → simulator snapshot wins.
-  const selectedDevice = ctx.bridge?.getDevice?.() ?? null
-  const hostEnv = makeHostEnv({
-    ...opts.hostEnvSnapshot,
-    ...(selectedDevice ? deviceInfoToHostEnv(selectedDevice) : {}),
-  })
+  // logical dims a spawn must report (see `spawnHostEnvFor`). Read it AFTER
+  // each await below, right before the value is used: a `setDevice` during
+  // app-config load or pool acquire pushes its `hostEnvUpdate` only to
+  // sessions already registered, so a snapshot captured before the await
+  // would ship the previous device to this service host's first spawn.
+  const resolveHostEnv = (): HostEnvSnapshot =>
+    makeHostEnv(spawnHostEnvFor(opts.hostEnvSnapshot, ctx.bridge?.getDevice?.() ?? null))
 
   // app-config.json lives at `<base><appId>/<root>/app-config.json` on the dev
   // server, or at the local server root for the fallback path.
@@ -1301,6 +1333,7 @@ async function handleSpawn(
   }
   const rootWindowConfig = resolvePageWindowConfig(appConfig, resolvedPagePath)
   const isTab = isTabPage(appConfig, resolvedPagePath)
+  let hostEnv = resolveHostEnv()
 
   // Acquire a pre-warmed service-host window when pooling is enabled; otherwise
   // construct one fresh (default). A pooled/fallback window is warmed on
@@ -1336,6 +1369,7 @@ async function handleSpawn(
     )
     serviceWindow = acquired.win
     poolEntryId = acquired.entryId
+    hostEnv = resolveHostEnv()
   } else {
     const freshWindowOptions = {
       bridgeId,
@@ -1362,6 +1396,9 @@ async function handleSpawn(
     })
   }
 
+  // Derived from the snapshot this spawn actually reports, so a later
+  // setDevice's orientation-changed check starts from the right side.
+  const deviceOrientation = orientationOfHostEnv(hostEnv)
   const appSession: AppSession = {
     appSessionId,
     appId,
@@ -1376,6 +1413,8 @@ async function handleSpawn(
     resourceBaseUrl,
     resourceServer,
     hostEnv,
+    deviceOrientation,
+    visibleBridgeId: null,
     appConfig,
     manifest,
     pages: new Map(),
@@ -1388,6 +1427,8 @@ async function handleSpawn(
     launchTimer: null,
     pageFallback: pageFallbackApplied ? { requested: pagePath, resolved: resolvedPagePath } : null,
     serviceLoadDeferred: false,
+    serviceHostReady: false,
+    pendingServiceMessages: [],
   }
 
   const rootPage: PageSession = {
@@ -1613,6 +1654,18 @@ function handlePageLifecycle(state: RouterState, sender: WebContents, payload: P
   if (!ap) return
   if (!senderBoundToSession(state, sender, ap)) return
 
+  // Mirror the shell's own visibility verdict — the only source of pageShow/
+  // pageHide/pageUnload — so setDevice knows which page (if any) a later
+  // geometry change's pageResize should target.
+  if (payload.event === 'pageShow') {
+    ap.visibleBridgeId = payload.bridgeId
+  } else if (
+    (payload.event === 'pageHide' || payload.event === 'pageUnload')
+    && ap.visibleBridgeId === payload.bridgeId
+  ) {
+    ap.visibleBridgeId = null
+  }
+
   forwardToService(ap, {
     type: payload.event,
     target: 'service',
@@ -1642,6 +1695,18 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: RuntimeC
   // early-disposed prior owner could otherwise fire here and inject the wrong
   // app's logic.js into the next spawn (the recycled webContents is shared).
   if (state.appSessions.get(ap.appSessionId) !== ap) return
+  // The service wc just did-finish-load'd, so its preload has (re-)run with
+  // the real bridgeId and installed the TO_SERVICE listener — flip the gate
+  // and flush anything `forwardToService` queued while it was still on the
+  // warm/about:blank preload or mid-navigation, in the order it arrived.
+  // Messages queued during the flush loop itself (none today; forwardToService
+  // is synchronous) would still see serviceHostReady=true and send directly.
+  ap.serviceHostReady = true
+  if (ap.pendingServiceMessages.length > 0) {
+    const queued = ap.pendingServiceMessages
+    ap.pendingServiceMessages = []
+    for (const msg of queued) forwardToService(ap, msg)
+  }
   // The service wc just did-finish-load'd (that's how this got invoked) — flush
   // any diagnostic queued for this session (or the global bucket) into its now
   // resolvable console. Safe to call even when nothing is queued.
@@ -2696,9 +2761,16 @@ function makeLoadResource(ap: AppSession, page: PageSession, target: 'service' |
 }
 
 function forwardToService(ap: AppSession, msg: MessageEnvelope): void {
-  if (!ap.serviceWc.isDestroyed()) {
-    ap.serviceWc.send(C.TO_SERVICE, { msg })
+  if (ap.serviceWc.isDestroyed()) return
+  // Before the service host's TO_SERVICE listener exists, `send` would fire
+  // into the void (Electron doesn't queue across a navigation/preload gap) —
+  // queue instead, in arrival order, for `bootServiceHost` to flush once it
+  // confirms the listener is live. See `AppSession.serviceHostReady`.
+  if (!ap.serviceHostReady) {
+    ap.pendingServiceMessages.push(msg)
+    return
   }
+  ap.serviceWc.send(C.TO_SERVICE, { msg })
 }
 
 function forwardToRender(ap: AppSession, msg: MessageEnvelope, targetBridgeId?: string): void {
@@ -2873,6 +2945,9 @@ function disposePageSession(state: RouterState, ap: AppSession, page: PageSessio
   // page still being in `ap.pages`, which this delete has already settled.
   if (ap.activeBridgeId === page.bridgeId) {
     ap.activeBridgeId = null
+  }
+  if (ap.visibleBridgeId === page.bridgeId) {
+    ap.visibleBridgeId = null
   }
   ap.pageStack = undefined
 }

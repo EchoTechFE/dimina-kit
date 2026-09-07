@@ -129,10 +129,12 @@ for (const { src, dest } of NATIVE_HOST_FILES) {
 const ASSETS = [
   'src/service-host/preload.cjs',
   // Pure helpers required by preload.cjs (relative `./sourcemap-rewrite.cjs` /
-  // `./appdata-set-data.cjs`); copied verbatim so the runtime require resolves
+  // `./appdata-set-data.cjs` / `./host-env-update.cjs`); copied verbatim so the runtime require resolves
   // from dist/service-host.
   'src/service-host/sourcemap-rewrite.cjs',
   'src/service-host/appdata-set-data.cjs',
+  'src/service-host/host-env-update.cjs',
+  'src/service-host/service-message-queue.cjs',
   'src/service-host/service.html',
   'src/render-host/preload.cjs',
   'src/render-host/pageFrame.html',

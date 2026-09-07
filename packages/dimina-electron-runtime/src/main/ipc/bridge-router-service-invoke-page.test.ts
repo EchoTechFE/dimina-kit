@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { fireServiceDidFinishLoad } from './bridge-router-boot-test-fixtures.js'
 
 const electronStubs = vi.hoisted(() => {
   type SyncListener = (...args: unknown[]) => void
@@ -288,6 +289,7 @@ async function spawnRoot(simulatorWc: FakeWc, appId: string): Promise<Omit<RootO
     resourceBaseUrl: 'http://127.0.0.1:65535/',
   }) as SpawnResult
   const serviceWc = fakes.windows[fakes.windows.length - 1]!.webContents
+  fireServiceDidFinishLoad(serviceWc)
   const rootRenderWc = fakes.makeWc()
   announceRenderGuest(rootRenderWc, spawn.bridgeId)
   return { serviceWc, rootBridgeId: spawn.bridgeId, rootRenderWc, appSessionId: spawn.appSessionId }

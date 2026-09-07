@@ -232,6 +232,10 @@ async function spawnSession(
   if (!serviceWc) throw new Error(`no mock webContents with id ${result.serviceWcId}`)
   const serviceWindow = stubs.createdWindows.find(w => w.webContents.id === result.serviceWcId)
   if (!serviceWindow) throw new Error('spawned service window not found')
+  // forwardToService queues until the service host reports readiness (see
+  // bridge-router-service-readiness.test.ts) — fire the real navigation's
+  // did-finish-load so every caller of this helper boots into a settled session.
+  serviceWindow.webContents.emit('did-finish-load')
   return { result, serviceWc, serviceWindow }
 }
 

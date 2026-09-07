@@ -15,7 +15,6 @@ import {
 } from '@dimina-kit/electron-runtime'
 import { openProject as devkitOpenProject } from '@dimina-kit/devkit'
 import { AppDataAccumulator, decodeWorkerMessage, decodedToInput } from '@dimina-kit/inspect'
-import { deviceInfoToHostEnv } from '@dimina-kit/electron-runtime/shared/bridge-channels'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -270,27 +269,11 @@ async function closeProjectHook() {
   if (currentSession === session) currentSession = null
 }
 
-/**
- * `runtime.setDevice()` alone only re-renders the DeviceShell bezel/notch (see
- * its doc comment in bridge-router.ts) — it does NOT live-update an already
- * running service host's `wx.getSystemInfoSync()` snapshot. devtools' own
- * `SimulatorChannel.SetDeviceInfo` main-process handler does that additionally
- * via `serviceWc.send('service-host:host-env:update', deviceInfoToHostEnv(device))`
- * (packages/devtools/src/main/ipc/simulator.ts) — that channel is consumed by
- * the service-host preload (build output shared with this package, see
- * build-assets.mjs) but the channel NAME itself isn't part of this package's
- * own exports, so it's replicated here as a literal (see
- * packages/devtools/src/shared/ipc-channels.ts's `ServiceHostChannel.HostEnvUpdate`
- * for the canonical definition). Test-only — does not change `runtime`'s
- * public behavior.
- */
+// Device switch goes entirely through the runtime's public API; the live
+// `wx.getSystemInfoSync()` snapshot update is consumed by the service-host
+// preload's `hostEnvUpdate` handling, not pushed here separately.
 function setDeviceHook(device) {
   runtime.setDevice(device)
-  const bridge = globalThis.__diminaBridgeHandle
-  const serviceWc = bridge?.getServiceWc()
-  if (serviceWc && !serviceWc.isDestroyed()) {
-    serviceWc.send('service-host:host-env:update', deviceInfoToHostEnv(device))
-  }
 }
 
 globalThis.__diminaE2eHooks = {

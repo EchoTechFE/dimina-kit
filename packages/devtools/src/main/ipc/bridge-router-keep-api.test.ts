@@ -223,6 +223,10 @@ async function spawnSession(simulatorWc: MockWc): Promise<{ result: SpawnResult;
   // The service window is our mock; resolve it by the serviceWcId spawn returns.
   const serviceWc = stubs.wcById.get(result.serviceWcId)
   if (!serviceWc) throw new Error(`no mock webContents with id ${result.serviceWcId}`)
+  // forwardToService queues until the service host reports readiness (see
+  // bridge-router-service-readiness.test.ts) — fire the real navigation's
+  // did-finish-load so every caller of this helper boots into a settled session.
+  serviceWc.emit('did-finish-load')
   return { result, serviceWc: serviceWc as unknown as MockWc }
 }
 

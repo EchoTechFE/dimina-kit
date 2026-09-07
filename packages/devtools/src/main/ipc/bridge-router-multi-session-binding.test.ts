@@ -241,6 +241,7 @@ async function spawnSession(
   if (!serviceWc) throw new Error(`no mock webContents with id ${result.serviceWcId}`)
   const serviceWindow = stubs.createdWindows.find(w => w.webContents.id === result.serviceWcId)
   if (!serviceWindow) throw new Error('spawned service window not found')
+  serviceWindow.webContents.emit('did-finish-load') // forwardToService queues until this fires
   return { result, serviceWc, serviceWindow }
 }
 
