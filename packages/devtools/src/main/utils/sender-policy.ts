@@ -89,6 +89,12 @@ export function createWorkbenchOwnedSenderCheck(
     const updateDialogViewId = ctx.views.getUpdateDialogWebContentsId()
     if (updateDialogViewId != null && sender.id === updateDialogViewId) return true
 
+    // Device-picker overlay view. Same devtools-owned trust level — the
+    // simulator toolbar's device selector, moved out of the main renderer's
+    // DOM so the simulator WCV can't occlude it.
+    const devicePickerViewId = ctx.views.getDevicePickerWebContentsId()
+    if (devicePickerViewId != null && sender.id === devicePickerViewId) return true
+
     // The host-toolbar overlay is DELIBERATELY NOT trusted here. The host loads
     // arbitrary content into it, so granting it the global white-list would open
     // all ~72 IpcRegistry channels to that content. Its one channel (the reverse

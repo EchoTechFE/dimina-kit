@@ -16,6 +16,7 @@ export const VIEW_ID = {
   tooltip: 'tooltip',
   projectCreateDialog: 'project-create-dialog',
   updateDialog: 'update-dialog',
+  devicePicker: 'device-picker',
 } as const
 
 export type DevtoolsViewId = (typeof VIEW_ID)[keyof typeof VIEW_ID]
@@ -47,7 +48,8 @@ export const VIEW_LAYER = {
   settings: 10,
   popover: 20,
   tooltip: 30,
-  // devtools' own ProjectCreateDialog/UpdateDialog panels (createOverlayPanel).
+  // devtools' own ProjectCreateDialog/UpdateDialog/DevicePicker panels
+  // (createOverlayPanel).
   dialog: 40,
   // Host-controlled fully-custom dialog (loadURL-level takeover); sits above
   // devtools' own dialog layer so host content is never occluded by it.

@@ -89,7 +89,7 @@ vi.mock('../../utils/paths.js', () => ({
 
 // Import AFTER mocks so view-manager picks up the stubs.
 import { createViewManager } from './view-manager.js'
-import { hostToolbarBounds, hostSidebarBounds } from './placement-test-driver.js'
+import { hostToolbarBounds, hostSidebarBounds, simulatorBounds } from './placement-test-driver.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
 function makeContext() {
@@ -109,6 +109,7 @@ function makeContext() {
     tooltipInit: vi.fn(),
     projectCreateInit: vi.fn(),
     updateAvailable: vi.fn(),
+    devicePickerInit: vi.fn(),
   }
   return {
     addChildView,
@@ -126,6 +127,7 @@ function makeContext() {
 
 const TOOLBAR_RECT = { x: 0, y: 0, width: 1280, height: 48 }
 const SIDEBAR_RECT = { x: 0, y: 48, width: 240, height: 900 }
+const SIMULATOR_RECT = { x: 0, y: 85, width: 437, height: 833, zoom: 100 }
 
 // Last addChildView call's first arg = the topmost view.
 function lastAdded(addChildView: ReturnType<typeof vi.fn>): StubView {
@@ -191,5 +193,30 @@ describe('ViewManager dialog overlay z-order: dialogs stay above host-toolbar/ho
     hostSidebarBounds(mgr, { ...SIDEBAR_RECT, width: 260 })
 
     expect(lastAdded(addChildView)).toBe(dialogView)
+  })
+
+  // The device picker's occluder is the SIMULATOR view, not a host slot: the
+  // toolbar that opens it sits in the same panel the simulator WCV is painted
+  // over, and the centred panel is wide enough to reach into it.
+  it('device picker attaches above the open simulator, and stays above it when the simulator republishes bounds', () => {
+    const { addChildView, ctx } = makeContext()
+    const mgr = createViewManager(ctx)
+
+    simulatorBounds(mgr, SIMULATOR_RECT)
+    hostToolbarBounds(mgr, TOOLBAR_RECT)
+
+    mgr.showDevicePicker({ deviceName: 'iPhone 14 Pro' })
+    const webContentsId = mgr.getDevicePickerWebContentsId()
+    expect(webContentsId).not.toBeNull()
+    mgr.markOverlayReady(webContentsId!)
+    const pickerView = viewFor(webContentsId!)
+
+    expect(lastAdded(addChildView)).toBe(pickerView)
+
+    // A wider device (or a dock resize) re-publishes the simulator's rect while
+    // the picker is open; that base-tier re-attach must not jump above it.
+    simulatorBounds(mgr, { ...SIMULATOR_RECT, width: 820 })
+
+    expect(lastAdded(addChildView)).toBe(pickerView)
   })
 })

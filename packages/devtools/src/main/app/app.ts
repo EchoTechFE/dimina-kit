@@ -19,6 +19,7 @@ import {
   registerInternalDevtoolsIpc,
   registerTooltipIpc,
   registerProjectCreateIpc,
+  registerDevicePickerIpc,
   registerViewsIpc,
 } from '../ipc/index.js'
 import { registerProjectFsIpc } from '../ipc/project-fs.js'
@@ -90,6 +91,11 @@ function registerWorkbenchIpc(
   // Unconditional: the project-create dialog is core UI chrome (the built-in
   // "新建项目" flow every host falls back to), not a host-configurable feature.
   appRegistry.add(registerProjectCreateIpc(router))
+  // Unconditional for the same reason as the tooltip above: the device picker
+  // is an overlay WebContentsView the simulator toolbar opens, and `ctx.views`
+  // exists regardless of the `simulator` module toggle. A host that turns the
+  // simulator off simply never renders the trigger.
+  appRegistry.add(registerDevicePickerIpc(router))
   // Unconditional (not a toggleable BUILTIN_MODULES entry): placement/host-
   // slot IPC has no real dependency on the simulator module — `ctx.views`
   // (ViewManager) is constructed unconditionally regardless of

@@ -30,7 +30,7 @@ function panel(currentPage: string) {
   const props: Parameters<typeof SimulatorPanel>[0] = {
     device: findDevice(DEVICE_NAMES.iPhone_15)!,
     zoom: 100,
-    onDeviceChange: () => {},
+    onOpenDevicePicker: () => {},
     onZoomChange: () => {},
     compileStatus: { status: 'ready', message: '' },
     currentPage,

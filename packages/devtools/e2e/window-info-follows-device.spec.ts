@@ -3,7 +3,7 @@
  * restarting the mini-app, and the safe-area top a page sees depends on its
  * navigation-bar style.
  *
- * Real user path: toolbar <select> -> setNativeDeviceInfo IPC -> main process
+ * Real user path: toolbar device picker -> setNativeDeviceInfo IPC -> main process
  * host-env + `hostEnvUpdate` push into the RUNNING dimina service -> what the
  * page's own JS (`wx.getWindowInfo` / `wx.getSystemInfo(Sync)`) and the page's
  * own CSS (`env(safe-area-inset-*)`) observe.
@@ -34,6 +34,7 @@ import {
   evalInWebContentsByUrl,
   RENDER_GUEST_URL_MARKER,
   findMainWindow,
+  selectDeviceInPicker,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 import {
@@ -96,8 +97,7 @@ const IPHONE_15_SHARED_FIELDS = windowFieldsOf(IPHONE_15_WINDOW_INFO)
 
 // ── Toolbar driving ────────────────────────────────────────────────────
 async function selectDevice(win: PwPage, deviceName: string): Promise<void> {
-  const sel = win.locator('select', { has: win.locator(`option[value="${deviceName}"]`) }).first()
-  await sel.selectOption(deviceName)
+  await selectDeviceInPicker(win, electronApp, deviceName)
 }
 
 async function waitForFrameDevice(app: ElectronApplication, deviceName: string): Promise<void> {

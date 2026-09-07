@@ -1,14 +1,18 @@
 /**
- * DevicePicker: the searchable device selector that replaces the toolbar
- * native <select>. Must expose the full @devicekit/devices table (171
- * devices), not just CLASSIC_DEVICES, behind a trigger button + cmdk
- * search/filter panel — see DESIGN.md's device-picker plan.
+ * DevicePicker: the searchable device selector behind the simulator toolbar's
+ * device button. It renders inside the device-picker overlay WebContentsView,
+ * which mounts it only while the panel is shown — so the component is always
+ * open, takes the whole device table as a prop, and reports the outcome
+ * through `onSelect` / `onClose` instead of owning an open/closed state.
  *
- * Contract this suite locks in beyond DESIGN.md's prose: each option row
- * carries `aria-label` equal to the device's bare `name` (so rows with a
- * shared name prefix, e.g. "iPhone 14" vs "iPhone 14 Pro", stay
- * unambiguous to query) and `data-current="true"` when it is the active
- * device.
+ * Invariants this suite locks in:
+ * - every device in the table it is given is offered (the full
+ *   `@devicekit/devices` set, not the CLASSIC_DEVICES subset);
+ * - each option row carries `aria-label` equal to the device's bare `name`, so
+ *   rows sharing a prefix ("iPhone 14" vs "iPhone 14 Pro") stay unambiguous to
+ *   query, and `data-current="true"` marks the active device;
+ * - the active device starts highlighted, so Enter on a fresh open keeps the
+ *   current device instead of jumping to the first row.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react'
@@ -42,23 +46,22 @@ function renderPicker(
     device: DeviceProfile
     devices: readonly DeviceProfile[]
     onSelect: (name: string) => void
+    onClose: () => void
   }> = {},
 ) {
   const onSelect = overrides.onSelect ?? vi.fn()
+  const onClose = overrides.onClose ?? vi.fn()
   const device = overrides.device ?? DEFAULT_DEVICE
   const devices = overrides.devices ?? DEVICES
-  render(<DevicePicker device={device} devices={devices} onSelect={onSelect} />)
-  return { onSelect, device, devices }
-}
-
-function openPicker(device: DeviceProfile = DEFAULT_DEVICE) {
-  fireEvent.click(screen.getByRole('button', { name: device.name }))
+  render(
+    <DevicePicker device={device} devices={devices} onSelect={onSelect} onClose={onClose} />,
+  )
+  return { onSelect, onClose, device, devices }
 }
 
 describe('DevicePicker: full device table', () => {
   it('renders all 171 devices from @devicekit/devices as options once opened', async () => {
     renderPicker()
-    openPicker()
 
     expect(await screen.findAllByRole('option')).toHaveLength(DEVICES.length)
   })
@@ -67,7 +70,6 @@ describe('DevicePicker: full device table', () => {
 describe('DevicePicker: search', () => {
   it('narrows to Galaxy Tab S9 when searching "tab s9"', async () => {
     renderPicker()
-    openPicker()
 
     const input = await screen.findByPlaceholderText('搜索机型：名称 / 系统 / 尺寸')
     fireEvent.change(input, { target: { value: 'tab s9' } })
@@ -79,7 +81,6 @@ describe('DevicePicker: search', () => {
 
   it('matches the size typed with the × the row displays, not only ASCII x', async () => {
     renderPicker()
-    openPicker()
 
     const input = await screen.findByPlaceholderText('搜索机型：名称 / 系统 / 尺寸')
     fireEvent.change(input, { target: { value: '393×852' } })
@@ -92,7 +93,6 @@ describe('DevicePicker: search', () => {
 describe('DevicePicker: 平板 form-factor chip', () => {
   it('shows only formFactor=tablet devices once toggled on', async () => {
     renderPicker()
-    openPicker()
     await screen.findAllByRole('option')
 
     fireEvent.click(screen.getByRole('button', { name: '平板' }))
@@ -106,7 +106,6 @@ describe('DevicePicker: 平板 form-factor chip', () => {
 describe('DevicePicker: iOS os chip', () => {
   it('shows only os=ios devices once toggled on', async () => {
     renderPicker()
-    openPicker()
     await screen.findAllByRole('option')
 
     fireEvent.click(screen.getByRole('button', { name: 'iOS' }))
@@ -118,16 +117,16 @@ describe('DevicePicker: iOS os chip', () => {
 })
 
 describe('DevicePicker: selecting a device', () => {
-  it('calls onSelect with the device name and closes the panel', async () => {
+  it('reports the picked device by name and does not report a dismissal', async () => {
     const onSelect = vi.fn()
-    renderPicker({ onSelect })
-    openPicker()
+    const onClose = vi.fn()
+    renderPicker({ onSelect, onClose })
 
     const row = await screen.findByRole('option', { name: DEVICE_NAMES.iPhone_14_Pro })
     fireEvent.click(row)
 
     expect(onSelect).toHaveBeenCalledWith(DEVICE_NAMES.iPhone_14_Pro)
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
   })
 })
 
@@ -135,7 +134,6 @@ describe('DevicePicker: current-device marker', () => {
   it('marks only the row for the currently active device', async () => {
     const current = findDevice(DEVICE_NAMES.iPhone_14_Pro)!
     renderPicker({ device: current })
-    openPicker(current)
 
     const currentRow = await screen.findByRole('option', { name: current.name })
     expect(currentRow).toHaveAttribute('data-current', 'true')
@@ -147,7 +145,6 @@ describe('DevicePicker: current-device marker', () => {
   it('pre-highlights the current device on open so Enter keeps it instead of the first row', async () => {
     const current = findDevice(DEVICE_NAMES.iPhone_14_Pro)!
     renderPicker({ device: current })
-    openPicker(current)
 
     const currentRow = await screen.findByRole('option', { name: current.name })
     expect(currentRow).toHaveAttribute('aria-selected', 'true')
@@ -155,36 +152,31 @@ describe('DevicePicker: current-device marker', () => {
     expect(firstRow).not.toHaveAttribute('aria-selected', 'true')
   })
 
-  it('Enter on a fresh open re-selects the current device and closes', async () => {
+  it('Enter on a fresh open re-selects the current device', async () => {
     const current = findDevice(DEVICE_NAMES.iPhone_14_Pro)!
     const { onSelect } = renderPicker({ device: current })
-    openPicker(current)
 
     const input = await screen.findByRole('combobox')
     fireEvent.keyDown(input, { key: 'Enter' })
 
     expect(onSelect).toHaveBeenCalledWith(current.name)
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })
 })
 
 describe('DevicePicker: dialog accessibility and dismissal', () => {
   it('names the dialog for assistive tech', async () => {
     renderPicker()
-    openPicker()
     expect(await screen.findByRole('dialog', { name: '选择机型' })).toBeInTheDocument()
   })
 
-  it('Escape closes without selecting and returns focus to the trigger button', async () => {
-    const { onSelect, device } = renderPicker()
-    openPicker(device)
+  it('Escape reports a dismissal without selecting', async () => {
+    const { onSelect, onClose } = renderPicker()
     const dialog = await screen.findByRole('dialog')
 
     fireEvent.keyDown(dialog, { key: 'Escape' })
 
-    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
     expect(onSelect).not.toHaveBeenCalled()
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: device.name }))
   })
 })
 

@@ -126,8 +126,11 @@ export interface ViewManager extends Pick<
   | 'showUpdateDialog'
   | 'hideUpdateDialog'
   | 'notifyUpdateDownloadProgress'
+  | 'showDevicePicker'
+  | 'hideDevicePicker'
   | 'getProjectCreateDialogWebContentsId'
   | 'getUpdateDialogWebContentsId'
+  | 'getDevicePickerWebContentsId'
 >,
   HostSidebarViewManagerMembers,
   HostDialogViewManagerMembers {
@@ -418,8 +421,11 @@ export function createViewManager(ctx: ViewManagerContext): ViewManager {
     showUpdateDialog: overlayPanels.showUpdateDialog,
     hideUpdateDialog: overlayPanels.hideUpdateDialog,
     notifyUpdateDownloadProgress: overlayPanels.notifyUpdateDownloadProgress,
+    showDevicePicker: overlayPanels.showDevicePicker,
+    hideDevicePicker: overlayPanels.hideDevicePicker,
     getProjectCreateDialogWebContentsId: overlayPanels.getProjectCreateDialogWebContentsId,
     getUpdateDialogWebContentsId: overlayPanels.getUpdateDialogWebContentsId,
+    getDevicePickerWebContentsId: overlayPanels.getDevicePickerWebContentsId,
     repositionAll: () => {
       overlayPanels.reapplyPresentOverlays()
       hostDialog.reposition()

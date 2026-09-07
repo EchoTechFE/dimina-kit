@@ -24,11 +24,10 @@ import {
 } from "@/shared/constants";
 import { frameOuterSize } from "@devicekit/frame";
 import {
-  DEVICES,
   type DeviceProfile,
   type Orientation,
 } from "@devicekit/devices";
-import { DevicePicker } from "./device-picker";
+import { Button } from "@/shared/components/ui/button";
 import {
   FallbackBanner,
   RuntimeErrorOverlay,
@@ -40,7 +39,12 @@ interface SimulatorPanelProps {
   device: DeviceProfile;
   orientation?: Orientation;
   zoom: ZoomSetting;
-  onDeviceChange: (name: string) => void;
+  /** Opens the device-picker overlay. The device list is NOT in this
+   * renderer's DOM: the simulator WCV is mounted over this panel and would cut
+   * a centered dialog in half (see view-ids.ts's VIEW_LAYER doc-comment), so
+   * the panel keeps only the trigger and the picked device arrives at the
+   * device-state owner (use-device.ts) as an IPC push. */
+  onOpenDevicePicker: () => void;
   onOrientationChange?: (orientation: Orientation) => void;
   onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   compileStatus: { status: string; message: string };
@@ -91,7 +95,7 @@ export function SimulatorPanel({
   device,
   orientation = "portrait",
   zoom,
-  onDeviceChange,
+  onOpenDevicePicker,
   onOrientationChange = () => {},
   onZoomChange,
   compileStatus,
@@ -282,7 +286,18 @@ export function SimulatorPanel({
   return (
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">
       <div className="flex items-center gap-2 px-5 py-2 shrink-0 border-b border-border-subtle">
-        <DevicePicker device={device} devices={DEVICES} onSelect={onDeviceChange} />
+        {/* The label is the selected device's own name, so it is not a stable
+            handle for tests or automation — `data-testid` is, like the
+            compile-mode button next to it. */}
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="device-picker-button"
+          className="h-7 justify-start px-2 text-[13px] font-medium text-text-secondary"
+          onClick={onOpenDevicePicker}
+        >
+          {device.name}
+        </Button>
         <Select
           value={orientation}
           onChange={(e) => onOrientationChange(e.target.value as Orientation)}

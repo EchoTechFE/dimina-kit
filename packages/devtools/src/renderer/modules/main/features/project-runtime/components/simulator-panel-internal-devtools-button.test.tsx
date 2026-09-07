@@ -42,7 +42,7 @@ function panel(overrides: {
   const props: Parameters<typeof SimulatorPanel>[0] = {
     device: DEVICE,
     zoom: 100,
-    onDeviceChange: () => {},
+    onOpenDevicePicker: () => {},
     onZoomChange: () => {},
     compileStatus: { status: 'ready', message: '' },
     currentPage: overrides.currentPage ?? '',

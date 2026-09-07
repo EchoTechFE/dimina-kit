@@ -183,6 +183,23 @@ export const ProjectCreateChannel = {
   Submitted: 'projectCreate:submitted',
 } as const
 
+// ── Device picker ────────────────────────────────────────────────────────
+//
+// A top-tier overlay WebContentsView (VIEW_LAYER.dialog), for the same reason
+// as the project-create dialog above: the simulator's own WebContentsView is
+// mounted on top of the main renderer and overlaps the centred search panel,
+// so a DOM-portaled dialog is cut in half by it. The toolbar keeps only the
+// trigger button; it asks main to show this panel with the currently selected
+// device, and main relays the picked device name back to the toolbar.
+
+export const DevicePickerChannel = {
+  Show: 'devicePicker:show',
+  Init: 'devicePicker:init',
+  Select: 'devicePicker:select',
+  Cancel: 'devicePicker:cancel',
+  Selected: 'devicePicker:selected',
+} as const
+
 // ── Embedded settings overlay ────────────────────────────────────────────
 
 export const SettingsChannel = {

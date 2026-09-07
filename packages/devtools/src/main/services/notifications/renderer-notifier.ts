@@ -13,6 +13,7 @@ import {
   PopoverChannel,
   TooltipChannel,
   ProjectCreateChannel,
+  DevicePickerChannel,
   UpdateChannel,
   ViewChannel,
 } from '../../../shared/ipc-channels-overlays.js'
@@ -167,6 +168,12 @@ export interface RendererNotifier {
     path: string
     templateId: string
   }): void
+  /**
+   * Relay the device picked in the device-picker overlay back to the main
+   * renderer, whose simulator toolbar owns the device state — the panel only
+   * renders the list.
+   */
+  devicePickerSelected(payload: { deviceName: string }): void
 
   // ── Embedded overlays ────────────────────────────────────────────────────
   /** Initialise the currently shown compile popover overlay. */
@@ -182,6 +189,8 @@ export interface RendererNotifier {
   ): void
   /** Push a discovered update's info into the update overlay. */
   updateAvailable(dialogView: WebContentsView, payload: UpdateInfo): void
+  /** Push the currently selected device into the device-picker overlay. */
+  devicePickerInit(pickerView: WebContentsView, payload: { deviceName: string }): void
 
   // ── Standalone windows ───────────────────────────────────────────────────
   /** Initialise the standalone workbench-settings window. */
@@ -260,6 +269,9 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     projectCreateSubmitted(payload) {
       sendToMain(ProjectCreateChannel.Submitted, payload)
     },
+    devicePickerSelected(payload) {
+      sendToMain(DevicePickerChannel.Selected, payload)
+    },
 
     popoverInit(popoverView, payload) {
       const wc = liveWebContents(popoverView.webContents)
@@ -280,6 +292,11 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
       const wc = liveWebContents(dialogView.webContents)
       if (!wc) return
       wc.send(UpdateChannel.Available, payload)
+    },
+    devicePickerInit(pickerView, payload) {
+      const wc = liveWebContents(pickerView.webContents)
+      if (!wc) return
+      wc.send(DevicePickerChannel.Init, payload)
     },
     settingsInit(payload) {
       const wc = liveWebContents(ctx.views.getSettingsWebContents())

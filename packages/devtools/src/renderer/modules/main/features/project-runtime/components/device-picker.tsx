@@ -46,30 +46,32 @@ interface DevicePickerProps {
   device: DeviceProfile
   devices: readonly DeviceProfile[]
   onSelect: (name: string) => void
+  /** Dismissed without picking (Escape, or a click on the backdrop). */
+  onClose: () => void
 }
 
 /**
- * Toolbar trigger button + searchable panel over the full device table.
- * Chip filters (os / form factor) narrow the candidate list in React;
- * free-text search is left to cmdk's own fuzzy match against
- * `buildSearchValue`, so the two filters stack without either duplicating
- * the other's logic.
+ * Searchable panel over the full device table, always open: it is mounted by
+ * the device-picker overlay WebContentsView for exactly as long as that panel
+ * is shown, and the trigger button lives in the toolbar's own renderer, one
+ * WebContents away. Chip filters (os / form factor) narrow the candidate list
+ * in React; free-text search is left to cmdk's own fuzzy match against
+ * `buildSearchValue`, so the two filters stack without either duplicating the
+ * other's logic.
  */
-export function DevicePicker({ device, devices, onSelect }: DevicePickerProps) {
-  const [open, setOpen] = useState(false)
+export function DevicePicker({ device, devices, onSelect, onClose }: DevicePickerProps) {
   const [osFilter, setOsFilter] = useState<DeviceOS | null>(null)
   const [formFactorFilter, setFormFactorFilter] = useState<DeviceFormFactor | null>(null)
   const currentRowRef = useRef<HTMLDivElement>(null)
 
   // cmdk mounts the list synchronously with the dialog (no lazy content), so
-  // the current row's ref is already attached once `open` flips true.
+  // the current row's ref is already attached on this first effect run.
   useEffect(() => {
-    if (!open) return
     const el = currentRowRef.current
     if (el && typeof el.scrollIntoView === 'function') {
       el.scrollIntoView({ block: 'center' })
     }
-  }, [open])
+  }, [])
 
   const filtered = useMemo(
     () =>
@@ -89,28 +91,16 @@ export function DevicePicker({ device, devices, onSelect }: DevicePickerProps) {
     [filtered],
   )
 
-  function handleSelect(name: string) {
-    onSelect(name)
-    setOpen(false)
-  }
-
   return (
     <>
       {/* Pre-highlight the current device so Enter on a fresh open keeps it
           instead of jumping to the first row of the list. */}
       <CommandDialog
-        open={open}
-        onOpenChange={setOpen}
+        open
+        onOpenChange={(next) => {
+          if (!next) onClose()
+        }}
         title="选择机型"
-        trigger={
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 justify-start px-2 text-[13px] font-medium text-text-secondary"
-          >
-            {device.name}
-          </Button>
-        }
         commandProps={{ defaultValue: buildSearchValue(device) }}
       >
         <CommandInput placeholder="搜索机型：名称 / 系统 / 尺寸" autoFocus />
@@ -148,7 +138,7 @@ export function DevicePicker({ device, devices, onSelect }: DevicePickerProps) {
                     value={buildSearchValue(d)}
                     aria-label={d.name}
                     data-current={isCurrent || undefined}
-                    onSelect={() => handleSelect(d.name)}
+                    onSelect={() => onSelect(d.name)}
                     className="flex items-center justify-between gap-2"
                   >
                     <span className="flex min-w-0 items-center gap-2">

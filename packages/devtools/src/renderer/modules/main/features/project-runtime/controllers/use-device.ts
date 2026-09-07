@@ -17,7 +17,7 @@ import {
 } from '@devicekit/devices'
 import { frameOuterSize } from '@devicekit/frame'
 import { AUTO_ZOOM, type ZoomSetting } from '@/shared/constants'
-import { setNativeDeviceInfo } from '@/shared/api'
+import { onDevicePickerSelected, setNativeDeviceInfo, showDevicePicker } from '@/shared/api'
 import { clampPanelWidth, computeSimPanelWidth } from '../lib/device-geometry'
 
 export type DeviceType = DeviceProfile
@@ -33,6 +33,8 @@ export interface DeviceHookResult {
   simPanelWidth: number
   setSimPanelWidth: (width: number) => void
   handleDeviceChange: (name: string) => void
+  /** Ask main to show the device-picker overlay on the current device. */
+  openDevicePicker: () => void
   handleOrientationChange: (orientation: Orientation) => void
   handleZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   /**
@@ -133,6 +135,19 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     [orientation, pushDeviceInfo],
   )
 
+  // The searchable device picker is an overlay WebContentsView of its own (a
+  // DOM dialog in this renderer would be painted over by the simulator's WCV,
+  // see view-ids.ts), so opening it is a request to main and the pick comes
+  // back as a push. Device state stays owned here: an incoming pick takes the
+  // exact same path as one made in this window.
+  const openDevicePicker = useCallback(() => {
+    showDevicePicker({ deviceName: deviceRef.current.name })
+  }, [])
+
+  useEffect(() => {
+    return onDevicePickerSelected(({ deviceName }) => handleDeviceChange(deviceName))
+  }, [handleDeviceChange])
+
   const handleOrientationChange = useCallback(
     (o: Orientation) => {
       setOrientation(o)
@@ -191,6 +206,7 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     simPanelWidth,
     setSimPanelWidth,
     handleDeviceChange,
+    openDevicePicker,
     handleOrientationChange,
     handleZoomChange,
     handleSplitterDrag,

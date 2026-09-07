@@ -28,6 +28,11 @@ export interface ProjectCreateShowPayload {
   defaultBaseDir: string
 }
 
+/** Payload shown by the device-picker overlay panel (`devicePicker:show`). */
+export interface DevicePickerShowPayload {
+  deviceName: string
+}
+
 /**
  * The main-owned overlay panels: the settings sheet (right-side panel over a
  * transparent backdrop), the transient compile-mode popover, and the tooltip.
@@ -76,8 +81,17 @@ export interface OverlayPanelsView {
   hideUpdateDialog(): void
   /** Forward a download-progress tick into the (already-shown) update overlay. */
   notifyUpdateDownloadProgress(percent: number): void
+  /**
+   * Show the simulator toolbar's device picker (VIEW_LAYER.dialog). Same
+   * reason as `showProjectCreateDialog`: the simulator WCV overlaps the
+   * centred search panel, so it cannot be a DOM dialog in the toolbar's own
+   * renderer.
+   */
+  showDevicePicker(data: DevicePickerShowPayload): void
+  hideDevicePicker(): void
   getProjectCreateDialogWebContentsId(): number | null
   getUpdateDialogWebContentsId(): number | null
+  getDevicePickerWebContentsId(): number | null
 }
 
 export function createOverlayPanelsView(
@@ -216,6 +230,24 @@ export function createOverlayPanelsView(
     readyMode: 'manual',
   })
 
+  const devicePickerPanel: OverlayPanel<DevicePickerShowPayload> = createOverlayPanel<DevicePickerShowPayload>({
+    electron: { createWebContentsView: (opts) => new WebContentsView(opts) },
+    rendererDir: ctx.rendererDir,
+    entry: 'entries/device-picker/index.html',
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      preload: mainPreloadPath,
+    },
+    hardenNavigation: (wc) => applyNavigationHardening(wc, ctx.rendererDir),
+    setDesired: overlayDesiredSetter(VIEW_ID.devicePicker, VIEW_LAYER.dialog),
+    registerView: (getView) => reconciler.registerView(VIEW_ID.devicePicker, { getView }),
+    destroyView: (view) => reconciler.destroyView(VIEW_ID.devicePicker, view),
+    pushData: (view, data) => ctx.notify.devicePickerInit(view, data),
+    readyMode: 'manual',
+  })
+
   let tooltipRequestId = 0
   let activeTooltip: { requestId: number; anchor: TooltipShowPayload['anchor'] } | null = null
 
@@ -282,6 +314,14 @@ export function createOverlayPanelsView(
     updateDialogPanel.hide()
   }
 
+  function showDevicePicker(data: DevicePickerShowPayload): void {
+    devicePickerPanel.show(data, fullWindowBounds())
+  }
+
+  function hideDevicePicker(): void {
+    devicePickerPanel.hide()
+  }
+
   function notifyUpdateDownloadProgress(percent: number): void {
     const wc = updateDialogPanel.getWebContents()
     if (!wc) return
@@ -294,6 +334,7 @@ export function createOverlayPanelsView(
     tooltipPanel.markReady(webContentsId)
     projectCreateDialogPanel.markReady(webContentsId)
     updateDialogPanel.markReady(webContentsId)
+    devicePickerPanel.markReady(webContentsId)
   }
 
   function applyTooltipMeasurement(
@@ -324,6 +365,9 @@ export function createOverlayPanelsView(
     if (updateDialogPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.updateDialog)) {
       updateDialogPanel.reposition(fullWindowBounds())
     }
+    if (devicePickerPanel.isPresent() && reconciler.hasOverlayDesired(VIEW_ID.devicePicker)) {
+      devicePickerPanel.reposition(fullWindowBounds())
+    }
   }
 
   function applySettingsBoundsIfPresent(): void {
@@ -342,6 +386,7 @@ export function createOverlayPanelsView(
   function destroyDialogs(): void {
     projectCreateDialogPanel.destroy()
     updateDialogPanel.destroy()
+    devicePickerPanel.destroy()
   }
 
   return {
@@ -359,6 +404,8 @@ export function createOverlayPanelsView(
     showUpdateDialog,
     hideUpdateDialog,
     notifyUpdateDownloadProgress,
+    showDevicePicker,
+    hideDevicePicker,
     reapplyPresentOverlays,
     applySettingsBoundsIfPresent,
     destroySettings,
@@ -369,5 +416,6 @@ export function createOverlayPanelsView(
     getTooltipWebContentsId: () => tooltipPanel.getWebContentsId(),
     getProjectCreateDialogWebContentsId: () => projectCreateDialogPanel.getWebContentsId(),
     getUpdateDialogWebContentsId: () => updateDialogPanel.getWebContentsId(),
+    getDevicePickerWebContentsId: () => devicePickerPanel.getWebContentsId(),
   }
 }

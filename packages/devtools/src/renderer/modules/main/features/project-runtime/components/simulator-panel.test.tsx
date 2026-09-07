@@ -1,13 +1,13 @@
 /**
- * SimulatorPanel's device/orientation pickers against the @devicekit/devices
- * table: the device picker is a button showing the current device name that
- * opens DevicePicker's searchable panel over the FULL DEVICES table (not
- * just CLASSIC_DEVICES — DevicePicker owns that distinction now), so
- * non-classic devices like 'iPad Pro 13' must be reachable from here too. A
- * separate orientation <Select> (portrait/landscape) reports changes via
- * onOrientationChange.
+ * SimulatorPanel's device/orientation controls. The device control is a button
+ * showing the current device name; the searchable list itself lives in the
+ * device-picker overlay WebContentsView, because the simulator's own WCV is
+ * painted over this panel and would cut a centred dialog in half. So the panel
+ * only reports the click through `onOpenDevicePicker` and must render no device
+ * options of its own. A separate orientation <Select> (portrait/landscape)
+ * reports changes via onOrientationChange.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import type { Placement } from '@dimina-kit/view-anchor'
 import type { PlacementPublisher } from '@dimina-kit/electron-deck/client'
@@ -34,14 +34,17 @@ const publisher = {
   dispose: vi.fn(),
 } as unknown as PlacementPublisher<{ zoom?: number }>
 
-function panelElement(onOrientationChange: (o: 'portrait' | 'landscape') => void = () => {}) {
+function panelElement(
+  onOrientationChange: (o: 'portrait' | 'landscape') => void = () => {},
+  onOpenDevicePicker: () => void = () => {},
+) {
   return (
     <PlacementPublisherContext.Provider value={publisher}>
       <SimulatorPanel
         device={DEFAULT_DEVICE}
         orientation="portrait"
         zoom={85}
-        onDeviceChange={() => {}}
+        onOpenDevicePicker={onOpenDevicePicker}
         onOrientationChange={onOrientationChange}
         onZoomChange={() => {}}
         compileStatus={{ status: 'ready', message: '' }}
@@ -53,21 +56,8 @@ function panelElement(onOrientationChange: (o: 'portrait' | 'landscape') => void
   )
 }
 
-// cmdk (inside DevicePicker) measures its list via ResizeObserver, which
-// jsdom does not implement.
-class ResizeObserverStub {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
-
 beforeEach(() => {
   cleanup()
-  vi.stubGlobal('ResizeObserver', ResizeObserverStub)
-})
-
-afterEach(() => {
-  vi.unstubAllGlobals()
 })
 
 describe('SimulatorPanel: device picker trigger', () => {
@@ -78,12 +68,18 @@ describe('SimulatorPanel: device picker trigger', () => {
     expect(container.querySelector('select option[value="' + DEFAULT_DEVICE.name + '"]')).toBeNull()
   })
 
-  it('opens DevicePicker over the full DEVICES table, reaching non-classic devices like iPad Pro 13', async () => {
-    render(panelElement())
+  it('reports the click to the device-state owner and renders no device list of its own', () => {
+    const onOpenDevicePicker = vi.fn()
+    render(panelElement(() => {}, onOpenDevicePicker))
 
     fireEvent.click(screen.getByRole('button', { name: DEFAULT_DEVICE.name }))
 
-    expect(await screen.findByRole('option', { name: DEVICE_NAMES.iPad_Pro_13 })).toBeInTheDocument()
+    expect(onOpenDevicePicker).toHaveBeenCalledTimes(1)
+    // The device list belongs to the overlay view. A dialog or device rows
+    // rendered here would be painted behind the simulator WCV — the options
+    // still present in this DOM are the orientation/zoom <select>s'.
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByRole('option', { name: DEVICE_NAMES.iPad_Pro_13 })).toBeNull()
   })
 })
 

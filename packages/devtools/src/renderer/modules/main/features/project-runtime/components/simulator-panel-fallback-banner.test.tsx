@@ -51,7 +51,7 @@ function panel(runtimeStatus: SessionRuntimeStatusPayload | null) {
   const props: PanelPropsWithRuntime = {
     device: DEVICE,
     zoom: 100,
-    onDeviceChange: () => {},
+    onOpenDevicePicker: () => {},
     onZoomChange: () => {},
     compileStatus: { status: 'ready', message: '' },
     currentPage: RESOLVED,

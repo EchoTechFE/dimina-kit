@@ -40,6 +40,7 @@ export default defineConfig({
         settings: resolve(rendererRoot, 'entries/settings/index.html'),
         tooltip: resolve(rendererRoot, 'entries/tooltip/index.html'),
         projectCreateDialog: resolve(rendererRoot, 'entries/project-create-dialog/index.html'),
+        devicePicker: resolve(rendererRoot, 'entries/device-picker/index.html'),
         updateDialog: resolve(rendererRoot, 'entries/update-dialog/index.html'),
         workbenchSettings: resolve(rendererRoot, 'entries/workbench-settings/index.html'),
         hostSidebarDefault: resolve(rendererRoot, 'entries/host-sidebar-default/index.html'),

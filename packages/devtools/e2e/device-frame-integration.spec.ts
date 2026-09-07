@@ -33,6 +33,8 @@ import {
   findMainWindow,
   installConsoleCollector,
   readConsoleErrors,
+  devicePickerToolbarButton,
+  selectDeviceInPicker,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
 import {
@@ -71,8 +73,7 @@ function expectedLayoutMode(deviceName: string, orientation: Orientation): strin
 
 // ── Toolbar driving ────────────────────────────────────────────────────
 async function selectDevice(win: PwPage, deviceName: string): Promise<void> {
-  const sel = win.locator('select', { has: win.locator(`option[value="${deviceName}"]`) }).first()
-  await sel.selectOption(deviceName)
+  await selectDeviceInPicker(win, electronApp, deviceName)
 }
 
 async function selectOrientation(win: PwPage, orientation: Orientation): Promise<void> {
@@ -209,8 +210,8 @@ test.describe('device-frame integration e2e', () => {
   test('1. boots with device-frame reflecting the toolbar default device', async () => {
     // Fresh per-run userDataDir (mkdir'd above under this process's pid) — no
     // persisted device setting to override the boot default.
-    const deviceSelect = workbench.locator('select', { has: workbench.locator(`option[value="${DEVICE_NAMES.iPhone_X}"]`) }).first()
-    const toolbarDevice = await deviceSelect.inputValue()
+    // The toolbar button's label IS the selected device's name.
+    const toolbarDevice = (await devicePickerToolbarButton(workbench).innerText()).trim()
 
     const snap = await pollUntil(
       () => readFrameSnapshot(electronApp),

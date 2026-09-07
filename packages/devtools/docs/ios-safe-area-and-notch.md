@@ -14,7 +14,7 @@ devtools 只用其中几个入口：
 
 | 入口 | 用途 |
 |---|---|
-| `CLASSIC_DEVICES` | 工具栏设备下拉只列这份精选子集（≤20 台，同一批对象，按 iOS → Android → HarmonyOS 分组） |
+| `DEVICES` | 工具栏的设备选择面板列出整张表，按 iOS → Android → HarmonyOS 分组，靠搜索和机型/尺寸筛选缩小范围 |
 | `findDevice(name)` / `DEFAULT_DEVICE` | 按名字回查机型；找不到时回落到默认机型 |
 | `resolveDevice` / `statusBarHeightFor` / `safeAreaInsetsFor` | 按当前横竖屏解析出已经旋转过的数值 |
 | `PLATFORM_DEFAULTS` | 第一份设备信息到达前，DeviceShell 用平台默认状态栏高度占位 |

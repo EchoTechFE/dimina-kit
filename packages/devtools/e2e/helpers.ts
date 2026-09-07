@@ -781,6 +781,143 @@ const SET_NATIVE_VALUE_JS = `
   }
 `
 
+// ── Device-picker helpers ──────────────────────────────────────────────
+//
+// The toolbar's device button no longer opens a DOM `<select>`: the picker is
+// a searchable panel living in its OWN top-level WebContents
+// (overlay-panels-view.ts, loads `entries/device-picker/index.html`). It has to
+// be, because the simulator is itself a WebContentsView painted over the
+// workbench renderer and would cut a DOM dialog in half. So driving it means
+// running script inside that WebContents, like the popover helpers above.
+
+/**
+ * The toolbar's device button. Its label is the selected device's own name, so
+ * it can't be located by a fixed accessible name; `[data-testid]` is the stable
+ * handle (same reasoning as the compile-mode button).
+ */
+export function devicePickerToolbarButton(workbench: Page) {
+  return workbench.getByTestId('device-picker-button')
+}
+
+/** Resolve the device-picker WebContents id once it exists and has finished loading. */
+export async function findDevicePickerWebContentsId(
+  electronApp: ElectronApplication,
+  timeout = 10000,
+): Promise<number> {
+  const id = await pollUntil(
+    () => electronApp.evaluate(({ webContents }) => {
+      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes('entries/device-picker'))
+      return wc && !wc.isLoading() ? wc.id : 0
+    }),
+    (v) => v > 0,
+    timeout,
+    200,
+  )
+  if (!id) throw new Error('device-picker webContents not found')
+  return id
+}
+
+/** Run `expression` inside the device-picker WebContents. */
+export async function evalInDevicePicker<T = unknown>(
+  electronApp: ElectronApplication,
+  expression: string,
+): Promise<T> {
+  const wcId = await findDevicePickerWebContentsId(electronApp)
+  return electronApp.evaluate(async ({ webContents }, args) => {
+    const wc = webContents.fromId(args.wcId)
+    if (!wc) throw new Error('device-picker webContents vanished mid-interaction')
+    return wc.executeJavaScript(args.expression)
+  }, { wcId, expression }) as Promise<T>
+}
+
+/** How many device rows the picker is currently offering (0 while it is hidden). */
+async function devicePickerOptionCount(electronApp: ElectronApplication): Promise<number> {
+  return evalInDevicePicker<number>(
+    electronApp,
+    `document.querySelectorAll('[role="option"]').length`,
+  ).catch(() => 0)
+}
+
+/**
+ * Click the toolbar device button and wait until the panel has actually
+ * rendered its device list. The overlay WCV is created lazily on the first
+ * open, so the first call also waits out the page load.
+ */
+export async function openDevicePicker(
+  workbench: Page,
+  electronApp: ElectronApplication,
+): Promise<void> {
+  await devicePickerToolbarButton(workbench).click()
+  const count = await pollUntil(() => devicePickerOptionCount(electronApp), (n) => n > 0, 15000, 200)
+  if (!count) throw new Error('device picker did not render any device rows')
+}
+
+/** Dismiss the picker the way Escape does, and wait for its dialog to unmount. */
+export async function closeDevicePicker(electronApp: ElectronApplication): Promise<void> {
+  await evalInDevicePicker(electronApp, `(() => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    return true
+  })()`)
+  const closed = await pollUntil(
+    () => evalInDevicePicker<boolean>(
+      electronApp,
+      `document.querySelector('[role="dialog"]') === null`,
+    ).catch(() => false),
+    (ok) => ok === true,
+    10000,
+    200,
+  )
+  if (!closed) throw new Error('device picker stayed open after Escape')
+}
+
+/**
+ * The full user path behind a device switch: open the picker, type the device
+ * name into its search box, click the matching row, and wait for the panel to
+ * withdraw. The overlay view is reused across openings, so "withdrawn" means
+ * its React tree unmounted the dialog, not that the WebContents went away.
+ */
+export async function selectDeviceInPicker(
+  workbench: Page,
+  electronApp: ElectronApplication,
+  deviceName: string,
+): Promise<void> {
+  await openDevicePicker(workbench, electronApp)
+
+  await evalInDevicePicker(electronApp, `(() => {
+    ${SET_NATIVE_VALUE_JS}
+    const input = document.querySelector('input[role="combobox"]') || document.querySelector('input')
+    if (!input) throw new Error('device picker search input not found')
+    __dkSetNativeValue(input, ${JSON.stringify(deviceName)})
+    return true
+  })()`)
+
+  const clicked = await pollUntil(
+    () => evalInDevicePicker<boolean>(electronApp, `(() => {
+      const name = ${JSON.stringify(deviceName)}
+      const row = Array.from(document.querySelectorAll('[role="option"]'))
+        .find((el) => el.getAttribute('aria-label') === name)
+      if (!row) return false
+      row.click()
+      return true
+    })()`).catch(() => false),
+    (ok) => ok === true,
+    10000,
+    200,
+  )
+  if (!clicked) throw new Error(`device picker never offered a row for ${deviceName}`)
+
+  const closed = await pollUntil(
+    () => evalInDevicePicker<boolean>(
+      electronApp,
+      `document.querySelector('[role="dialog"]') === null`,
+    ).catch(() => false),
+    (ok) => ok === true,
+    10000,
+    200,
+  )
+  if (!closed) throw new Error('device picker stayed open after picking a device')
+}
+
 /**
  * Press a control the way a mouse does: pointer/mouse down, up, then click.
  *
