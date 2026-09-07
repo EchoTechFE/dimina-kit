@@ -39,6 +39,20 @@ export const BRIDGE_CHANNELS = {
    * this to report multi-page stacks. Fire-and-forget.
    */
   PAGE_STACK: 'dmb:page-stack',
+  /**
+   * preload (window.wx.request, no service-host in the picture) → main
+   * (invoke): run an HTTP request through the main-process native transport
+   * (`main/services/native-request`) instead of the renderer's `fetch()`, so
+   * it never hits Chromium's Fetch/CORS algorithm (no spurious OPTIONS
+   * preflight). Reply is a `NativeRequestResult` (success or fail shape).
+   */
+  NATIVE_REQUEST: 'dmb:native-request',
+  /**
+   * preload → main: cancel the in-flight native request named by the
+   * requestId a prior NATIVE_REQUEST call was invoked with. Fire-and-forget;
+   * a requestId that already settled or belongs to another sender is a no-op.
+   */
+  NATIVE_REQUEST_ABORT: 'dmb:native-request-abort',
 } as const
 
 export const SIMULATOR_EVENTS = {
@@ -104,7 +118,7 @@ export interface NativeHostConfig {
   device?: NativeDeviceInfo
 }
 
-export type BridgeChannel = typeof BRIDGE_CHANNELS[keyof typeof BRIDGE_CHANNELS]
+export type BridgeChannel = (typeof BRIDGE_CHANNELS)[keyof typeof BRIDGE_CHANNELS]
 
 export type BridgeTarget = 'service' | 'render' | 'container'
 

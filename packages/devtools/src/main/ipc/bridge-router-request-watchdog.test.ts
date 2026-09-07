@@ -32,14 +32,29 @@ const stubs = vi.hoisted(() => {
     const listeners: EventBag = {}
     const api = {
       listeners,
-      on(event: string, fn: AnyFn) { (listeners[event] ??= new Set()).add(fn); return api },
-      once(event: string, fn: AnyFn) {
-        const wrap: AnyFn = (...a: unknown[]) => { listeners[event]?.delete(wrap); return fn(...a) }
-        ;(listeners[event] ??= new Set()).add(wrap); return api
+      on(event: string, fn: AnyFn) {
+        ;(listeners[event] ??= new Set()).add(fn)
+        return api
       },
-      off(event: string, fn: AnyFn) { listeners[event]?.delete(fn); return api },
-      removeListener(event: string, fn: AnyFn) { listeners[event]?.delete(fn); return api },
-      emit(event: string, ...a: unknown[]) { for (const fn of [...(listeners[event] ?? [])]) fn(...a) },
+      once(event: string, fn: AnyFn) {
+        const wrap: AnyFn = (...a: unknown[]) => {
+          listeners[event]?.delete(wrap)
+          return fn(...a)
+        }
+        ;(listeners[event] ??= new Set()).add(wrap)
+        return api
+      },
+      off(event: string, fn: AnyFn) {
+        listeners[event]?.delete(fn)
+        return api
+      },
+      removeListener(event: string, fn: AnyFn) {
+        listeners[event]?.delete(fn)
+        return api
+      },
+      emit(event: string, ...a: unknown[]) {
+        for (const fn of [...(listeners[event] ?? [])]) fn(...a)
+      },
     }
     return api
   }
@@ -53,10 +68,14 @@ const stubs = vi.hoisted(() => {
       ...em,
       id: nextWcId++,
       destroyed: false,
-      isDestroyed() { return this.destroyed },
+      isDestroyed() {
+        return this.destroyed
+      },
       getURL: () => 'about:blank',
       getType: () => 'window',
-      send: vi.fn((channel: string, payload: unknown) => { sent.push({ channel, payload }) }),
+      send: vi.fn((channel: string, payload: unknown) => {
+        sent.push({ channel, payload })
+      }),
       executeJavaScript: vi.fn(() => Promise.resolve(undefined)),
       openDevTools: vi.fn(),
       sentMessages: sent,
@@ -71,8 +90,12 @@ const stubs = vi.hoisted(() => {
       ...em,
       webContents: makeWebContents(),
       destroyed: false,
-      isDestroyed() { return this.destroyed },
-      close: vi.fn(function (this: { destroyed: boolean }) { this.destroyed = true }),
+      isDestroyed() {
+        return this.destroyed
+      },
+      close: vi.fn(function (this: { destroyed: boolean }) {
+        this.destroyed = true
+      }),
       loadURL: vi.fn(() => Promise.resolve()),
       loadFile: vi.fn(() => Promise.resolve()),
     }
@@ -85,7 +108,15 @@ const stubs = vi.hoisted(() => {
     nextWcId = 8000
   }
 
-  return { onListeners, invokeHandlers, wcById, makeEmitter, makeWebContents, makeBrowserWindow, reset }
+  return {
+    onListeners,
+    invokeHandlers,
+    wcById,
+    makeEmitter,
+    makeWebContents,
+    makeBrowserWindow,
+    reset,
+  }
 })
 
 vi.mock('electron', () => {
@@ -93,16 +124,26 @@ vi.mock('electron', () => {
 
   const ipcMain = {
     on: vi.fn((channel: string, fn: AnyFn) => {
-      ;(stubs.onListeners.get(channel) ?? stubs.onListeners.set(channel, new Set()).get(channel)!).add(fn)
+      ;(
+        stubs.onListeners.get(channel) ?? stubs.onListeners.set(channel, new Set()).get(channel)!
+      ).add(fn)
     }),
     removeListener: vi.fn((channel: string, fn: AnyFn) => {
       stubs.onListeners.get(channel)?.delete(fn)
     }),
-    handle: vi.fn((channel: string, fn: AnyFn) => { stubs.invokeHandlers.set(channel, fn) }),
-    removeHandler: vi.fn((channel: string) => { stubs.invokeHandlers.delete(channel) }),
+    handle: vi.fn((channel: string, fn: AnyFn) => {
+      stubs.invokeHandlers.set(channel, fn)
+    }),
+    removeHandler: vi.fn((channel: string) => {
+      stubs.invokeHandlers.delete(channel)
+    }),
   }
 
-  const protocolStub = { handle: vi.fn(), unhandle: vi.fn(), registerSchemesAsPrivileged: vi.fn() }
+  const protocolStub = {
+    handle: vi.fn(),
+    unhandle: vi.fn(),
+    registerSchemesAsPrivileged: vi.fn(),
+  }
   const sessionStub = {
     fromPartition: vi.fn(() => ({
       webRequest: { onBeforeSendHeaders: vi.fn(), onHeadersReceived: vi.fn() },
@@ -114,12 +155,23 @@ vi.mock('electron', () => {
 
   return {
     ipcMain,
-    app: { isPackaged: true, getLocale: () => 'en-US', getPath: vi.fn(() => '/tmp/dimina-test-userdata') },
+    app: {
+      isPackaged: true,
+      getLocale: () => 'en-US',
+      getPath: vi.fn(() => '/tmp/dimina-test-userdata'),
+    },
     BrowserWindow: class {},
-    WebContentsView: class { webContents = {}; setBounds = vi.fn(); setBackgroundColor = vi.fn() },
+    WebContentsView: class {
+      webContents = {}
+      setBounds = vi.fn()
+      setBackgroundColor = vi.fn()
+    },
     protocol: protocolStub,
     session: sessionStub,
-    webContents: { fromId: vi.fn(() => null), getAllWebContents: vi.fn(() => []) },
+    webContents: {
+      fromId: vi.fn(() => null),
+      getAllWebContents: vi.fn(() => []),
+    },
     nativeTheme: { themeSource: 'system', on: vi.fn() },
     default: {},
   }
@@ -136,7 +188,13 @@ vi.mock('@dimina-kit/electron-runtime/main/service-host-window', () => ({
 }))
 
 import { BRIDGE_CHANNELS as C } from '../../shared/bridge-channels.js'
-import type { ApiResponsePayload, MessageEnvelope, ServiceInvokePayload, SpawnRequest, SpawnResult } from '../../shared/bridge-channels.js'
+import type {
+  ApiResponsePayload,
+  MessageEnvelope,
+  ServiceInvokePayload,
+  SpawnRequest,
+  SpawnResult,
+} from '../../shared/bridge-channels.js'
 import type { WorkbenchContext } from '../services/workbench-context.js'
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
 
@@ -167,14 +225,22 @@ function makeCtx(): { ctx: WorkbenchContext; simulatorWc: MockWc } {
   const ctx = {
     registry: { add: (_fn: AnyFn) => {} },
     connections: createConnectionRegistry(),
-    simulatorApis: { has: (_name: string) => false, invoke: async () => ({}), list: () => [] },
-    windows: { mainWindow: { webContents: simulatorWc, isDestroyed: () => false } },
+    simulatorApis: {
+      has: (_name: string) => false,
+      invoke: async () => ({}),
+      list: () => [],
+    },
+    windows: {
+      mainWindow: { webContents: simulatorWc, isDestroyed: () => false },
+    },
     workspace: { getSession: () => undefined },
   } as unknown as WorkbenchContext
   return { ctx, simulatorWc }
 }
 
-async function spawnSession(simulatorWc: MockWc): Promise<{ result: SpawnResult; serviceWc: MockWc }> {
+async function spawnSession(
+  simulatorWc: MockWc,
+): Promise<{ result: SpawnResult; serviceWc: MockWc }> {
   const handle = stubs.invokeHandlers.get(C.SPAWN)
   if (!handle) throw new Error('SPAWN handler not registered')
   const req: SpawnRequest = {
@@ -226,60 +292,100 @@ function triggerCallbacks(serviceWc: MockWc): Array<{ id: unknown; args: unknown
 async function setup(
   name: string,
   params: Record<string, unknown>,
-): Promise<{ ctx: WorkbenchContext; simulatorWc: MockWc; serviceWc: MockWc; requestId: string }> {
+): Promise<{
+  ctx: WorkbenchContext
+  simulatorWc: MockWc
+  serviceWc: MockWc
+  requestId: string
+}> {
   const { ctx, simulatorWc } = makeCtx()
   installBridgeRouter(ctx)
   const { serviceWc } = await spawnSession(simulatorWc)
-  forwardApiCall(serviceWc, name, params, { success: 'svc-success', complete: 'svc-complete', fail: 'svc-fail' })
+  forwardApiCall(serviceWc, name, params, {
+    success: 'svc-success',
+    complete: 'svc-complete',
+    fail: 'svc-fail',
+  })
   const requestId = forwardedRequestId(simulatorWc)
   return { ctx, simulatorWc, serviceWc, requestId }
 }
 
-describe('bridge-router — forwarded `request` call watchdog scales with the wx timeout budget', () => {
+describe('bridge-router — forwarded `downloadFile` call watchdog scales with the wx timeout budget', () => {
   it('does not fail at the legacy 5s mark, and still delivers a within-budget late success (e.g. at 30s)', async () => {
-    const { simulatorWc, serviceWc, requestId } = await setup('request', { url: 'https://example.com/api' })
+    const { simulatorWc, serviceWc, requestId } = await setup('downloadFile', {
+      url: 'https://example.com/file.bin',
+    })
 
     await vi.advanceTimersByTimeAsync(5_000)
     let cbs = triggerCallbacks(serviceWc)
-    expect(cbs.find(c => c.id === 'svc-fail'), 'must not fail at the legacy 5s mark').toBeUndefined()
+    expect(
+      cbs.find(c => c.id === 'svc-fail'),
+      'must not fail at the legacy 5s mark',
+    ).toBeUndefined()
 
     await vi.advanceTimersByTimeAsync(25_000) // now 30s since the call was forwarded
 
-    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: true, result: { data: { a: 1 }, statusCode: 200 } }
+    const resp: ApiResponsePayload = {
+      appSessionId: 'demo-app',
+      requestId,
+      ok: true,
+      result: { filePath: '/tmp/file.bin', statusCode: 200 },
+    }
     emitOn(C.API_RESPONSE, simulatorWc, resp)
 
     cbs = triggerCallbacks(serviceWc)
     const successFire = cbs.find(c => c.id === 'svc-success')
-    expect(successFire, 'a within-budget late response must still be delivered (pending not torn down)').toBeDefined()
-    expect(successFire!.args).toEqual({ data: { a: 1 }, statusCode: 200 })
+    expect(
+      successFire,
+      'a within-budget late response must still be delivered (pending not torn down)',
+    ).toBeDefined()
+    expect(successFire!.args).toEqual({
+      filePath: '/tmp/file.bin',
+      statusCode: 200,
+    })
   })
 
   it('fires "no handler (timeout)" only once the full 60000ms default budget + 5000ms grace elapses (65000ms), not before', async () => {
-    const { serviceWc } = await setup('request', { url: 'https://example.com/api' })
+    const { serviceWc } = await setup('downloadFile', {
+      url: 'https://example.com/file.bin',
+    })
 
     await vi.advanceTimersByTimeAsync(64_999)
     let cbs = triggerCallbacks(serviceWc)
-    expect(cbs.find(c => c.id === 'svc-fail'), 'must not fire before 65000ms').toBeUndefined()
+    expect(
+      cbs.find(c => c.id === 'svc-fail'),
+      'must not fire before 65000ms',
+    ).toBeUndefined()
 
     await vi.advanceTimersByTimeAsync(1) // now exactly 65000ms
     cbs = triggerCallbacks(serviceWc)
     const failFire = cbs.find(c => c.id === 'svc-fail')
     expect(failFire, 'must fire exactly at 65000ms').toBeDefined()
-    expect((failFire!.args as { errMsg?: string }).errMsg).toBe('request:fail no handler (timeout)')
+    expect((failFire!.args as { errMsg?: string }).errMsg).toBe(
+      'downloadFile:fail no handler (timeout)',
+    )
   })
 
   it('honors an explicit params.timeout: 1000 as a 6000ms watchdog window (timeout + 5000ms grace)', async () => {
-    const { serviceWc } = await setup('request', { url: 'https://example.com/api', timeout: 1000 })
+    const { serviceWc } = await setup('downloadFile', {
+      url: 'https://example.com/file.bin',
+      timeout: 1000,
+    })
 
     await vi.advanceTimersByTimeAsync(5_999)
     let cbs = triggerCallbacks(serviceWc)
-    expect(cbs.find(c => c.id === 'svc-fail'), 'must not fire before 6000ms').toBeUndefined()
+    expect(
+      cbs.find(c => c.id === 'svc-fail'),
+      'must not fire before 6000ms',
+    ).toBeUndefined()
 
     await vi.advanceTimersByTimeAsync(1) // now exactly 6000ms
     cbs = triggerCallbacks(serviceWc)
     const failFire = cbs.find(c => c.id === 'svc-fail')
     expect(failFire, 'must fire exactly at 6000ms').toBeDefined()
-    expect((failFire!.args as { errMsg?: string }).errMsg).toBe('request:fail no handler (timeout)')
+    expect((failFire!.args as { errMsg?: string }).errMsg).toBe(
+      'downloadFile:fail no handler (timeout)',
+    )
   })
 })
 
@@ -289,13 +395,71 @@ describe('bridge-router — non-network API calls keep the flat 5000ms watchdog 
 
     await vi.advanceTimersByTimeAsync(4_999)
     let cbs = triggerCallbacks(serviceWc)
-    expect(cbs.find(c => c.id === 'svc-fail'), 'must not fire before 5000ms').toBeUndefined()
+    expect(
+      cbs.find(c => c.id === 'svc-fail'),
+      'must not fire before 5000ms',
+    ).toBeUndefined()
 
     await vi.advanceTimersByTimeAsync(1) // now exactly 5000ms
     cbs = triggerCallbacks(serviceWc)
     const failFire = cbs.find(c => c.id === 'svc-fail')
     expect(failFire, 'must fire exactly at 5000ms').toBeDefined()
-    expect((failFire!.args as { errMsg?: string }).errMsg).toBe('showToast:fail no handler (timeout)')
+    expect((failFire!.args as { errMsg?: string }).errMsg).toBe(
+      'showToast:fail no handler (timeout)',
+    )
+  })
+})
+
+describe('bridge-router — `request` never uses the simulator-forwarding watchdog (main-process native handler owns it)', () => {
+  it('assigns distinct native ids to concurrent requests in the same millisecond', async () => {
+    const { ctx, simulatorWc } = makeCtx()
+    installBridgeRouter(ctx)
+    const { serviceWc } = await spawnSession(simulatorWc)
+    const ids: string[] = []
+    ctx.bridge!.onNativeRequestTrace!((_owner, event) => {
+      if (event.type === 'sent') ids.push(event.requestId)
+    })
+    for (let i = 0; i < 2; i++) {
+      forwardApiCall(serviceWc, 'request', { url: 'http://127.0.0.1:1/' }, {})
+    }
+    await vi.advanceTimersByTimeAsync(0)
+    expect(ids).toHaveLength(2)
+    expect(new Set(ids).size).toBe(2)
+  })
+
+  it('a forwarded request call never sends simulator:api-call, and settles via the native HTTP handler instead', async () => {
+    const { ctx, simulatorWc } = makeCtx()
+    installBridgeRouter(ctx)
+    const { serviceWc } = await spawnSession(simulatorWc)
+
+    // Connection-refused address: settles fast, no real network I/O.
+    forwardApiCall(
+      serviceWc,
+      'request',
+      { url: 'http://127.0.0.1:1/' },
+      {
+        success: 'svc-success',
+        complete: 'svc-complete',
+        fail: 'svc-fail',
+      },
+    )
+
+    // Give the native transport's error event a turn to fire.
+    await vi.advanceTimersByTimeAsync(0)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const apiCall = simulatorWc.sentMessages.find(m => m.channel === 'simulator:api-call')
+    expect(
+      apiCall,
+      'request must never be forwarded to the simulator window — it is handled entirely in the main process',
+    ).toBeUndefined()
+
+    const cbs = triggerCallbacks(serviceWc)
+    expect(
+      cbs.find(c => c.id === 'svc-fail'),
+      'the native handler must still deliver a fail callback for the refused connection',
+    ).toBeDefined()
   })
 })
 
@@ -314,14 +478,22 @@ describe('bridge-router — non-network API calls keep the flat 5000ms watchdog 
 // not prevent the real, later verdict from being delivered.
 describe('bridge-router — a simulator-side ack must not resolve the call, and must not block the later real verdict', () => {
   it('an ack-shaped API_RESPONSE does not fire fail/complete, does not time out, and the later real success is still delivered', async () => {
-    const { simulatorWc, serviceWc, requestId } = await setup('showToast', { title: 'hi' })
+    const { simulatorWc, serviceWc, requestId } = await setup('showToast', {
+      title: 'hi',
+    })
 
     const ackPayload = { appSessionId: 'demo-app', requestId, ack: true }
     emitOn(C.API_RESPONSE, simulatorWc, ackPayload)
 
     let cbs = triggerCallbacks(serviceWc)
-    expect(cbs.find(c => c.id === 'svc-fail'), 'an ack must not resolve the call as a failure').toBeUndefined()
-    expect(cbs.find(c => c.id === 'svc-complete'), 'an ack must not fire complete').toBeUndefined()
+    expect(
+      cbs.find(c => c.id === 'svc-fail'),
+      'an ack must not resolve the call as a failure',
+    ).toBeUndefined()
+    expect(
+      cbs.find(c => c.id === 'svc-complete'),
+      'an ack must not fire complete',
+    ).toBeUndefined()
 
     // Advance past the flat 5000ms no-handler watchdog window that would
     // otherwise apply to a plain (non-network) API like showToast.
@@ -334,10 +506,18 @@ describe('bridge-router — a simulator-side ack must not resolve the call, and 
 
     // The real, later verdict must still be deliverable — an ack must not
     // have torn the pending call down.
-    const resp: ApiResponsePayload = { appSessionId: 'demo-app', requestId, ok: true, result: { errMsg: 'showToast:ok' } }
+    const resp: ApiResponsePayload = {
+      appSessionId: 'demo-app',
+      requestId,
+      ok: true,
+      result: { errMsg: 'showToast:ok' },
+    }
     emitOn(C.API_RESPONSE, simulatorWc, resp)
     cbs = triggerCallbacks(serviceWc)
     const successFire = cbs.find(c => c.id === 'svc-success')
-    expect(successFire, 'the real verdict following an ack must still be delivered to the service').toBeDefined()
+    expect(
+      successFire,
+      'the real verdict following an ack must still be delivered to the service',
+    ).toBeDefined()
   })
 })

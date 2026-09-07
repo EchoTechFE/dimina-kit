@@ -1,20 +1,23 @@
-import { performRequest } from '../../shared/request-core.js'
+import { ipcRenderer } from "electron";
+import { BRIDGE_CHANNELS } from "../../shared/bridge-channels.js";
 
-type Callback<T = unknown> = ((payload: T) => void) | undefined
+type Callback<T = unknown> = ((payload: T) => void) | undefined;
 
 function call<T>(fn: Callback<T>, payload: T): void {
   try {
-    fn?.(payload)
+    fn?.(payload);
   } catch {
     // Ignore callback errors in compat shims.
   }
 }
 
 function buildWindowInfo() {
-  const width = window.innerWidth || document.documentElement.clientWidth || 375
-  const height = window.innerHeight || document.documentElement.clientHeight || 812
-  const pixelRatio = window.devicePixelRatio || 2
-  const statusBarHeight = 0
+  const width =
+    window.innerWidth || document.documentElement.clientWidth || 375;
+  const height =
+    window.innerHeight || document.documentElement.clientHeight || 812;
+  const pixelRatio = window.devicePixelRatio || 2;
+  const statusBarHeight = 0;
   return {
     pixelRatio,
     screenWidth: width,
@@ -30,124 +33,133 @@ function buildWindowInfo() {
       left: 0,
       right: width,
     },
-  }
+  };
 }
 
 function makeStorageKey(key: string): string {
-  return `dimina:${key}`
+  return `dimina:${key}`;
 }
 
 function ensureWxApi(wx: Record<string, unknown>): void {
-  if (typeof wx.canIUse !== 'function') {
-    wx.canIUse = (_schema: unknown) => true
+  if (typeof wx.canIUse !== "function") {
+    wx.canIUse = (_schema: unknown) => true;
   }
 
-  if (typeof wx.getWindowInfo !== 'function') {
-    wx.getWindowInfo = (opts: { success?: Callback<unknown>; complete?: Callback<void> } = {}) => {
-      const info = buildWindowInfo()
-      call(opts.success, info)
-      call(opts.complete, undefined)
-      return info
-    }
+  if (typeof wx.getWindowInfo !== "function") {
+    wx.getWindowInfo = (
+      opts: { success?: Callback<unknown>; complete?: Callback<void> } = {},
+    ) => {
+      const info = buildWindowInfo();
+      call(opts.success, info);
+      call(opts.complete, undefined);
+      return info;
+    };
   }
 
-  if (typeof wx.getSystemSetting !== 'function') {
-    wx.getSystemSetting = (opts: { success?: Callback<unknown>; complete?: Callback<void> } = {}) => {
+  if (typeof wx.getSystemSetting !== "function") {
+    wx.getSystemSetting = (
+      opts: { success?: Callback<unknown>; complete?: Callback<void> } = {},
+    ) => {
       const info = {
         bluetoothEnabled: false,
         locationEnabled: true,
         wifiEnabled: true,
-        deviceOrientation: 'portrait',
-      }
-      call(opts.success, info)
-      call(opts.complete, undefined)
-      return info
-    }
+        deviceOrientation: "portrait",
+      };
+      call(opts.success, info);
+      call(opts.complete, undefined);
+      return info;
+    };
   }
 
-  if (typeof wx.getSystemInfoSync !== 'function') {
+  if (typeof wx.getSystemInfoSync !== "function") {
     wx.getSystemInfoSync = () => ({
-      brand: 'simulator',
-      model: 'web',
-      platform: 'simulator',
-      system: 'web',
-      language: 'zh_CN',
-      SDKVersion: '3.0.0',
+      brand: "simulator",
+      model: "web",
+      platform: "simulator",
+      system: "web",
+      language: "zh_CN",
+      SDKVersion: "3.0.0",
       ...buildWindowInfo(),
-    })
+    });
   }
 
-  if (typeof wx.setStorageSync !== 'function') {
+  if (typeof wx.setStorageSync !== "function") {
     wx.setStorageSync = (key: string, data: unknown) => {
-      const value = typeof data === 'string' ? data : JSON.stringify(data)
-      localStorage.setItem(makeStorageKey(String(key)), value)
-    }
+      const value = typeof data === "string" ? data : JSON.stringify(data);
+      localStorage.setItem(makeStorageKey(String(key)), value);
+    };
   }
 
-  if (typeof wx.getStorageSync !== 'function') {
+  if (typeof wx.getStorageSync !== "function") {
     wx.getStorageSync = (key: string) => {
-      const raw = localStorage.getItem(makeStorageKey(String(key)))
-      if (raw == null) return ''
+      const raw = localStorage.getItem(makeStorageKey(String(key)));
+      if (raw == null) return "";
       try {
-        return JSON.parse(raw)
+        return JSON.parse(raw);
       } catch {
-        return raw
+        return raw;
       }
-    }
+    };
   }
 
-  if (typeof wx.removeStorageSync !== 'function') {
+  if (typeof wx.removeStorageSync !== "function") {
     wx.removeStorageSync = (key: string) => {
-      localStorage.removeItem(makeStorageKey(String(key)))
-    }
+      localStorage.removeItem(makeStorageKey(String(key)));
+    };
   }
 
-  if (typeof wx.clearStorageSync !== 'function') {
+  if (typeof wx.clearStorageSync !== "function") {
     wx.clearStorageSync = () => {
-      const prefix = 'dimina:'
-      const keys: string[] = []
+      const prefix = "dimina:";
+      const keys: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i)
-        if (key?.startsWith(prefix)) keys.push(key)
+        const key = localStorage.key(i);
+        if (key?.startsWith(prefix)) keys.push(key);
       }
-      keys.forEach((key) => localStorage.removeItem(key))
-    }
+      keys.forEach((key) => localStorage.removeItem(key));
+    };
   }
 
-  if (typeof wx.getStorageInfoSync !== 'function') {
+  if (typeof wx.getStorageInfoSync !== "function") {
     wx.getStorageInfoSync = () => {
-      const prefix = 'dimina:'
-      const keys: string[] = []
-      let currentSize = 0
+      const prefix = "dimina:";
+      const keys: string[] = [];
+      let currentSize = 0;
       for (let i = 0; i < localStorage.length; i++) {
-        const fullKey = localStorage.key(i)
-        if (!fullKey?.startsWith(prefix)) continue
-        keys.push(fullKey.slice(prefix.length))
-        currentSize += (localStorage.getItem(fullKey) || '').length * 2
+        const fullKey = localStorage.key(i);
+        if (!fullKey?.startsWith(prefix)) continue;
+        keys.push(fullKey.slice(prefix.length));
+        currentSize += (localStorage.getItem(fullKey) || "").length * 2;
       }
-      return { keys, currentSize, limitSize: 10 * 1024 * 1024 }
-    }
+      return { keys, currentSize, limitSize: 10 * 1024 * 1024 };
+    };
   }
 
-  if (typeof wx.request !== 'function') {
-    // Delegates to the shared wx.request core (shared/request-core.ts) — the
-    // single owner of success/fail semantics, header dedup, timeout default,
-    // and body encoding. This shim only adapts the wx.request option bag onto
-    // the core's callbacks.
+  if (typeof wx.request !== "function") {
+    // Route wx.request through the main-process native HTTP transport so it
+    // never executes in the renderer (no Chromium Fetch/CORS algorithm, no
+    // preflight). The main process owns the network I/O and returns a result
+    // object that already carries the wx.request success/fail shape.
     wx.request = (opts: {
-      url: string
-      data?: unknown
-      header?: Record<string, string>
-      timeout?: number
-      method?: string
-      dataType?: string
-      responseType?: string
-      success?: Callback<unknown>
-      fail?: Callback<unknown>
-      complete?: Callback<unknown>
-    }) =>
-      performRequest(
-        {
+      url: string;
+      data?: unknown;
+      header?: Record<string, string>;
+      timeout?: number;
+      method?: string;
+      dataType?: string;
+      responseType?: string;
+      success?: Callback<unknown>;
+      fail?: Callback<unknown>;
+      complete?: Callback<unknown>;
+    }) => {
+      const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const task = {
+        abort: () =>
+          ipcRenderer.send(BRIDGE_CHANNELS.NATIVE_REQUEST_ABORT, requestId),
+      };
+      ipcRenderer
+        .invoke(BRIDGE_CHANNELS.NATIVE_REQUEST, requestId, {
           url: opts.url,
           data: opts.data,
           header: opts.header,
@@ -155,30 +167,42 @@ function ensureWxApi(wx: Record<string, unknown>): void {
           method: opts.method,
           dataType: opts.dataType,
           responseType: opts.responseType,
-        },
-        {
-          success: (res) => call(opts.success, res),
-          fail: (err) => call(opts.fail, err),
-          complete: (res) => call(opts.complete, res),
-        },
-      )
+        })
+        .then((result: unknown) => {
+          if (result && typeof result === "object" && "statusCode" in result) {
+            call(opts.success, result);
+            call(opts.complete, result);
+          } else {
+            call(opts.fail, result);
+            call(opts.complete, result);
+          }
+        })
+        .catch((error: unknown) => {
+          const err = {
+            errMsg: `request:fail ${error instanceof Error ? error.message : String(error)}`,
+          };
+          call(opts.fail, err);
+          call(opts.complete, err);
+        });
+      return task;
+    };
   }
 }
 
 export function setupApiCompatHook(): void {
   const apply = () => {
-    const target = window as unknown as { wx?: Record<string, unknown> }
-    if (!target.wx || typeof target.wx !== 'object') {
-      target.wx = {}
+    const target = window as unknown as { wx?: Record<string, unknown> };
+    if (!target.wx || typeof target.wx !== "object") {
+      target.wx = {};
     }
-    const wx = target.wx
-    ensureWxApi(wx)
-    return true
-  }
+    const wx = target.wx;
+    ensureWxApi(wx);
+    return true;
+  };
 
-  if (apply()) return
+  if (apply()) return;
 
   const timer = window.setInterval(() => {
-    if (apply()) window.clearInterval(timer)
-  }, 200)
+    if (apply()) window.clearInterval(timer);
+  }, 200);
 }

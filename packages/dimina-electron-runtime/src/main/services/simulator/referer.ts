@@ -10,6 +10,7 @@
  */
 
 import { miniappPartition } from '../views/miniapp-partition.js'
+import { session, type Session } from 'electron'
 
 const DEFAULT_VERSION = 'develop'
 
@@ -63,4 +64,13 @@ export function clearSimulatorServicewechatReferer(
 
 export function getSimulatorServicewechatReferer(partition: string): string | null {
   return refererByPartition.get(partition) ?? null
+}
+
+/** Node requests use the same policy as the caller's actual Electron session. */
+export function getSimulatorServicewechatRefererForSession(source: Session | undefined): string | null {
+  if (!source) return null
+  for (const [partition, referer] of refererByPartition) {
+    if (session.fromPartition(partition) === source) return referer
+  }
+  return null
 }

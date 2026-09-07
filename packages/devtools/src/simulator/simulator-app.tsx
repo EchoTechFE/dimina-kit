@@ -3,7 +3,6 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 // loading. Host bundles are injected on did-finish-load, while DeviceShell is
 // lazy and may not have requested its chunk yet.
 import './ui-extension-runtime'
-import { directRequest } from './direct-request'
 import { simulatorApis } from './simulator-api'
 import { registerCustomApis } from './custom-api-boot'
 import { resolveCustomApisBridge } from './resolve-custom-apis-bridge'
@@ -17,7 +16,9 @@ import type { SimulatorMiniApp } from './simulator-mini-app'
 // the simulator entry bundle stays small; the chunk is fetched lazily on boot.
 // (SimulatorMiniApp is dynamically imported inside bootShellSession below.)
 const DeviceShell = lazy(() =>
-  import('./device-shell/device-shell').then((m) => ({ default: m.DeviceShell })),
+  import('./device-shell/device-shell').then(m => ({
+    default: m.DeviceShell,
+  })),
 )
 
 declare global {
@@ -50,12 +51,11 @@ interface ShellSlots {
   pending: ShellSession | null
 }
 
-// Register the built-in devtools APIs (request + simulatorApis) on the mini-app
+// Register the built-in devtools APIs (simulatorApis) on the mini-app
 // instance. `SimulatorMiniApp` exposes `registerApi(name, handler)`.
 function registerBuiltinApis(app: {
   registerApi: (name: string, handler: (...args: unknown[]) => unknown) => void
 }): void {
-  app.registerApi('request', directRequest as (...args: unknown[]) => unknown)
   for (const [name, handler] of Object.entries(
     simulatorApis as Record<string, (...args: unknown[]) => unknown>,
   )) {
@@ -64,7 +64,10 @@ function registerBuiltinApis(app: {
 }
 
 /** Boot options for one session, derived from a simulator-route entry spec. */
-function bootSpecFromEntry(appId: string, entry: PageSpec): {
+function bootSpecFromEntry(
+  appId: string,
+  entry: PageSpec,
+): {
   appId: string
   scene: number
   pagePath: string
@@ -102,7 +105,10 @@ async function bootShellSession(spec: {
  * unmounts, so a recompile no longer blanks the device.
  */
 export function SimulatorApp() {
-  const [slots, setSlots] = useState<ShellSlots>({ current: null, pending: null })
+  const [slots, setSlots] = useState<ShellSlots>({
+    current: null,
+    pending: null,
+  })
   // Set only by the initial-boot effect below; a failure here means `current`
   // never gets committed, so the render must show this instead of the (empty)
   // shell list — otherwise the simulator area stays permanently blank.
@@ -185,7 +191,9 @@ export function SimulatorApp() {
         pendingTimerRef.current = window.setTimeout(() => {
           pendingTimerRef.current = null
           if (slotsRef.current.pending !== shell) return
-          console.error('[simulator] soft reload timed out waiting for the new page; keeping the previous content')
+          console.error(
+            '[simulator] soft reload timed out waiting for the new page; keeping the previous content',
+          )
           shell.miniApp.dispose()
           commitSlots({ ...slotsRef.current, pending: null })
         }, SOFT_RELOAD_TIMEOUT_MS)
@@ -210,11 +218,15 @@ export function SimulatorApp() {
 
     const offRelaunch = host.onSimulatorEvent<RelaunchPayload>(
       SIMULATOR_EVENTS.RELAUNCH,
-      (payload) => { void beginSoftReload(payload?.url) },
+      payload => {
+        void beginSoftReload(payload?.url)
+      },
     )
     const offDomReady = host.onSimulatorEvent<{ bridgeId?: string }>(
       SIMULATOR_EVENTS.DOM_READY,
-      (payload) => { promoteIfReady(payload?.bridgeId) },
+      payload => {
+        promoteIfReady(payload?.bridgeId)
+      },
     )
     return () => {
       offRelaunch()
@@ -270,9 +282,11 @@ export function SimulatorApp() {
           // but laid out — visibility (not display): a display:none <webview>
           // never attaches its guest. Promotion restyles this SAME node in
           // place (display:contents hands layout back to the shell root).
-          style={role === 'pending'
-            ? { position: 'fixed', inset: 0, visibility: 'hidden' }
-            : { display: 'contents' }}
+          style={
+            role === 'pending'
+              ? { position: 'fixed', inset: 0, visibility: 'hidden' }
+              : { display: 'contents' }
+          }
         >
           <DeviceShell
             miniApp={shell.miniApp}
