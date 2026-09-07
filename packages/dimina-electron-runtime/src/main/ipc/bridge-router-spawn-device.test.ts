@@ -208,7 +208,7 @@ function makeDevice(overrides: Partial<NativeDeviceInfo> = {}): NativeDeviceInfo
     screenWidth: 375,
     screenHeight: 812,
     statusBarHeight: 47,
-    notchType: 'notch',
+    orientation: 'portrait',
     safeAreaInsets: { top: 47, right: 0, bottom: 34, left: 0 },
     ...overrides,
   }

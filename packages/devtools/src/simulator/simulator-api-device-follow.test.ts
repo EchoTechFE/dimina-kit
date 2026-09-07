@@ -423,3 +423,63 @@ describe('system info agrees across the sync, async and spawn-snapshot paths', (
     expect(sharedFields(miniApp.getHostEnvSnapshot())).toEqual(expected)
   })
 })
+
+// ─── deviceOrientation must follow the selected device, not a portrait pin ────
+//
+// getSystemInfo/getSystemInfoAsync (buildSystemInfo) already derive
+// deviceOrientation from the selected device through deviceInfoToHostEnv once
+// a device is current. getSystemSetting is a separate handler that never
+// looks at the current device at all, so wx.getSystemInfo() and
+// wx.getSystemSetting() can disagree about which way the device is held —
+// exactly the mismatch a single onResize callback would observe.
+
+const LANDSCAPE_PIXEL_7: NativeDeviceInfo = {
+  ...PIXEL_7,
+  orientation: 'landscape',
+  screenWidth: PIXEL_7.screenHeight,
+  screenHeight: PIXEL_7.screenWidth,
+}
+
+describe('deviceOrientation follows the current device across the async system-info handlers', () => {
+  it('getSystemSetting reports the boot device orientation instead of always portrait', async () => {
+    installNativeHostMock(LANDSCAPE_PIXEL_7)
+    const miniApp = await bootMiniApp()
+
+    const setting = await callForwardedApi(miniApp, 'getSystemSetting') as unknown as { deviceOrientation: string }
+
+    expect(setting.deviceOrientation).toBe('landscape')
+  })
+
+  it('getSystemSetting follows a DEVICE_CHANGE to landscape', async () => {
+    const { emitDeviceChange } = installNativeHostMock(IPHONE_14)
+    const miniApp = await bootMiniApp()
+
+    emitDeviceChange(LANDSCAPE_PIXEL_7)
+    const setting = await callForwardedApi(miniApp, 'getSystemSetting') as unknown as { deviceOrientation: string }
+
+    expect(setting.deviceOrientation).toBe('landscape')
+  })
+
+  it('getSystemSetting follows a DEVICE_CHANGE back to portrait', async () => {
+    const { emitDeviceChange } = installNativeHostMock(LANDSCAPE_PIXEL_7)
+    const miniApp = await bootMiniApp()
+
+    emitDeviceChange(IPHONE_14)
+    const setting = await callForwardedApi(miniApp, 'getSystemSetting') as unknown as { deviceOrientation: string }
+
+    expect(setting.deviceOrientation).toBe('portrait')
+  })
+
+  it('wx.getSystemInfo() and wx.getSystemSetting() agree on deviceOrientation for the same device', async () => {
+    // BUG CAUGHT: with a landscape device selected, getSystemInfo (buildSystemInfo)
+    // already reports 'landscape', but getSystemSetting is hardcoded 'portrait' —
+    // the two async APIs contradict each other inside the same onResize handler.
+    installNativeHostMock(LANDSCAPE_PIXEL_7)
+    const miniApp = await bootMiniApp()
+
+    const info = await callForwardedApi(miniApp, 'getSystemInfo') as unknown as { deviceOrientation: string }
+    const setting = await callForwardedApi(miniApp, 'getSystemSetting') as unknown as { deviceOrientation: string }
+
+    expect(setting.deviceOrientation).toBe(info.deviceOrientation)
+  })
+})

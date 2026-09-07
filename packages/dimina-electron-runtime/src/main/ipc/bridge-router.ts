@@ -2,8 +2,8 @@ import { app, BrowserWindow, ipcMain, webContents } from 'electron'
 import type { IpcMainEvent, IpcMainInvokeEvent, WebContents } from 'electron'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E, deviceInfoToHostEnv, makeHostEnvUpdateMessage } from '../../shared/bridge-channels.js'
-import type { NativeDeviceInfo, SyncStorageChange } from '../../shared/runtime-types.js'
+import { BRIDGE_CHANNELS as C, SIMULATOR_EVENTS as E } from '../../shared/bridge-channels.js'
+import type { DeviceOrientation, NativeDeviceInfo, SyncStorageChange } from '../../shared/runtime-types.js'
 import { apiCallWatchdogMs, isPersistentSimulatorApi } from '../../shared/simulator-api-metadata.js'
 import { resolveRuntimeAssetPaths } from '../utils/paths.js'
 import { addMuxedInvokeHandler, addMuxedSyncListener, routerOwnsSender } from './bridge-router-ipc-mux.js'
@@ -226,7 +226,7 @@ interface AppSession {
   /** Orientation `hostEnv`'s dims imply, seeded at spawn and kept in step by
    *  `setDevice` — the geometry-change comparison's "did orientation flip"
    *  half, since a same-dims-different-orientation device is still a resize. */
-  deviceOrientation: 'portrait' | 'landscape'
+  deviceOrientation: DeviceOrientation
   /** bridgeId of the page currently shown, per the lifecycle events this
    *  session's own PAGE_LIFECYCLE stream reports — null when no page is
    *  visible (before the first pageShow, or after the visible page hides/
@@ -302,6 +302,24 @@ interface AppSession {
    * `releaseDeferredServiceLoad`.
    */
   serviceLoadDeferred: boolean
+  /**
+   * Whether the service window has actually loaded `service.html` and its
+   * preload has installed the `TO_SERVICE` listener — flipped true at the top
+   * of `bootServiceHost`, the same real `did-finish-load` moment both the pool
+   * and fresh spawn paths gate their boot call on (see `bootOnServiceLoad` /
+   * the fresh `.once`). `forwardToService` queues into
+   * `pendingServiceMessages` instead of calling `send` while this is false:
+   * Electron's `send` is fire-and-forget, so a message sent while the window
+   * is still on its warm/about:blank preload (no `bridgeId`, no listener) or
+   * mid-navigation is gone for good, not buffered by Electron itself.
+   */
+  serviceHostReady: boolean
+  /** Messages `forwardToService` received before `serviceHostReady`, in
+   *  arrival order. Flushed once by `bootServiceHost` the moment it flips the
+   *  flag; discarded untouched if the session is disposed first (a stale
+   *  did-finish-load, or a pool boot listener that self-evicts on the disposed
+   *  check, never reaches the flush). */
+  pendingServiceMessages: MessageEnvelope[]
 }
 
 interface PageSession {
@@ -884,23 +902,20 @@ export function installBridgeRouter(ctx: RuntimeContext): void {
       // that share one simulator WCV.
       const seen = new Set<number>()
       for (const ap of state.appSessions.values()) {
-        // A running service host learns the new device only through
-        // `hostEnvUpdate`; the stored snapshot must move with it so a later
-        // page spawn (which seeds from `ap.hostEnv`) reports the same numbers.
-        const msg = makeHostEnvUpdateMessage(ap.hostEnv, device)
-        ap.hostEnv = msg.body.systemInfo
-        forwardToService(ap, msg)
+        // Mirror the change into every spawned service: hostEnv is otherwise
+        // frozen at spawn time, so wx.getSystemInfoSync() and Page.onResize
+        // would never learn about a later device/orientation switch.
+        // `applyDeviceToSession` updates `ap.hostEnv`/`ap.deviceOrientation`
+        // in place so a later page spawn (which seeds from `ap.hostEnv`)
+        // reports the same numbers, and returns the `hostEnvUpdate` (always)
+        // plus `pageResize` (only if the geometry actually moved and a page
+        // is visible) messages this session owes.
+        for (const msg of applyDeviceToSession(ap, device)) forwardToService(ap, msg)
         const wc = ap.simulatorWc
         if (wc && !wc.isDestroyed() && !seen.has(wc.id)) {
           seen.add(wc.id)
           wc.send(E.DEVICE_CHANGE, device)
         }
-      }
-      // Mirror the change into every spawned service: hostEnv is otherwise
-      // frozen at spawn time, so wx.getSystemInfoSync() and Page.onResize
-      // would never learn about a later device/orientation switch.
-      for (const ap of state.appSessions.values()) {
-        for (const msg of applyDeviceToSession(ap, device)) forwardToService(ap, msg)
       }
     },
     disposeSessionsForSimulator: (simulatorWcId) => {
@@ -1412,6 +1427,8 @@ async function handleSpawn(
     launchTimer: null,
     pageFallback: pageFallbackApplied ? { requested: pagePath, resolved: resolvedPagePath } : null,
     serviceLoadDeferred: false,
+    serviceHostReady: false,
+    pendingServiceMessages: [],
   }
 
   const rootPage: PageSession = {
@@ -1678,6 +1695,18 @@ async function bootServiceHost(state: RouterState, ap: AppSession, ctx: RuntimeC
   // early-disposed prior owner could otherwise fire here and inject the wrong
   // app's logic.js into the next spawn (the recycled webContents is shared).
   if (state.appSessions.get(ap.appSessionId) !== ap) return
+  // The service wc just did-finish-load'd, so its preload has (re-)run with
+  // the real bridgeId and installed the TO_SERVICE listener — flip the gate
+  // and flush anything `forwardToService` queued while it was still on the
+  // warm/about:blank preload or mid-navigation, in the order it arrived.
+  // Messages queued during the flush loop itself (none today; forwardToService
+  // is synchronous) would still see serviceHostReady=true and send directly.
+  ap.serviceHostReady = true
+  if (ap.pendingServiceMessages.length > 0) {
+    const queued = ap.pendingServiceMessages
+    ap.pendingServiceMessages = []
+    for (const msg of queued) forwardToService(ap, msg)
+  }
   // The service wc just did-finish-load'd (that's how this got invoked) — flush
   // any diagnostic queued for this session (or the global bucket) into its now
   // resolvable console. Safe to call even when nothing is queued.
@@ -2732,9 +2761,16 @@ function makeLoadResource(ap: AppSession, page: PageSession, target: 'service' |
 }
 
 function forwardToService(ap: AppSession, msg: MessageEnvelope): void {
-  if (!ap.serviceWc.isDestroyed()) {
-    ap.serviceWc.send(C.TO_SERVICE, { msg })
+  if (ap.serviceWc.isDestroyed()) return
+  // Before the service host's TO_SERVICE listener exists, `send` would fire
+  // into the void (Electron doesn't queue across a navigation/preload gap) —
+  // queue instead, in arrival order, for `bootServiceHost` to flush once it
+  // confirms the listener is live. See `AppSession.serviceHostReady`.
+  if (!ap.serviceHostReady) {
+    ap.pendingServiceMessages.push(msg)
+    return
   }
+  ap.serviceWc.send(C.TO_SERVICE, { msg })
 }
 
 function forwardToRender(ap: AppSession, msg: MessageEnvelope, targetBridgeId?: string): void {

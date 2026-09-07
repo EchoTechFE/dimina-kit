@@ -401,6 +401,7 @@ describe('bridge-router — service-host-error diagnostic (coexists with wx.onEr
     const captured = captureDiagnostics(ctx)
 
     const { serviceWc } = await spawnSession(simulatorWc, ENTRY_PAGE)
+    serviceWc.emit('did-finish-load')
     sendInvokeAPI(serviceWc, 'onError', { success: 'errCb' })
     serviceWc.sentMessages.length = 0
 

@@ -1,17 +1,18 @@
 /**
- * Pure geometry diff behind `bridge.setDevice()` (see DESIGN.md's root-cause
- * section). A device/orientation change only reaches a spawned service
- * through this: `ap.hostEnv` is otherwise set once at spawn and never
- * refreshed, so `wx.getSystemInfoSync()` and `Page.onResize` would both go
- * permanently stale after any later device switch.
+ * Pure geometry diff behind `bridge.setDevice()`. A device/orientation
+ * change only reaches a spawned service through this: `ap.hostEnv` is
+ * otherwise set once at spawn and never refreshed, so `wx.getSystemInfoSync()`
+ * and `Page.onResize` would both go permanently stale after any later device
+ * switch.
  */
-import { deviceInfoToHostEnv, deviceOrientationOf } from '../../shared/bridge-channels.js'
-import type { HostEnvSnapshot, MessageEnvelope } from '../../shared/bridge-channels.js'
-import type { NativeDeviceInfo } from '../../shared/runtime-types.js'
+import { deviceInfoToHostEnv, makeHostEnvUpdateMessage } from '../../shared/host-env.js'
+import type { HostEnvSnapshot } from '../../shared/host-env.js'
+import type { MessageEnvelope } from '../../shared/bridge-channels.js'
+import type { DeviceOrientation, NativeDeviceInfo } from '../../shared/runtime-types.js'
 
 export interface DeviceGeometryUpdate {
   hostEnv: HostEnvSnapshot
-  orientation: 'portrait' | 'landscape'
+  orientation: DeviceOrientation
   /** Whether any window/screen dim or the orientation actually moved — the
    *  gate for whether `Page.onResize` fires at all. WeChat never resizes a
    *  page whose geometry didn't change, even if `setDevice` ran again. */
@@ -31,20 +32,25 @@ export function spawnHostEnvFor(
   return { ...snapshot, ...(selectedDevice ? deviceInfoToHostEnv(selectedDevice) : {}) }
 }
 
-/** Orientation a hostEnv snapshot's physical screen dims imply (same rule as `deviceOrientationOf`). */
+/**
+ * Orientation a hostEnv snapshot reports. `deviceInfoToHostEnv` always fills
+ * `deviceOrientation`, so this only falls back to comparing the physical
+ * screen dims for a snapshot that predates that field (e.g. one saved before
+ * a device was ever selected).
+ */
 export function orientationOfHostEnv(
-  env: Pick<HostEnvSnapshot, 'screenWidth' | 'screenHeight'>,
-): 'portrait' | 'landscape' {
-  return env.screenWidth > env.screenHeight ? 'landscape' : 'portrait'
+  env: Pick<HostEnvSnapshot, 'screenWidth' | 'screenHeight' | 'deviceOrientation'>,
+): DeviceOrientation {
+  return env.deviceOrientation ?? (env.screenWidth > env.screenHeight ? 'landscape' : 'portrait')
 }
 
 export function computeDeviceGeometryUpdate(
   prevHostEnv: HostEnvSnapshot,
-  prevOrientation: 'portrait' | 'landscape',
+  prevOrientation: DeviceOrientation,
   device: NativeDeviceInfo,
 ): DeviceGeometryUpdate {
   const hostEnv = { ...prevHostEnv, ...deviceInfoToHostEnv(device) }
-  const orientation = deviceOrientationOf(device)
+  const orientation = device.orientation
   const geometryChanged =
     hostEnv.windowWidth !== prevHostEnv.windowWidth
     || hostEnv.windowHeight !== prevHostEnv.windowHeight
@@ -57,7 +63,7 @@ export function computeDeviceGeometryUpdate(
 /** The slice of an app session that a device change reads and rewrites. */
 export interface DeviceGeometrySession {
   hostEnv: HostEnvSnapshot
-  deviceOrientation: 'portrait' | 'landscape'
+  deviceOrientation: DeviceOrientation
   visibleBridgeId: string | null
 }
 
@@ -74,6 +80,7 @@ export function applyDeviceToSession(
   session: DeviceGeometrySession,
   device: NativeDeviceInfo,
 ): MessageEnvelope[] {
+  const hostEnvMsg = makeHostEnvUpdateMessage(session.hostEnv, device)
   const { hostEnv, orientation, geometryChanged } = computeDeviceGeometryUpdate(
     session.hostEnv,
     session.deviceOrientation,
@@ -81,9 +88,7 @@ export function applyDeviceToSession(
   )
   session.hostEnv = hostEnv
   session.deviceOrientation = orientation
-  const messages: MessageEnvelope[] = [
-    { type: 'hostEnvUpdate', target: 'service', body: { systemInfo: hostEnv } },
-  ]
+  const messages: MessageEnvelope[] = [hostEnvMsg]
   if (geometryChanged && session.visibleBridgeId) {
     messages.push({
       type: 'pageResize',
