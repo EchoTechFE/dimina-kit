@@ -12,7 +12,7 @@ import {
   normalizeRequestHeaders,
   resolveTimeoutBudgetMs,
 } from "./normalize.js";
-import type { RequestTracer } from "./trace.js";
+import type { NativeRequestRedirectResponse, RequestTracer } from "./trace.js";
 import { decodeContent, decodeResponseData } from "./response.js";
 import { captureRequestHeaders } from "./request-headers.js";
 
@@ -111,6 +111,39 @@ export function createNativeRequestTransport(): NativeRequestTransport {
         let generation = 0;
         let redirects = 0;
 
+        function followRedirect(
+          res: http.IncomingMessage,
+          location: string,
+          origin: string,
+          redirectResponse: NativeRequestRedirectResponse,
+        ): void {
+          try {
+            if (redirects++ >= 20) throw new Error("too many redirects");
+            const nextUrl = new URL(location, url);
+            if (!["http:", "https:"].includes(nextUrl.protocol) || nextUrl.username || nextUrl.password) {
+              throw new Error("unsupported redirect URL");
+            }
+            if (nextUrl.origin !== origin) {
+              for (const key of ["authorization", "proxy-authorization", "cookie", "host"]) delete nodeHeaders[key];
+            }
+            const { status } = redirectResponse;
+            if (([301, 302].includes(status) && method === "POST") || (status === 303 && method !== "GET" && method !== "HEAD")) {
+              method = "GET";
+              postDataForTrace = undefined;
+              for (const key of ["content-type", "content-length", "content-encoding", "content-language", "content-location", "transfer-encoding"]) delete nodeHeaders[key];
+            }
+            url = nextUrl.toString();
+            tracer?.redirect(url, method, nodeHeaders, postDataForTrace, redirectResponse);
+            // Retire this hop before destroying it; late socket errors cannot fail its successor.
+            generation++;
+            res.destroy();
+            response = undefined;
+            startHop();
+          } catch (error) {
+            fail(error instanceof Error ? error.message : "invalid redirect");
+          }
+        }
+
         function startHop(): void {
           if (settled) return;
           const hop = ++generation;
@@ -131,31 +164,9 @@ export function createNativeRequestTransport(): NativeRequestTransport {
               const status = res.statusCode ?? 0;
               const requestHeaders = tracer ? captureRequestHeaders(req) : undefined;
               if ([301, 302, 303, 307, 308].includes(status) && res.headers.location) {
-                try {
-                  if (redirects++ >= 20) throw new Error("too many redirects");
-                  const nextUrl = new URL(res.headers.location, url);
-                  if (!["http:", "https:"].includes(nextUrl.protocol) || nextUrl.username || nextUrl.password) {
-                    throw new Error("unsupported redirect URL");
-                  }
-                  const redirectResponse = { url, status, statusText: res.statusMessage ?? "", headers: responseHeaders, ...requestHeaders };
-                  if (nextUrl.origin !== parsed.origin) {
-                    for (const key of ["authorization", "proxy-authorization", "cookie", "host"]) delete nodeHeaders[key];
-                  }
-                  if (([301, 302].includes(status) && method === "POST") || (status === 303 && method !== "GET" && method !== "HEAD")) {
-                    method = "GET";
-                    postDataForTrace = undefined;
-                    for (const key of ["content-type", "content-length", "content-encoding", "content-language", "content-location", "transfer-encoding"]) delete nodeHeaders[key];
-                  }
-                  url = nextUrl.toString();
-                  tracer?.redirect(url, method, nodeHeaders, postDataForTrace, redirectResponse);
-                  // Retire this hop before destroying it; late socket errors cannot fail its successor.
-                  generation++;
-                  res.destroy();
-                  response = undefined;
-                  startHop();
-                } catch (error) {
-                  fail(error instanceof Error ? error.message : "invalid redirect");
-                }
+                followRedirect(res, res.headers.location, parsed.origin, {
+                  url, status, statusText: res.statusMessage ?? "", headers: responseHeaders, ...requestHeaders,
+                });
                 return;
               }
               tracer?.response(status, res.statusMessage ?? "", responseHeaders, requestHeaders);

@@ -86,44 +86,7 @@ export class RequestTraceSynthesizer {
   ): SynthesizedRequestMessage | null {
     const key = `${sessionId} ${event.requestId}`;
     if (event.type === "sent" || event.type === "redirect") {
-      const previous = this.requests.get(key);
-      if (event.type === "redirect" && !previous) return null;
-      const requestId = event.type === "redirect" ? previous!.requestId
-        : `${NATIVE_HTTP_REQUEST_ID_PREFIX}${this.options.epoch}:${this.seq++}`;
-      const userFacing = event.type === "redirect" ? previous!.userFacing : isUserFacingRequest(
-        event.url,
-        this.options.internalOrigins?.(),
-      );
-      this.requests.set(key, { requestId, url: event.url, userFacing });
-      const timestamp = event.time / 1000;
-      const hasPostData = event.hasPostData ?? event.postData !== undefined;
-      const message: SynthesizedRequestMessage = {
-        method: "Network.requestWillBeSent",
-        params: {
-          requestId,
-          loaderId: requestId,
-          documentURL: event.url,
-          request: {
-            url: event.url,
-            method: event.method,
-            headers: event.headers,
-            hasPostData,
-            ...(hasPostData ? { postData: event.postData } : {}),
-          },
-          timestamp,
-          wallTime: timestamp,
-          initiator: { type: "script" },
-          type: RESOURCE_TYPE,
-          ...(event.type === "redirect" ? { redirectResponse: {
-            ...event.redirectResponse,
-            mimeType: mimeTypeOf(event.redirectResponse.headers),
-            connectionReused: false, connectionId: 0, encodedDataLength: 0,
-          } } : {}),
-        },
-        userFacing,
-      };
-      if (hasPostData) message.postData = event.postData;
-      return message;
+      return this.synthesizeRequest(key, event);
     }
 
     const state = this.requests.get(key);
@@ -188,6 +151,50 @@ export class RequestTraceSynthesizer {
           userFacing,
         };
     }
+  }
+
+  private synthesizeRequest(
+    key: string,
+    event: Extract<NativeRequestTrace, { type: "sent" | "redirect" }>,
+  ): SynthesizedRequestMessage | null {
+    const previous = this.requests.get(key);
+    if (event.type === "redirect" && !previous) return null;
+    const requestId = event.type === "redirect" ? previous!.requestId
+      : `${NATIVE_HTTP_REQUEST_ID_PREFIX}${this.options.epoch}:${this.seq++}`;
+    const userFacing = event.type === "redirect" ? previous!.userFacing : isUserFacingRequest(
+      event.url,
+      this.options.internalOrigins?.(),
+    );
+    this.requests.set(key, { requestId, url: event.url, userFacing });
+    const timestamp = event.time / 1000;
+    const hasPostData = event.hasPostData ?? event.postData !== undefined;
+    const message: SynthesizedRequestMessage = {
+      method: "Network.requestWillBeSent",
+      params: {
+        requestId,
+        loaderId: requestId,
+        documentURL: event.url,
+        request: {
+          url: event.url,
+          method: event.method,
+          headers: event.headers,
+          hasPostData,
+          ...(hasPostData ? { postData: event.postData } : {}),
+        },
+        timestamp,
+        wallTime: timestamp,
+        initiator: { type: "script" },
+        type: RESOURCE_TYPE,
+        ...(event.type === "redirect" ? { redirectResponse: {
+          ...event.redirectResponse,
+          mimeType: mimeTypeOf(event.redirectResponse.headers),
+          connectionReused: false, connectionId: 0, encodedDataLength: 0,
+        } } : {}),
+      },
+      userFacing,
+    };
+    if (hasPostData) message.postData = event.postData;
+    return message;
   }
 }
 
