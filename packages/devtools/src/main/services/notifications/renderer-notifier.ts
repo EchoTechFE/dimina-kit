@@ -1,5 +1,5 @@
 import type { BrowserWindow, WebContents, WebContentsView } from 'electron'
-import type { CompileConfig } from '../../../shared/types.js'
+import type { CompileModeChange } from '../workspace/compile-mode-store.js'
 import {
   ProjectChannel,
   SessionChannel,
@@ -81,7 +81,6 @@ export interface CompileLogPayload {
  */
 export interface SettingsInitPayload {
   projectPath: string
-  config: CompileConfig
   projectSettings: ProjectSettings
 }
 
@@ -124,8 +123,19 @@ export interface RendererNotifier {
   windowOpenProject(payload: { name: string; path: string }): void
   /** Tell the main renderer the compile popover has been closed. */
   popoverClosed(): void
-  /** Ask the main renderer to relaunch the simulator with a new config. */
-  popoverRelaunch(config: CompileConfig): void
+  /**
+   * Push the open project's `CompileModeStore` after it advanced — via the
+   * popover or any other command source. `relaunch` is true when the change
+   * affects what is currently running, so the renderer restarts the
+   * simulator with it.
+   */
+  compileModesChanged(change: CompileModeChange): void
+  /**
+   * Push a rejected `applyCompileModeCommand` (e.g. a failed persist). The
+   * renderer surfaces this as a compile-status error without touching its
+   * mirrored `compileModes`.
+   */
+  compileModesApplyFailed(payload: { message: string }): void
   /**
    * Push the reserved host-toolbar height to the main renderer so its toolbar
    * placeholder div resizes (closes the host-toolbar dynamic-height loop).
@@ -229,8 +239,11 @@ export function createRendererNotifier(ctx: NotifierContext): RendererNotifier {
     popoverClosed() {
       sendToMain(PopoverChannel.Closed)
     },
-    popoverRelaunch(config) {
-      sendToMain(PopoverChannel.Relaunch, config)
+    compileModesChanged(change) {
+      sendToMain(ProjectChannel.CompileModesChanged, change)
+    },
+    compileModesApplyFailed(payload) {
+      sendToMain(ProjectChannel.CompileModesApplyFailed, payload)
     },
     hostToolbarHeightChanged(height) {
       sendToMain(ViewChannel.HostToolbarHeightChanged, height)

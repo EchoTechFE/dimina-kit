@@ -1,4 +1,4 @@
-import type { CompileConfig, Project, ProjectPatch } from '@/shared/types'
+import type { CompileConfig, CompileModeSnapshot, Project, ProjectPatch } from '@/shared/types'
 import type {
   CustomCreateProjectDialogResult,
   OpenEditProjectDialogReply,
@@ -111,6 +111,11 @@ export function saveCompileConfig(
   config: CompileConfig,
 ): Promise<void> {
   return invokeStrict<void>(ProjectChannel.SaveCompileConfig, projectPath, config)
+}
+
+/** Read the open project's `CompileModeStore` snapshot: its revision plus id-based state. */
+export function getCompileModeState(projectPath: string): Promise<CompileModeSnapshot> {
+  return invokeStrict<CompileModeSnapshot>(ProjectChannel.GetCompileModeState, projectPath)
 }
 
 /**

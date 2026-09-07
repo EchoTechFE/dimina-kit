@@ -1,4 +1,7 @@
 import type { AppInfo, CompileConfig, ProjectSession } from '../../../shared/types.js'
+import type { CompileModeCommand } from '../../../shared/compile-mode-state.js'
+import { createCompileModeManager, openCompileModeStoreAfterCompile } from './workspace-compile-modes.js'
+import type { CompileModeChange, CompileModeSnapshot, CompileModeStore } from './compile-mode-store.js'
 import { rejectInvalidAppId, validateProjectDirSafe } from './open-project-guards.js'
 // eslint-disable-next-line no-restricted-syntax -- grandfathered(workbench-context): shrink-only
 import type { WorkbenchContext } from '../workbench-context.js'
@@ -10,10 +13,10 @@ import type {
   ProjectSettings,
 } from '../projects/project-repository.js'
 import type { ProjectPatch, ProjectsProvider } from '../projects/types.js'
-import { DEFAULT_COMPILE_CONFIG } from '../projects/types.js'
 import { applyRefererForSession, clearRefererForSession } from './workspace-referer.js'
 import { loadWorkbenchSettings } from '../settings/index.js'
 import { createOpLock } from './op-lock.js'
+import { createThumbnailOps } from './workspace-thumbnails.js'
 // Thumbnail FS helpers are now consumed via LocalProjectsProvider; the
 // workspace-service only sees the ProjectsProvider hook surface.
 
@@ -88,6 +91,8 @@ export interface WorkspaceService {
   getProjectPages(projectPath: string): ProjectPages
   getCompileConfig(projectPath: string): Promise<CompileConfig>
   saveCompileConfig(projectPath: string, config: CompileConfig): Promise<void>
+  getCompileModeState(projectPath?: string): CompileModeSnapshot
+  applyCompileModeCommand(command: CompileModeCommand): Promise<CompileModeChange>
   getProjectSettings(projectPath: string): ProjectSettings
   updateProjectSettings(
     projectPath: string,
@@ -174,6 +179,8 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       // Invalidate the outgoing onLog generation before teardown so the dying
       // worker's buffered lines can't pollute the incoming compile timeline.
       logGeneration++
+      // Dies with the outgoing session — no-op when none is open.
+      compileModes.disposeCurrent()
       await disposeSession()
       currentProjectPath = ''
       lastClosedProjectPath = ''
@@ -184,20 +191,26 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
   }
 
   /**
-   * openProject critical section 2 — commit the new session under the lock, only
-   * if still the latest request. Returns false when superseded (caller discards
-   * the freshly-opened session instead of clobbering the newer one).
+   * openProject critical section 2 — commit the new session (and its
+   * compile-mode store handle) under the lock, only if still the latest
+   * request. Returns false when superseded (caller discards the
+   * freshly-opened session and store instead of clobbering the newer
+   * request's). `compileModes.adopt` must only run here, alongside
+   * `currentSession`/`currentProjectPath`, so the "current store" and
+   * "current session" always switch together.
    */
   async function runOpenCommit(
     mySeq: number,
     session: ProjectSession,
     projectPath: string,
+    store: CompileModeStore,
   ): Promise<boolean> {
     const release = await opLock.acquire()
     try {
       if (!opLock.isOwner(mySeq)) return false
       currentSession = session
       currentProjectPath = projectPath
+      compileModes.adopt(store)
       return true
     } finally {
       release()
@@ -245,6 +258,15 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
   // `repo.*`, because a remote provider's project paths are not on the local
   // filesystem.
   const provider: ProjectsProvider = ctx.projectsProvider
+  // Owner of whichever project's compile modes are currently open; disposed/
+  // replaced alongside the session (teardown, openProject failures, close).
+  const compileModes = createCompileModeManager(provider, (change) => ctx.notify.compileModesChanged(change))
+  const thumbnails = createThumbnailOps({
+    ctx,
+    provider,
+    getSession: () => currentSession,
+    getProjectPath: () => currentProjectPath,
+  })
 
   return {
     listProjects: async () => provider.listProjects(),
@@ -333,16 +355,29 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
       }
       const session = compiled.session
 
+      // Opened right after compile as a standalone handle — not yet current;
+      // every failure branch below disposes THIS handle, never the current
+      // store, since this open may no longer own "current" by the time it
+      // gets here.
+      const opened = await openCompileModeStoreAfterCompile(compileModes, projectPath, session)
+      if ('error' in opened) {
+        sendStatus('error', opened.error)
+        return { success: false, error: opened.error }
+      }
+      const store = opened.store
+
       const appIdError = await rejectInvalidAppId(session)
       if (appIdError) {
+        store.dispose()
         sendStatus('error', appIdError)
         return { success: false, error: appIdError }
       }
 
-      if (!(await runOpenCommit(mySeq, session, projectPath))) {
-        // Superseded during the compile above — discard the freshly-opened
-        // session (close its live compile/dev-server) rather than clobber the
-        // newer request.
+      if (!(await runOpenCommit(mySeq, session, projectPath, store))) {
+        // Superseded — discard the freshly-opened session and its own store
+        // handle rather than clobber the newer request's (already-adopted)
+        // current store.
+        store.dispose()
         try {
           await session.close()
         } catch (closeErr) {
@@ -390,6 +425,7 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
         // Invalidate the active session's onLog BEFORE teardown starts — lines
         // flushed by the dying compile worker must not reach the panel.
         logGeneration++
+        compileModes.disposeCurrent() // dies with the session
         clearRefererForSession(currentSession, currentProjectPath)
         await disposeSession()
         // Record the root being torn down BEFORE clearing it, so a teardown/
@@ -412,72 +448,16 @@ export function createWorkspaceService(ctx: WorkbenchContext): WorkspaceService 
     hasActiveSession: () => currentSession !== null,
     isClosing: () => closing,
 
-    async captureThumbnail(projectPath) {
-      if (!currentSession || projectPath !== currentProjectPath) return null
-      const simulatorWc = ctx.views.getSimulatorWebContents()
-      if (!simulatorWc) return null
-      if (ctx.views.getSimulatorProjectPath() !== projectPath) return null
-      const session = currentSession
-      // Capture the active render-host guest (the mini-program content); the
-      // simulator WCV only holds the device-shell chrome. In native-host with no
-      // active guest (not mounted / mid page-switch / destroyed) return null
-      // rather than persist a device-shell frame as the page — that wrong-content
-      // frame is the bug this path exists to avoid. Non-native-host: the sim WCV.
-      const bridge = ctx.bridge
-      const nativeHost = bridge?.isNativeHost() ?? false
-      const renderGuest = nativeHost ? (bridge?.getActiveRenderWc() ?? null) : null
-      if (nativeHost && !renderGuest) return null
-      const captureTarget = renderGuest ?? simulatorWc
-      // A destroyed target means teardown is in flight (no valid frame) — return
-      // null rather than let capturePage() throw indistinguishably into the catch.
-      if (captureTarget.isDestroyed()) return null
-      try {
-        const image = await captureTarget.capturePage()
-        if (
-          currentSession !== session
-          || currentProjectPath !== projectPath
-          || ctx.views.getSimulatorWebContents() !== simulatorWc
-          || ctx.views.getSimulatorProjectPath() !== projectPath
-          // Captured target must still be the live one: a guest that navigated
-          // mid-capture would otherwise persist a frame from the wrong page.
-          || (nativeHost ? (bridge?.getActiveRenderWc() ?? null) : simulatorWc) !== captureTarget
-        ) {
-          return null
-        }
-        const dataUrl = `data:image/png;base64,${image.toPNG().toString('base64')}`
-        if (provider.saveThumbnail) {
-          await provider.saveThumbnail(projectPath, dataUrl)
-        }
-        // Always hand the renderer back the freshly-captured frame so the
-        // UI updates immediately even if the host's saveThumbnail is
-        // async or stores out-of-band.
-        return dataUrl
-      } catch {
-        return null
-      }
-    },
-
-    async getThumbnail(projectPath) {
-      if (provider.getThumbnail) {
-        return (await provider.getThumbnail(projectPath)) ?? null
-      }
-      return null
-    },
+    captureThumbnail: thumbnails.captureThumbnail,
+    getThumbnail: thumbnails.getThumbnail,
 
     // `getProjectPages` reads the project's own `app.json` from disk and is
     // independent of the project registry — it stays on the repo helper.
     getProjectPages: (projectPath) => repo.getProjectPages(projectPath),
-    getCompileConfig: async (projectPath) =>
-      (provider.getCompileConfig
-        ? await provider.getCompileConfig(projectPath)
-        : DEFAULT_COMPILE_CONFIG) as CompileConfig,
-    saveCompileConfig: async (projectPath, config) => {
-      if (provider.saveCompileConfig) {
-        await provider.saveCompileConfig(projectPath, config)
-      }
-      // No persistence when the host opts out; the renderer's edits then
-      // do not survive a reload, matching the documented contract.
-    },
+    getCompileConfig: (projectPath) => compileModes.getCompileConfig(projectPath),
+    saveCompileConfig: (projectPath, config) => compileModes.saveCompileConfig(projectPath, config),
+    getCompileModeState: (projectPath) => compileModes.getCompileModeState(projectPath),
+    applyCompileModeCommand: (command) => compileModes.applyCompileModeCommand(command),
     // Per-project settings (uploadWithSourceMap etc.) live in the project's
     // own `project.config.json`, not the registry — keep direct repo calls.
     getProjectSettings: (projectPath) => repo.getProjectSettings(projectPath),

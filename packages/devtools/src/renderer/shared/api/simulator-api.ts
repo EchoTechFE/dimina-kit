@@ -1,12 +1,14 @@
-import type { CompileConfig } from '@/shared/types'
+import type { CompileModeCommand } from '@/shared/types'
 import { PopoverChannel } from '../../../shared/ipc-channels-overlays'
-import { send } from './ipc-transport'
+import { invokeStrict } from './ipc-transport'
 
 /**
- * Simulator-facing IPC facade. The popover window, once the user clicks
- * "Relaunch", dispatches the updated compile config back to the main process
- * which then forwards it to the project-runtime window as `popover:relaunch`.
+ * Simulator-facing IPC facade. The popover window sends the command the user
+ * just issued (select/add/update/remove) back to the main process, which
+ * interprets it against the authoritative `CompileModeStore` and hides the
+ * popover. `relaunch`, whether the running configuration changed, is decided
+ * by main — the popover only names the edit, not its effect.
  */
-export function emitPopoverRelaunch(config: CompileConfig): void {
-  send(PopoverChannel.Relaunch, config)
+export function applyPopoverCommand(command: CompileModeCommand): Promise<void> {
+  return invokeStrict<void>(PopoverChannel.Apply, { command })
 }

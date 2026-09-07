@@ -2,8 +2,16 @@ import type { OpenProjectOptions } from '@dimina-kit/devkit'
 import type { SimulatorApiHandler } from '../main/services/simulator/custom-apis.js'
 import type { MiniappSessionAppInfo } from '../main/runtime/miniapp-runtime.js'
 import type { ClosingProjectWindow, ProjectWindowConfig, ProjectWindowRef } from './project-window-types.js'
+import type { CompileConfig, CompileMode, CompileModes } from './compile-modes.js'
 
 export type { ClosingProjectWindow, ProjectWindowConfig, ProjectWindowRef }
+
+/**
+ * The compile-mode model lives next to its resolver in `compile-modes.ts` —
+ * the types and the rules that read them stay in one file. Re-exported here
+ * so the existing `shared/types.js` import sites keep working.
+ */
+export type { CompileConfig, CompileMode, CompileModes }
 
 /**
  * The HAND-WRITTEN narrow contract handed to a host `menuBuilder` — the
@@ -111,12 +119,6 @@ export interface WorkbenchConfig {
    * passing it keep compiling; it has no runtime effect.
    */
   headerHeight?: number
-}
-
-export interface CompileConfig {
-  startPage: string
-  scene: number
-  queryParams: { key: string; value: string }[]
 }
 
 /**
@@ -243,6 +245,8 @@ export interface ProjectsProvider {
   updateLastOpened?(dirPath: string): void | Promise<void>
   getCompileConfig?(dirPath: string): unknown
   saveCompileConfig?(dirPath: string, cfg: unknown): void | Promise<void>
+  getCompileModes?(dirPath: string): CompileModes | Promise<CompileModes>
+  saveCompileModes?(dirPath: string, modes: CompileModes): void | Promise<void>
 }
 
 /**

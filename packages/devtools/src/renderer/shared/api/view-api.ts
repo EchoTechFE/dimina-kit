@@ -1,6 +1,7 @@
-import type { CompileConfig, Project, ProjectType } from '@/shared/types'
+import type { CompileModeChange, CompileModeState, Project, ProjectType } from '@/shared/types'
 import type { NativeDeviceInfo } from '../../../shared/ipc-channels'
 import {
+  ProjectChannel,
   SimulatorChannel,
   WindowChannel,
 } from '../../../shared/ipc-channels'
@@ -18,16 +19,28 @@ import type { ProjectTemplateInfo } from './project-api'
 export interface PopoverInitPayload {
   top: number
   left: number
-  config: CompileConfig
+  /** The project's compile modes, id-based, and which one is selected. */
+  state: CompileModeState
+  /** Every page path in the project, for the 启动页面 picker. */
   pages: string[]
+  /**
+   * What 普通编译 launches — shown as its subtitle so the fixed entry is not
+   * an unexplained label, and used as the default start page for a new mode.
+   */
+  entryPagePath: string
+  /**
+   * The simulator's currently visible route (`pagePath?query`), or `''` when
+   * nothing is running. Backs 以当前页面新建编译模式.
+   */
+  currentRoute: string
 }
 
-export interface PopoverShowPayload {
-  top: number
-  left: number
-  config: CompileConfig
-  pages: string[]
-}
+/**
+ * What the main renderer SENDS to show/re-show the popover — `state` is
+ * omitted: main injects the live `CompileModeState` from the open project's
+ * store itself, ignoring anything a stale or misbehaving sender provides.
+ */
+export type PopoverShowPayload = Omit<PopoverInitPayload, 'state'>
 
 /**
  * Ask main to create the simulator as a top-level WebContentsView loading
@@ -189,11 +202,21 @@ export function onPopoverInit(
   return on<[PopoverInitPayload]>(PopoverChannel.Init, (payload) => handler(payload))
 }
 
-/** Listen for popover-relaunch broadcasts emitted by the main process. */
-export function onPopoverRelaunch(
-  handler: (config: CompileConfig) => void,
+/** Subscribe to the open project's `CompileModeStore` advancing — via the popover or any other command source. */
+export function onCompileModesChanged(
+  handler: (change: CompileModeChange) => void,
 ): () => void {
-  return on<[CompileConfig]>(PopoverChannel.Relaunch, (config) => handler(config))
+  return on<[CompileModeChange]>(ProjectChannel.CompileModesChanged, (change) => handler(change))
+}
+
+/** Subscribe to a rejected compile-mode command (e.g. a failed persist) so the caller can surface it without touching its mirrored state. */
+export function onCompileModesApplyFailed(
+  handler: (payload: { message: string }) => void,
+): () => void {
+  return on<[{ message: string }]>(
+    ProjectChannel.CompileModesApplyFailed,
+    (payload) => handler(payload),
+  )
 }
 
 /** Listen for the back-to-project-list navigation event from the app menu. */

@@ -25,6 +25,8 @@ export function createLocalProjectsProvider(): ProjectsProvider {
     updateLastOpened: (dirPath) => repo.updateLastOpened(dirPath),
     getCompileConfig: (dirPath) => repo.getCompileConfig(dirPath),
     saveCompileConfig: (dirPath, cfg) => repo.saveCompileConfig(dirPath, cfg),
+    getCompileModes: (dirPath) => repo.getCompileModes(dirPath),
+    saveCompileModes: (dirPath, modes) => repo.saveCompileModes(dirPath, modes),
     saveThumbnail: (dirPath, dataUrl) =>
       saveThumbnailFromDataUrl(dirPath, dataUrl),
     getThumbnail: (dirPath) => loadThumbnail(dirPath),

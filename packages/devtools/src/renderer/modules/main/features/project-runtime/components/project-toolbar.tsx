@@ -17,6 +17,16 @@ interface ProjectToolbarProps {
   compileDropdownRef: React.RefObject<HTMLDivElement | null>
   showCompilePanel: boolean
   onToggleCompilePanel: () => void
+  /** Name of the selected compile mode, or 普通编译 when none is selected. */
+  compileModeLabel: string
+  /**
+   * Gates the compile-mode button. Before main has opened this window's
+   * project into a `CompileModeStore` (and this window has adopted a
+   * snapshot/push from it), clicking through would surface a main-process
+   * `no compile-mode store open` error instead of a usable menu. Required so
+   * every caller states when the button becomes usable.
+   */
+  compileModesReady: boolean
   onRelaunch: () => void | Promise<void>
   compileStatus: { status: string; message: string }
   /** Dock model + registry powering the panel visibility + layout toggles. */
@@ -51,6 +61,8 @@ export function ProjectToolbar({
   compileDropdownRef,
   showCompilePanel,
   onToggleCompilePanel,
+  compileModeLabel,
+  compileModesReady,
   onRelaunch,
   compileStatus,
   dockModel,
@@ -62,7 +74,6 @@ export function ProjectToolbar({
     prepareTooltip()
   }, [])
 
-  const compileModeTooltip = useOverlayTooltip('编译模式')
   const relaunchTooltip = useOverlayTooltip('重新编译')
   const settingsTooltip = useOverlayTooltip('设置')
   return (
@@ -73,18 +84,29 @@ export function ProjectToolbar({
       >
         {/* Cluster 1: Compile-mode dropdown.
             The dropdown surface itself is a main-process popover
-            (showPopover from @/shared/api). Clicking the button toggles
-            its visibility; the popover exposes 普通编译 / 自定义编译 with
-            scene-value, launch-page and launch-args inputs. */}
+            (showPopover from @/shared/api). Clicking the button toggles it;
+            the popover lists 普通编译 plus the project's named modes and
+            owns their editing.
+
+            No tooltip: the button already shows the selected mode's name,
+            and a tooltip would only repeat it. Disabled until
+            compileModesReady: before main has opened this project's
+            CompileModeStore, the popover's Show would hit
+            `no compile-mode store open` instead of a usable menu. */}
         <div ref={compileDropdownRef as React.Ref<HTMLDivElement>}>
           <Button
             variant="toolbar"
             onClick={onToggleCompilePanel}
+            disabled={!compileModesReady}
             data-active={showCompilePanel ? 'true' : 'false'}
-            className="h-7 gap-0.5 pl-2 pr-1.5 text-[13px] text-text-secondary"
-            {...compileModeTooltip}
+            // The button's accessible name is the selected mode's own name, so
+            // it changes as the user switches modes; this gives it a stable
+            // handle that doesn't depend on which mode is selected.
+            data-testid="compile-mode-button"
+            className="h-7 gap-0.5 pl-2 pr-1.5 text-[13px] text-text-secondary max-w-40"
           >
-            普通编译 <ChevronDown className="size-3.5" />
+            <span className="truncate">{compileModeLabel}</span>
+            <ChevronDown className="size-3.5 shrink-0" />
           </Button>
         </div>
 
@@ -108,7 +130,7 @@ export function ProjectToolbar({
 
         <div className="flex items-center gap-1.5 px-1.5 shrink-0">
           <StatusDot status={compileStatus.status} />
-          <span className="text-[12px] text-text-secondary max-w-28 truncate">
+          <span data-testid="compile-status-message" className="text-[12px] text-text-secondary max-w-28 truncate">
             {compileStatus.message}
           </span>
         </div>

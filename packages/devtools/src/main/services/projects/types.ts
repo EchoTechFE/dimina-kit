@@ -5,7 +5,7 @@
  * template catalog, and the "新建项目" dialog.
  */
 
-import type { CompileConfig } from '../../../shared/types.js'
+import type { CompileConfig, CompileModes } from '../../../shared/types.js'
 import { DEFAULT_SCENE } from '../../../shared/constants.js'
 import type { Project, ProjectPatch } from './project-repository.js'
 
@@ -73,21 +73,46 @@ export interface ProjectsProvider {
   updateLastOpened?(dirPath: string): void | Promise<void>
 
   /**
-   * Read the per-project compile config.
+   * Read the per-project compile config — the launch parameters the
+   * SELECTED compile mode resolves to.
    *
-   * Default when omitted: returns `DEFAULT_COMPILE_CONFIG`
-   * (`{ startPage: '', scene: 1001, queryParams: [] }`).
+   * Default when omitted: derived from `getCompileModes`, or
+   * `DEFAULT_COMPILE_CONFIG` (`{ startPage: '', scene: 1001, queryParams: [] }`)
+   * when that is absent too. Implement this only if you can resolve the
+   * project's own entry page for 普通编译 — the derived default leaves
+   * `startPage` empty and lets the renderer substitute it.
    */
   getCompileConfig?(dirPath: string): CompileConfig | Promise<CompileConfig>
 
   /**
-   * Persist the per-project compile config.
+   * @deprecated Implement `saveCompileModes` instead — the named mode list
+   * is the stored form, and this setter can only express the selected
+   * mode's parameters.
    *
-   * Default when omitted: silently no-ops — the renderer's edits will
-   * not survive a reload. Implement this if your UI exposes the compile
-   * config panel.
+   * Default when omitted: silently no-ops.
    */
   saveCompileConfig?(dirPath: string, cfg: CompileConfig): void | Promise<void>
+
+  /**
+   * Read the project's compile modes and which one is selected. The stored
+   * form behind the toolbar's compile-mode dropdown; `LocalProjectsProvider`
+   * keeps it in the project's own `project.config.json` under
+   * `condition.miniprogram` (WeChat DevTools' location and shape).
+   *
+   * Default when omitted: `{ current: -1, list: [] }` — the dropdown then
+   * offers 普通编译 only.
+   */
+  getCompileModes?(dirPath: string): CompileModes | Promise<CompileModes>
+
+  /**
+   * Persist the project's compile modes and selection.
+   *
+   * Default when omitted: falls back to `saveCompileConfig` with the
+   * resolved launch parameters, so a host on the older setter keeps the
+   * selection's effect but not the named list. With neither, edits do not
+   * survive a reload.
+   */
+  saveCompileModes?(dirPath: string, modes: CompileModes): void | Promise<void>
 
   /**
    * Persist a captured screenshot for the given project. `imageDataUrl`

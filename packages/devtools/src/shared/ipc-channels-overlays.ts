@@ -135,7 +135,10 @@ export interface ViewBounds {
 export const PopoverChannel = {
   Show: 'popover:show',
   Hide: 'popover:hide',
-  Relaunch: 'popover:relaunch',
+  // Popover → main → main-renderer: the edited compile modes, plus whether
+  // the change affects what is currently running (selecting a mode, or
+  // editing the selected one) and so needs a relaunch.
+  Apply: 'popover:apply',
   Closed: 'popover:closed',
   Init: 'popover:init',
 } as const
@@ -184,7 +187,6 @@ export const ProjectCreateChannel = {
 
 export const SettingsChannel = {
   SetVisible: 'settings:setVisible',
-  ConfigChanged: 'settings:configChanged',
   ProjectSettingsChanged: 'settings:projectSettingsChanged',
   Init: 'settings:init',
 } as const

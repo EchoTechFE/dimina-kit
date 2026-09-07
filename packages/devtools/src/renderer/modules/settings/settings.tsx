@@ -1,20 +1,12 @@
 import React, { useState, useEffect } from 'react'
-import { Input } from '@/shared/components/ui/input'
 import { Switch } from '@/shared/components/ui/switch'
 import { SettingsTabBar } from '@/shared/components/settings-tab-bar'
 import {
   emitProjectSettingsChanged,
-  emitSettingsConfigChanged,
   onSettingsInit,
   notifyOverlayReady,
   setSettingsVisible,
 } from '@/shared/api'
-
-interface CompileConfig {
-  startPage: string
-  scene: number
-  queryParams: Array<{ key: string; value: string }>
-}
 
 const TABS = [
   { id: 'local', label: '本地设置' },
@@ -26,11 +18,6 @@ type TabId = (typeof TABS)[number]['id']
 export default function Settings() {
   const [activeTab, setActiveTab] = useState<TabId>('local')
   const [projectPath, setProjectPath] = useState('')
-  const [config, setConfig] = useState<CompileConfig>({
-    startPage: '',
-    scene: 1001,
-    queryParams: [],
-  })
   const [projectSettings, setProjectSettings] = useState({
     uploadWithSourceMap: false,
   })
@@ -38,7 +25,6 @@ export default function Settings() {
   useEffect(() => {
     const off = onSettingsInit((data) => {
       setProjectPath(data.projectPath)
-      setConfig(data.config)
       setProjectSettings({
         uploadWithSourceMap: !!data.projectSettings?.uploadWithSourceMap,
       })
@@ -46,12 +32,6 @@ export default function Settings() {
     notifyOverlayReady()
     return off
   }, [])
-
-  function updateConfig(patch: Partial<CompileConfig>) {
-    const next = { ...config, ...patch }
-    setConfig(next)
-    emitSettingsConfigChanged(next)
-  }
 
   function updateProjectSettings(patch: Partial<typeof projectSettings>) {
     const next = { ...projectSettings, ...patch }
@@ -111,24 +91,9 @@ export default function Settings() {
               </span>
             </div>
 
-            <div>
-              <label className="block text-[12px] text-text-secondary mb-1">启动页面</label>
-              <Input
-                value={config.startPage}
-                onChange={(e) => updateConfig({ startPage: e.target.value })}
-                className="w-full h-8 px-2 text-[12px]"
-              />
-            </div>
-
-            <div>
-              <label className="block text-[12px] text-text-secondary mb-1">Scene</label>
-              <Input
-                type="number"
-                value={config.scene}
-                onChange={(e) => updateConfig({ scene: parseInt(e.target.value || '1001', 10) })}
-                className="w-full h-8 px-2 text-[12px]"
-              />
-            </div>
+            {/* 启动页面 / scene are NOT edited here: the compile-mode dropdown
+                owns them, and a second editor of the same state would silently
+                write a configuration no mode in the list describes. */}
           </div>
         )}
       </div>

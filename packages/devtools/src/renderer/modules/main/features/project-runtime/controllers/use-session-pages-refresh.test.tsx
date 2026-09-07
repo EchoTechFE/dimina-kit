@@ -42,12 +42,13 @@ vi.mock('@/shared/api', () => {
       pages: ['pages/index/index'],
       entryPagePath: 'pages/index/index',
     })),
-    getCompileConfig: vi.fn(async () => ({
-      startPage: 'pages/index/index',
-      scene: 1011,
-      queryParams: [],
+    getCompileModeState: vi.fn(async () => ({
+      revision: 1,
+      state: { selectedId: null, entries: [] },
+      relaunch: false,
     })),
-    saveCompileConfig: vi.fn(async () => {}),
+    onCompileModesChanged: vi.fn(() => () => {}),
+    onCompileModesApplyFailed: vi.fn(() => () => {}),
     onSessionRuntimeStatus: vi.fn(() => () => {}),
     onProjectStatus: vi.fn((handler: (s: unknown) => void) => {
       projectStatusListeners.push(handler)

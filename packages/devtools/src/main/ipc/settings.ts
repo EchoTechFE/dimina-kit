@@ -14,13 +14,11 @@ import { SettingsChannel } from '../../shared/ipc-channels-overlays.js'
 import { DEFAULT_CDP_PORT } from '../../shared/constants.js'
 import { getMcpStatus } from '../services/mcp/status.js'
 import {
-  SettingsConfigChangedSchema,
   SettingsProjectSettingsChangedSchema,
   SettingsSetVisibleSchema,
   WorkbenchSettingsSaveSchema,
   WorkbenchSettingsSetThemeSchema,
 } from '../../shared/ipc-schemas.js'
-import type { CompileConfig } from '../../shared/types.js'
 import type { Disposable } from '@dimina-kit/electron-deck/main'
 import type { WorkbenchModule } from '../services/module.js'
 import { validate } from '../utils/ipc-schema.js'
@@ -89,22 +87,10 @@ export function registerSettingsIpc(input: IpcInput<SettingsIpcCtx>): Disposable
         const projectPath = ctx.workspace.getProjectPath()
         ctx.notify.settingsInit({
           projectPath,
-          config: await ctx.workspace.getCompileConfig(projectPath),
           projectSettings: ctx.workspace.getProjectSettings(projectPath),
         })
       } else {
         ctx.views.hideSettings()
-      }
-    })
-    .onRouted(SettingsChannel.ConfigChanged, async (ctx, _e, ...args: unknown[]) => {
-      const [config] = validate(
-        SettingsChannel.ConfigChanged,
-        SettingsConfigChangedSchema,
-        args,
-      )
-      const projectPath = ctx.workspace.getProjectPath()
-      if (projectPath) {
-        await ctx.workspace.saveCompileConfig(projectPath, config as CompileConfig)
       }
     })
     .onRouted(SettingsChannel.ProjectSettingsChanged, (ctx, _e, ...args: unknown[]) => {
