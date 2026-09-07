@@ -192,7 +192,7 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
           device={device.device}
           orientation={device.orientation}
           zoom={device.zoom}
-          onDeviceChange={device.handleDeviceChange}
+          onOpenDevicePicker={device.openDevicePicker}
           onOrientationChange={device.handleOrientationChange}
           onZoomChange={device.handleZoomChange}
           compileStatus={session.compileStatus}

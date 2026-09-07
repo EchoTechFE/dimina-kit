@@ -45,7 +45,7 @@ function panel(compileStatus: { status: string; message: string }) {
       <SimulatorPanel
         device={DEVICE}
         zoom={100}
-        onDeviceChange={() => {}}
+        onOpenDevicePicker={() => {}}
         onZoomChange={() => {}}
         compileStatus={compileStatus}
         currentPage="pages/index/index"

@@ -369,6 +369,7 @@ function makeSenderPolicyCtx(hostToolbarId: number | null, tooltipId: number | n
       getTooltipWebContentsId: () => tooltipId,
       getProjectCreateDialogWebContentsId: () => null,
       getUpdateDialogWebContentsId: () => null,
+      getDevicePickerWebContentsId: () => null,
       getHostToolbarWebContentsId: () => hostToolbarId,
     } as unknown as import('../workbench-context.js').WorkbenchContext['views'],
   }

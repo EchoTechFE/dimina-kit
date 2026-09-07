@@ -24,10 +24,10 @@ import {
 } from "@/shared/constants";
 import { frameOuterSize } from "@devicekit/frame";
 import {
-  CLASSIC_DEVICES,
   type DeviceProfile,
   type Orientation,
 } from "@devicekit/devices";
+import { Button } from "@/shared/components/ui/button";
 import {
   FallbackBanner,
   RuntimeErrorOverlay,
@@ -35,20 +35,16 @@ import {
   type SimulatorRuntimeStatus,
 } from "./simulator-runtime-banners";
 
-// The toolbar dropdown can't fit the full 171-device table, so it only
-// offers CLASSIC_DEVICES, grouped by platform in the order that list is
-// already sorted in (iOS → Android → HarmonyOS).
-const DEVICE_GROUPS: Array<{ label: string; devices: readonly DeviceProfile[] }> = [
-  { label: "iOS", devices: CLASSIC_DEVICES.filter((d) => d.os === "ios") },
-  { label: "Android", devices: CLASSIC_DEVICES.filter((d) => d.os === "android") },
-  { label: "HarmonyOS", devices: CLASSIC_DEVICES.filter((d) => d.os === "harmony") },
-];
-
 interface SimulatorPanelProps {
   device: DeviceProfile;
   orientation?: Orientation;
   zoom: ZoomSetting;
-  onDeviceChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  /** Opens the device-picker overlay. The device list is NOT in this
+   * renderer's DOM: the simulator WCV is mounted over this panel and would cut
+   * a centered dialog in half (see view-ids.ts's VIEW_LAYER doc-comment), so
+   * the panel keeps only the trigger and the picked device arrives at the
+   * device-state owner (use-device.ts) as an IPC push. */
+  onOpenDevicePicker: () => void;
   onOrientationChange?: (orientation: Orientation) => void;
   onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   compileStatus: { status: string; message: string };
@@ -99,7 +95,7 @@ export function SimulatorPanel({
   device,
   orientation = "portrait",
   zoom,
-  onDeviceChange,
+  onOpenDevicePicker,
   onOrientationChange = () => {},
   onZoomChange,
   compileStatus,
@@ -290,17 +286,18 @@ export function SimulatorPanel({
   return (
     <div className="bg-sim-bg flex flex-col overflow-hidden h-full w-full">
       <div className="flex items-center gap-2 px-5 py-2 shrink-0 border-b border-border-subtle">
-        <Select value={device.name} onChange={onDeviceChange}>
-          {DEVICE_GROUPS.map((group) => (
-            <optgroup key={group.label} label={group.label}>
-              {group.devices.map((d) => (
-                <option key={d.name} value={d.name}>
-                  {d.name}
-                </option>
-              ))}
-            </optgroup>
-          ))}
-        </Select>
+        {/* The label is the selected device's own name, so it is not a stable
+            handle for tests or automation — `data-testid` is, like the
+            compile-mode button next to it. */}
+        <Button
+          variant="outline"
+          size="sm"
+          data-testid="device-picker-button"
+          className="h-7 justify-start px-2 text-[13px] font-medium text-text-secondary"
+          onClick={onOpenDevicePicker}
+        >
+          {device.name}
+        </Button>
         <Select
           value={orientation}
           onChange={(e) => onOrientationChange(e.target.value as Orientation)}

@@ -146,6 +146,17 @@ export const ProjectCreateSubmitSchema = z.tuple([
 ])
 
 /**
+ * devicePicker:show / devicePicker:select — the device name only. The panel
+ * reads the device table from `@devicekit/devices` itself, the same source the
+ * toolbar reads, so the catalog never crosses IPC.
+ */
+export const DevicePickerDeviceSchema = z.tuple([
+  z.object({
+    deviceName: z.string().min(1),
+  }),
+])
+
+/**
  * Reasonable simulator width range. Window width is clamped UI-side, but
  * we still reject obvious garbage (negative, zero, absurdly large).
  */

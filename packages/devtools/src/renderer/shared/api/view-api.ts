@@ -10,6 +10,7 @@ import {
   OverlayChannel,
   TooltipChannel,
   ProjectCreateChannel,
+  DevicePickerChannel,
   ViewChannel,
 } from '../../../shared/ipc-channels-overlays'
 import type { PlacementSnapshot } from '@dimina-kit/electron-deck/layout'
@@ -183,6 +184,45 @@ export function onProjectCreateSubmitted(
   handler: (input: ProjectCreateSubmitPayload) => void,
 ): () => void {
   return on<[ProjectCreateSubmitPayload]>(ProjectCreateChannel.Submitted, (input) => handler(input))
+}
+
+/** The device-picker overlay's whole state: which device is currently selected. */
+export interface DevicePickerDevicePayload {
+  deviceName: string
+}
+
+/**
+ * Ask main to show the device-picker overlay panel (VIEW_LAYER.dialog), seeded
+ * with the currently selected device. The simulator's own WebContentsView sits
+ * on top of the toolbar's renderer and overlaps a centred dialog, so this panel
+ * cannot live in the toolbar's DOM.
+ */
+export function showDevicePicker(payload: DevicePickerDevicePayload): void {
+  send(DevicePickerChannel.Show, payload)
+}
+
+/** Hide the device-picker overlay panel without changing the device. */
+export function cancelDevicePicker(): void {
+  send(DevicePickerChannel.Cancel)
+}
+
+/** Commit the device picked in the overlay panel; main hides it and relays the choice. */
+export function selectDevice(payload: DevicePickerDevicePayload): void {
+  send(DevicePickerChannel.Select, payload)
+}
+
+/** Subscribe to the selected device pushed into the device-picker overlay panel. */
+export function onDevicePickerInit(
+  handler: (payload: DevicePickerDevicePayload) => void,
+): () => void {
+  return on<[DevicePickerDevicePayload]>(DevicePickerChannel.Init, (payload) => handler(payload))
+}
+
+/** Subscribe to the relayed device choice (received by the toolbar, not the panel itself). */
+export function onDevicePickerSelected(
+  handler: (payload: DevicePickerDevicePayload) => void,
+): () => void {
+  return on<[DevicePickerDevicePayload]>(DevicePickerChannel.Selected, (payload) => handler(payload))
 }
 
 // ── Event subscriptions ─────────────────────────────────────────────────────

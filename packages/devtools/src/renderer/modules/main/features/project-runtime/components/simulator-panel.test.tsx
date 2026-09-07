@@ -1,15 +1,17 @@
 /**
- * SimulatorPanel's device/orientation pickers against the @devicekit/devices
- * table: the device <Select> is grouped by platform (iOS/Android/HarmonyOS)
- * and lists only the hand-picked CLASSIC_DEVICES subset (the full table is far
- * too long for a toolbar dropdown), each exactly once; a separate orientation
- * <Select> (portrait/landscape) reports changes via onOrientationChange.
+ * SimulatorPanel's device/orientation controls. The device control is a button
+ * showing the current device name; the searchable list itself lives in the
+ * device-picker overlay WebContentsView, because the simulator's own WCV is
+ * painted over this panel and would cut a centred dialog in half. So the panel
+ * only reports the click through `onOpenDevicePicker` and must render no device
+ * options of its own. A separate orientation <Select> (portrait/landscape)
+ * reports changes via onOrientationChange.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, cleanup, fireEvent } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import type { Placement } from '@dimina-kit/view-anchor'
 import type { PlacementPublisher } from '@dimina-kit/electron-deck/client'
-import { CLASSIC_DEVICES, DEFAULT_DEVICE, DEVICES } from '@devicekit/devices'
+import { DEFAULT_DEVICE, DEVICE_NAMES } from '@devicekit/devices'
 import { PlacementPublisherContext } from '@/shared/placement-publisher-context'
 
 interface AnchorHandle {
@@ -32,14 +34,17 @@ const publisher = {
   dispose: vi.fn(),
 } as unknown as PlacementPublisher<{ zoom?: number }>
 
-function panelElement(onOrientationChange: (o: 'portrait' | 'landscape') => void = () => {}) {
+function panelElement(
+  onOrientationChange: (o: 'portrait' | 'landscape') => void = () => {},
+  onOpenDevicePicker: () => void = () => {},
+) {
   return (
     <PlacementPublisherContext.Provider value={publisher}>
       <SimulatorPanel
         device={DEFAULT_DEVICE}
         orientation="portrait"
         zoom={85}
-        onDeviceChange={() => {}}
+        onOpenDevicePicker={onOpenDevicePicker}
         onOrientationChange={onOrientationChange}
         onZoomChange={() => {}}
         compileStatus={{ status: 'ready', message: '' }}
@@ -55,30 +60,26 @@ beforeEach(() => {
   cleanup()
 })
 
-describe('SimulatorPanel: device picker grouped by platform', () => {
-  it('lists three optgroups labelled iOS / Android / HarmonyOS', () => {
+describe('SimulatorPanel: device picker trigger', () => {
+  it('renders a button showing the current device name instead of a native <select>', () => {
     const { container } = render(panelElement())
-    const groups = Array.from(container.querySelectorAll('optgroup'))
-    expect(groups.map((g) => g.getAttribute('label')).sort()).toEqual(
-      ['Android', 'HarmonyOS', 'iOS'].sort(),
-    )
+
+    expect(screen.getByRole('button', { name: DEFAULT_DEVICE.name })).toBeInTheDocument()
+    expect(container.querySelector('select option[value="' + DEFAULT_DEVICE.name + '"]')).toBeNull()
   })
 
-  it('lists exactly the classic subset, each once, and not the full table', () => {
-    const { container } = render(panelElement())
-    const options = Array.from(container.querySelectorAll('optgroup option'), (o) => (o as HTMLOptionElement).value)
-    expect(options).toEqual(CLASSIC_DEVICES.map((d) => d.name))
-    expect(options.length).toBeLessThan(DEVICES.length)
-  })
+  it('reports the click to the device-state owner and renders no device list of its own', () => {
+    const onOpenDevicePicker = vi.fn()
+    render(panelElement(() => {}, onOpenDevicePicker))
 
-  it('puts each classic device under the optgroup of its own platform', () => {
-    const { container } = render(panelElement())
-    for (const group of Array.from(container.querySelectorAll('optgroup'))) {
-      const os = { iOS: 'ios', Android: 'android', HarmonyOS: 'harmony' }[group.getAttribute('label') ?? '']
-      for (const o of Array.from(group.querySelectorAll('option'))) {
-        expect(CLASSIC_DEVICES.find((d) => d.name === o.value)?.os, o.value).toBe(os)
-      }
-    }
+    fireEvent.click(screen.getByRole('button', { name: DEFAULT_DEVICE.name }))
+
+    expect(onOpenDevicePicker).toHaveBeenCalledTimes(1)
+    // The device list belongs to the overlay view. A dialog or device rows
+    // rendered here would be painted behind the simulator WCV — the options
+    // still present in this DOM are the orientation/zoom <select>s'.
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByRole('option', { name: DEVICE_NAMES.iPad_Pro_13 })).toBeNull()
   })
 })
 

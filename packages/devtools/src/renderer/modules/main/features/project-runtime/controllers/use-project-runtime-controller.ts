@@ -65,6 +65,7 @@ type DeviceSlice = Pick<
   | 'simPanelWidth'
   | 'setSimPanelWidth'
   | 'handleDeviceChange'
+  | 'openDevicePicker'
   | 'handleOrientationChange'
   | 'handleZoomChange'
   | 'sendDeviceInfo'
@@ -213,6 +214,7 @@ export function useProjectRuntimeController(
       simPanelWidth: deviceHook.simPanelWidth,
       setSimPanelWidth: deviceHook.setSimPanelWidth,
       handleDeviceChange: deviceHook.handleDeviceChange,
+      openDevicePicker: deviceHook.openDevicePicker,
       handleOrientationChange: deviceHook.handleOrientationChange,
       handleZoomChange: deviceHook.handleZoomChange,
       handleSplitterDrag: deviceHook.handleSplitterDrag,

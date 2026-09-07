@@ -53,7 +53,7 @@ function panel(
   const props: PanelPropsWithRuntime = {
     device: DEVICE,
     zoom: 100,
-    onDeviceChange: () => {},
+    onOpenDevicePicker: () => {},
     onZoomChange: () => {},
     compileStatus,
     currentPage: 'pages/index/index',

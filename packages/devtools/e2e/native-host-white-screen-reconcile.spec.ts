@@ -12,7 +12,7 @@
  * Under the reconciler, hiding a base view is setVisible(false) — never a
  * detach — and every reconcile re-derives the actual tree from the desired
  * snapshot, so a transient is at worst a one-tick flicker that self-heals.
- * This drives the REAL device dropdown many times in quick succession and
+ * This drives the REAL device picker many times in quick succession and
  * asserts the simulator content view stays visible: document.visibilityState
  * === 'visible' is the exact signal the bug report flagged as stuck at
  * 'hidden', and the WCV stays in contentView.children (not detached).
@@ -29,10 +29,10 @@ import {
   pollUntil,
   evalInSimulator,
   findMainWindow,
+  selectDeviceInPicker,
 } from './helpers'
 import { AutomationChannel } from '../src/shared/ipc-channels'
-import { DEVICES } from '../src/renderer/shared/constants'
-import { DEVICE_NAMES } from '@devicekit/devices'
+import { DEFAULT_DEVICE, DEVICE_NAMES, findDevice } from '@devicekit/devices'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
@@ -41,10 +41,10 @@ const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 // the simulator column width → dock relayout → the geometry sentinel opens,
 // reproducing the transient that used to detach the view.
 const CYCLE = [
-  DEVICES[0],
-  DEVICES.find((d) => d.name === DEVICE_NAMES.iPhone_14_Pro),
-  DEVICES.find((d) => d.name === DEVICE_NAMES.iPhone_16_Pro),
-  DEVICES.find((d) => d.name === DEVICE_NAMES.iPhone_SE) ?? DEVICES[0],
+  DEFAULT_DEVICE,
+  findDevice(DEVICE_NAMES.iPhone_14_Pro),
+  findDevice(DEVICE_NAMES.iPhone_16_Pro),
+  findDevice(DEVICE_NAMES.iPhone_SE) ?? DEFAULT_DEVICE,
 ].filter(Boolean) as { name: string }[]
 
 let electronApp: ElectronApplication
@@ -52,8 +52,7 @@ let mainWindow: PwPage
 let workbench: PwPage
 
 async function selectDevice(win: PwPage, deviceName: string): Promise<void> {
-  const sel = win.locator('select', { has: win.locator(`option[value="${deviceName}"]`) }).first()
-  await sel.selectOption(deviceName)
+  await selectDeviceInPicker(win, electronApp, deviceName)
 }
 
 test.describe('native-host white-screen reconcile e2e', () => {

@@ -4,11 +4,19 @@
  * string value to the right branch (AUTO_ZOOM stays the sentinel, everything
  * else becomes a number).
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { renderHook, act } from '@testing-library/react'
 import type React from 'react'
 import { AUTO_ZOOM } from '@/shared/constants'
 import { DEFAULT_DEVICE } from '@devicekit/devices'
+// useDevice subscribes to the device-picker overlay's result on mount, so the
+// hook needs the renderer IPC facade even in a zoom-only suite.
+vi.mock('@/shared/api', () => ({
+  setNativeDeviceInfo: vi.fn(),
+  showDevicePicker: vi.fn(),
+  onDevicePickerSelected: vi.fn(() => () => {}),
+}))
+
 import { useDevice } from './use-device'
 
 function changeEvent(value: string): React.ChangeEvent<HTMLSelectElement> {

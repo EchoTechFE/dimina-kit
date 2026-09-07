@@ -55,7 +55,7 @@ function panelElement(zoom: ZoomSetting, device: typeof DEVICE = DEVICE) {
       <SimulatorPanel
         device={device}
         zoom={zoom}
-        onDeviceChange={() => {}}
+        onOpenDevicePicker={() => {}}
         onZoomChange={() => {}}
         compileStatus={{ status: 'ready', message: '' }}
         currentPage="pages/index/index"
@@ -204,7 +204,7 @@ describe('SimulatorPanel: auto-fit zoom', () => {
         <SimulatorPanel
           device={BIGGER_DEVICE}
           zoom={AUTO_ZOOM}
-          onDeviceChange={() => {}}
+          onOpenDevicePicker={() => {}}
           onZoomChange={() => {}}
           compileStatus={{ status: 'ready', message: '' }}
           currentPage="pages/index/index"

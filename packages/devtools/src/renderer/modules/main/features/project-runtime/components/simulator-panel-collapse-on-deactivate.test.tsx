@@ -64,7 +64,7 @@ function renderPanel() {
       <SimulatorPanel
         device={DEVICE}
         zoom={100}
-        onDeviceChange={() => {}}
+        onOpenDevicePicker={() => {}}
         onZoomChange={() => {}}
         compileStatus={{ status: 'ready', message: '' }}
         currentPage="pages/index/index"
