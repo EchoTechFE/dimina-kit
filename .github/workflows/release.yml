@@ -166,6 +166,12 @@ jobs:
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --prefer-offline
 
+      # 必须排在任何进入 dimina/fe 的步骤之前：装依赖和 build:container 都会在那里
+      # 起 pnpm，而 submodule 声明的 pnpm 版本和本仓根不同时，切换会 exec 到
+      # pnpm.exe 并让这一步直接退出 2。脚本里写了完整来龙去脉。
+      - name: Use the runner's pnpm inside dimina/fe
+        run: node .github/scripts/use-runner-pnpm-for-dimina-fe.js
+
       - name: Install dimina/fe deps
         working-directory: dimina/fe
         run: pnpm install --no-frozen-lockfile
@@ -353,6 +359,10 @@ jobs:
 
       - name: Install workspace deps
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      # 同 build-clients：进 dimina/fe 之前先摘掉它声明的 pnpm 版本。
+      - name: Use the runner's pnpm inside dimina/fe
+        run: node .github/scripts/use-runner-pnpm-for-dimina-fe.js
 
       - name: Install dimina/fe deps
         working-directory: dimina/fe
