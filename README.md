@@ -1,37 +1,41 @@
 # Dimina Kit
 
-> [Dimina](https://github.com/didi/dimina) 小程序的开发者工具集：一个可以调试小程序的桌面应用，以及构成它的那些可以单独使用的包。
+> 为 [Dimina](https://github.com/didi/dimina) 小程序准备的开发者工具：既能直接调试，也能把编译、预览和运行能力接入自己的产品。
 
+[![CI](https://github.com/EchoTechFE/dimina-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/EchoTechFE/dimina-kit/actions/workflows/ci.yml)
+[![Latest Release](https://img.shields.io/github/v/release/EchoTechFE/dimina-kit)](https://github.com/EchoTechFE/dimina-kit/releases/latest)
+[![Release Downloads](https://img.shields.io/github/downloads/EchoTechFE/dimina-kit/total)](https://github.com/EchoTechFE/dimina-kit/releases)
+[![npm](https://img.shields.io/npm/v/%40dimina-kit/devkit)](https://www.npmjs.com/package/@dimina-kit/devkit)
+[![Node](https://img.shields.io/badge/node-24-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![pnpm](https://img.shields.io/badge/pnpm-12.3.4-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/EchoTechFE/dimina-kit)
 
 ![Dimina DevTools](./docs/devtools.png)
 
-## 这是什么
+[下载桌面工具](https://github.com/EchoTechFE/dimina-kit/releases) · [使用开发包](#嵌入开发包) · [产品主页](https://echotechfe.github.io/dimina-kit/)
 
-Dimina 是滴滴开源的小程序框架。dimina-kit 提供围绕它的开发期工具：
+## 选择你的用法
 
-- **一个 Electron 桌面工具**（`@dimina-kit/devtools`）——打开小程序项目、在模拟器里运行、用 Chrome DevTools 调试，另有 WXML / AppData / Storage / Console 面板和一个内嵌的 VS Code 编辑器。
-- **一组可独立使用的包**——编译、预览服务、热更新、原生视图布局这些能力都各自成包，可以脱离桌面工具，装进你自己的 Electron 宿主或 Node 工具链。
+### 直接调试小程序
 
-如果你只想调试小程序，看 [快速开始](#快速开始)；如果你想把其中某块能力嵌进自己的产品，看 [包一览](#包一览)。
+下载 [Dimina DevTools](https://github.com/EchoTechFE/dimina-kit/releases)：macOS 提供 Intel 和 Apple Silicon 的 `.dmg`，Windows 提供 `.zip`，Linux 提供 `.tar.gz`。打开项目后，可以在同一窗口使用模拟器、WXML、AppData、Storage、Console 和编译面板；AppData 支持编辑后写回，也可接入 Chrome DevTools，并用内嵌编辑器修改代码。
 
-## 快速开始
+### 接入自己的产品
 
-想直接用的话，[Releases](https://github.com/EchoTechFE/dimina-kit/releases) 里有打好的桌面工具：macOS（`.dmg`，Intel / Apple Silicon 各一份）、Windows（`.zip`）、Linux（`.tar.gz`）。
+把编译、H5 预览、热更新或 Electron 运行能力接进自己的宿主或 Node 工具链。面向此类使用场景的包见 [包一览](#包一览)。
 
-### 从源码构建
+## 从源码启动
 
-**环境要求**：Node 24（见 [`.node-version`](./.node-version)）、pnpm 9.15.9。
+**环境要求**：Node 24（见 [`.node-version`](./.node-version)）、pnpm 12.3.4。
 
 ```bash
 # 1. 克隆，注意带上 submodule —— 编译器构建会读取 dimina 子模块的源码
 git clone --recurse-submodules https://github.com/EchoTechFE/dimina-kit.git
 cd dimina-kit
 
-# 2. 安装依赖：工作区一次，dimina/fe 一次
+# 2. 安装依赖：两个 workspace 会按各自 packageManager 选择 pnpm 版本
 pnpm install
-pnpm -C dimina/fe install
+(cd dimina/fe && pnpm install --no-frozen-lockfile)
 
 # 3. 构建 H5 容器，再构建全部包
 pnpm --filter @dimina-kit/devtools build:container
@@ -43,7 +47,9 @@ pnpm --filter @dimina-kit/devtools start
 
 日常开发用 `pnpm --filter @dimina-kit/devtools dev`，它会先构建，然后带 watch 启动 Electron。
 
-只想用编译和 H5 预览、不需要桌面工具的话，`@dimina-kit/devkit` 可以直接从 npm 装：
+## 嵌入开发包
+
+只需要编译和 H5 预览、不需要桌面工具时，直接从 npm 安装 `@dimina-kit/devkit`：
 
 ```bash
 pnpm add @dimina-kit/devkit

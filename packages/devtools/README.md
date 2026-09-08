@@ -6,7 +6,7 @@ Dimina DevTools 是调试 [Dimina](https://github.com/didi/dimina) 小程序的�
 
 ## 获取和运行
 
-直接使用桌面应用，可以从项目的 [Releases](https://github.com/EchoTechFE/dimina-kit/releases) 下载已发布的桌面构建。要从源码运行，请先按[仓库根 README](../../README.md#快速开始)准备仓库，然后执行：
+直接使用桌面应用，可以从项目的 [Releases](https://github.com/EchoTechFE/dimina-kit/releases) 下载已发布的桌面构建。要从源码运行，请先按[仓库根 README](../../README.md#从源码启动)准备仓库，然后执行：
 
 ```bash
 pnpm --filter @dimina-kit/devtools build

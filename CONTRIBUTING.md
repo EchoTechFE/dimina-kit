@@ -13,7 +13,7 @@ pnpm install
 pnpm -C dimina/fe install
 ```
 
-环境要求见根 [README](./README.md#从源码构建)（Node 版本、pnpm 版本）。`dimina/` 是 git submodule，本仓库不修改它的内容。
+环境要求见根 [README](./README.md#从源码启动)（Node 版本、pnpm 版本）。`dimina/` 是 git submodule，本仓库不修改它的内容。
 
 ## 分支与提交
 
