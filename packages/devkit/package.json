@@ -1,6 +1,6 @@
 {
     "name": "@dimina-kit/devkit",
-    "version": "0.1.2",
+    "version": "0.2.0",
     "description": "Development toolkit for Dimina mini-apps with H5 container preview",
     "keywords": [
         "dimina",

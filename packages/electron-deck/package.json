@@ -1,6 +1,6 @@
 {
   "name": "@dimina-kit/electron-deck",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Dimina devtools electron-deck framework — single `electronDeck(config)` entry for downstream hosts (dimina default).",
   "keywords": [
     "dimina",
