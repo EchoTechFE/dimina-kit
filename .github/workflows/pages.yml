@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - docs/**
+      - scripts/check-docs.mjs
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -15,7 +16,7 @@ permissions:
 
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -29,6 +30,9 @@ jobs:
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
+
+      - name: Check documentation links
+        run: node scripts/check-docs.mjs
 
       - name: Upload site
         uses: actions/upload-pages-artifact@v4

@@ -12,6 +12,7 @@
     <meta property="og:url" content="https://echotechfe.github.io/dimina-kit/" />
     <meta property="og:image" content="https://echotechfe.github.io/dimina-kit/devtools.png" />
     <link rel="stylesheet" href="./styles.css" />
+    <script src="./downloads.js" defer></script>
   </head>
   <body>
     <header class="site-header">
@@ -40,7 +41,7 @@
         </div>
 
         <figure class="product-shot">
-          <img src="./devtools.png" alt="Dimina DevTools 工作台，左侧为小程序模拟器，右侧为开发者工具" />
+          <img src="./devtools.png" width="2880" height="1736" alt="Dimina DevTools 工作台，左侧为小程序模拟器，右侧为开发者工具" />
         </figure>
       </section>
 
@@ -77,33 +78,42 @@
 
       <section class="section download-section" id="download">
         <div class="section-heading section-heading-centered">
-          <p class="eyebrow">Dimina DevTools 0.4.0</p>
+          <p class="eyebrow">正式版 · <span data-release-version>Dimina DevTools 0.4.0</span></p>
           <h2>选择你的系统</h2>
-          <p>下载即可使用。其他版本与更新记录可以在 GitHub Releases 查看。</p>
+          <p>正式版可直接下载。其他版本与更新记录可以在 GitHub Releases 查看。</p>
         </div>
         <div class="download-grid">
-          <a class="download-card" href="https://github.com/EchoTechFE/dimina-kit/releases/download/release-20260728-6/dimina-devtools-0.4.0-mac-arm64.dmg">
+          <a class="download-card" data-asset-suffix="-mac-arm64.dmg" href="https://github.com/EchoTechFE/dimina-kit/releases/download/release-20260728-6/dimina-devtools-0.4.0-mac-arm64.dmg">
             <span class="download-platform">macOS</span>
             <strong>Apple Silicon</strong>
             <span>下载 .dmg <b aria-hidden="true">↓</b></span>
           </a>
-          <a class="download-card" href="https://github.com/EchoTechFE/dimina-kit/releases/download/release-20260728-6/dimina-devtools-0.4.0-mac-x64.dmg">
+          <a class="download-card" data-asset-suffix="-mac-x64.dmg" href="https://github.com/EchoTechFE/dimina-kit/releases/download/release-20260728-6/dimina-devtools-0.4.0-mac-x64.dmg">
             <span class="download-platform">macOS</span>
             <strong>Intel</strong>
             <span>下载 .dmg <b aria-hidden="true">↓</b></span>
           </a>
-          <a class="download-card" href="https://github.com/EchoTechFE/dimina-kit/releases/download/release-20260728-6/dimina-devtools-0.4.0-win-x64.zip">
+          <a class="download-card" data-asset-suffix="-win-x64.zip" href="https://github.com/EchoTechFE/dimina-kit/releases/download/release-20260728-6/dimina-devtools-0.4.0-win-x64.zip">
             <span class="download-platform">Windows</span>
             <strong>x64</strong>
             <span>下载 .zip <b aria-hidden="true">↓</b></span>
           </a>
-          <a class="download-card" href="https://github.com/EchoTechFE/dimina-kit/releases/download/release-20260728-6/dimina-devtools-0.4.0-linux-x64.tar.gz">
+          <a class="download-card" data-asset-suffix="-linux-x64.tar.gz" href="https://github.com/EchoTechFE/dimina-kit/releases/download/release-20260728-6/dimina-devtools-0.4.0-linux-x64.tar.gz">
             <span class="download-platform">Linux</span>
             <strong>x64</strong>
             <span>下载 .tar.gz <b aria-hidden="true">↓</b></span>
           </a>
         </div>
         <a class="release-link" href="https://github.com/EchoTechFE/dimina-kit/releases/latest">查看全部版本与更新记录 <span aria-hidden="true">→</span></a>
+        <aside class="dev-download" aria-labelledby="dev-download-title">
+          <div>
+            <p class="eyebrow">Dev 版</p>
+            <h3 id="dev-download-title">试用最新开发构建</h3>
+            <p>开发构建可能不稳定，需要登录 GitHub。打开工作流后，选择成功的 main 或 dev 运行，在 Artifacts 中按平台下载；工件保留 30 天。</p>
+          </div>
+          <a class="button button-secondary" href="https://github.com/EchoTechFE/dimina-kit/actions/workflows/release.yml">查看开发构建 <span aria-hidden="true">→</span></a>
+        </aside>
+        <p class="sr-only" data-release-status aria-live="polite"></p>
       </section>
 
       <section class="section developer-section">
@@ -115,7 +125,7 @@
           <div class="code-card-header"><span></span><span></span><span></span></div>
           <pre><code><span class="code-muted"># 编译小程序并启动 H5 预览</span>
 pnpm add @dimina-kit/devkit</code></pre>
-          <a href="https://github.com/EchoTechFE/dimina-kit#%E5%BF%AB%E9%80%9F%E5%BC%80%E5%A7%8B">阅读接入文档 <span aria-hidden="true">→</span></a>
+          <a href="https://github.com/EchoTechFE/dimina-kit#%E5%B5%8C%E5%85%A5%E5%BC%80%E5%8F%91%E5%8C%85">阅读接入文档 <span aria-hidden="true">→</span></a>
         </div>
       </section>
     </main>

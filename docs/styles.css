@@ -148,7 +148,7 @@ h1 {
 
 .platforms {
   margin: 18px 0 0;
-  color: #8a94a8;
+  color: #59677d;
   font-size: 13px;
 }
 
@@ -197,7 +197,7 @@ h1 {
 
 .section-heading > p:last-child {
   margin: 20px 0 0;
-  color: #6b768c;
+  color: #526078;
   font-size: 17px;
   line-height: 1.75;
 }
@@ -239,7 +239,7 @@ h1 {
 .feature-card p {
   max-width: 510px;
   margin: 0;
-  color: #6b768c;
+  color: #526078;
   font-size: 15px;
   line-height: 1.75;
 }
@@ -303,7 +303,7 @@ h1 {
 }
 
 .download-platform {
-  color: #7b869b;
+  color: #59667e;
   font-size: 13px;
 }
 
@@ -340,6 +340,55 @@ h1 {
   color: #526079;
   font-size: 14px;
   font-weight: 620;
+}
+
+.dev-download {
+  display: flex;
+  max-width: 920px;
+  margin: 44px auto 0;
+  padding: 32px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid #d8e0ef;
+  border-radius: 24px;
+  gap: 32px;
+  background: linear-gradient(135deg, #f2f6ff, #fbfcff);
+}
+
+.dev-download .eyebrow {
+  margin-bottom: 12px;
+}
+
+.dev-download h3 {
+  margin: 0;
+  color: #15213a;
+  font-size: 24px;
+  letter-spacing: -0.025em;
+}
+
+.dev-download p:not(.eyebrow) {
+  max-width: 620px;
+  margin: 12px 0 0;
+  color: #526078;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.dev-download .button {
+  flex: none;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .developer-section {
@@ -412,7 +461,7 @@ footer {
 
 .footer-inner p {
   margin: 18px 0 0;
-  color: #7b869b;
+  color: #59667e;
   font-size: 14px;
 }
 
@@ -423,7 +472,7 @@ footer {
   font-size: 14px;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1000px) {
   .hero {
     min-height: auto;
     padding-top: 56px;
@@ -442,6 +491,11 @@ footer {
   .developer-section {
     grid-template-columns: 1fr;
     gap: 44px;
+  }
+
+  .dev-download {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }
 
@@ -505,6 +559,15 @@ footer {
     width: auto;
     padding-right: 16px;
     padding-left: 16px;
+  }
+
+  .dev-download {
+    padding: 24px;
+    gap: 24px;
+  }
+
+  .dev-download .button {
+    width: 100%;
   }
 
   .footer-inner {

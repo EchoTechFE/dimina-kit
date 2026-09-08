@@ -20,7 +20,7 @@
 
 下载 [Dimina DevTools](https://github.com/EchoTechFE/dimina-kit/releases)：macOS 提供 Intel 和 Apple Silicon 的 `.dmg`，Windows 提供 `.zip`，Linux 提供 `.tar.gz`。打开项目后，可以在同一窗口使用模拟器、WXML、AppData、Storage、Console 和编译面板；AppData 支持编辑后写回，也可接入 Chrome DevTools，并用内嵌编辑器修改代码。
 
-### 嵌入开发包
+### 接入自己的产品
 
 把编译、H5 预览、热更新或 Electron 运行能力接进自己的宿主或 Node 工具链。面向此类使用场景的包见 [包一览](#包一览)。
 
