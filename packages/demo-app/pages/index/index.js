@@ -47,7 +47,7 @@ Page({
         path: '/pages/safe-area-test/safe-area-test',
         icon: '\u{1F4D0}',
         title: '安全区域 env() 测试',
-        subtitle: '实测 env(safe-area-inset-*) 与 wx safeArea，切机型/横竖屏自动重量',
+        subtitle: '实测 env(safe-area-inset-*) 与 wx safeArea，切换机型或旋转设备后自动重新测量',
         tags: ['env()', 'safeArea', 'onResize']
       },
       {

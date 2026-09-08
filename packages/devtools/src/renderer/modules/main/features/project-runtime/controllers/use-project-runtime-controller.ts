@@ -60,13 +60,11 @@ interface SessionSlice {
 type DeviceSlice = Pick<
   DeviceHookResult,
   | 'device'
-  | 'orientation'
   | 'zoom'
   | 'simPanelWidth'
   | 'setSimPanelWidth'
   | 'handleDeviceChange'
   | 'openDevicePicker'
-  | 'handleOrientationChange'
   | 'handleZoomChange'
   | 'sendDeviceInfo'
 > & {
@@ -148,10 +146,10 @@ export function useProjectRuntimeController(
   // openProject effect so device switches don't re-open the project.
   useEffect(() => {
     if (sessionHook.compileStatus.status === 'ready') {
-      deviceHook.setSimPanelWidth(computeSimPanelWidth(frameOuterSize(deviceHook.device, deviceHook.orientation).width))
+      deviceHook.setSimPanelWidth(computeSimPanelWidth(frameOuterSize(deviceHook.device, 'portrait').width))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [deviceHook.device, deviceHook.orientation, sessionHook.compileStatus.status, deviceHook.setSimPanelWidth])
+  }, [deviceHook.device, sessionHook.compileStatus.status, deviceHook.setSimPanelWidth])
 
   const simulatorHook = useSimulator({
     compileStatus: sessionHook.compileStatus,
@@ -209,13 +207,11 @@ export function useProjectRuntimeController(
     },
     device: {
       device: deviceHook.device,
-      orientation: deviceHook.orientation,
       zoom: deviceHook.zoom,
       simPanelWidth: deviceHook.simPanelWidth,
       setSimPanelWidth: deviceHook.setSimPanelWidth,
       handleDeviceChange: deviceHook.handleDeviceChange,
       openDevicePicker: deviceHook.openDevicePicker,
-      handleOrientationChange: deviceHook.handleOrientationChange,
       handleZoomChange: deviceHook.handleZoomChange,
       handleSplitterDrag: deviceHook.handleSplitterDrag,
       sendDeviceInfo: deviceHook.sendDeviceInfo,

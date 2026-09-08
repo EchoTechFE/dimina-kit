@@ -16,20 +16,20 @@ devtools 只用其中几个入口：
 |---|---|
 | `DEVICES` | 工具栏的设备选择面板列出整张表，按 iOS → Android → HarmonyOS 分组，靠搜索和机型/尺寸筛选缩小范围 |
 | `findDevice(name)` / `DEFAULT_DEVICE` | 按名字回查机型；找不到时回落到默认机型 |
-| `resolveDevice` / `statusBarHeightFor` / `safeAreaInsetsFor` | 按当前横竖屏解析出已经旋转过的数值 |
+| `resolveDevice` / `statusBarHeightFor` / `safeAreaInsetsFor` | 按传入方向解析数值；当前 DevTools 设备选择固定传入竖屏 |
 | `PLATFORM_DEFAULTS` | 第一份设备信息到达前，DeviceShell 用平台默认状态栏高度占位 |
 
 ## 设备信息流
 
 ```
-工具栏设备 / 横竖屏选择（renderer，use-device.ts）
+工具栏设备选择（renderer，use-device.ts，当前固定竖屏）
   → setNativeDeviceInfo(NativeDeviceInfo)          ipc-schemas.ts 校验
     ├→ bridge 缓存 + DEVICE_CHANGE → simulator WCV（DeviceShell → <device-frame>）
     ├→ safe-area service 对每个 render-host guest 重发 CDP override
     └→ HostEnvUpdate → service-host hostEnvSnapshot（getSystemInfoSync 等同步 API）
 ```
 
-`NativeDeviceInfo`（`packages/dimina-electron-runtime/src/shared/runtime-types.ts`）里的数值**已经按当前方向解析好**：横屏时 `screenWidth/screenHeight` 已交换，`safeAreaInsets` 是横屏那一组。字段：
+`NativeDeviceInfo`（`packages/dimina-electron-runtime/src/shared/runtime-types.ts`）里的数值**已经按传入方向解析好**：横屏时 `screenWidth/screenHeight` 已交换，`safeAreaInsets` 是横屏那一组。当前 DevTools 不提供横竖屏切换，`use-device.ts` 始终下发竖屏；下层类型仍保留横屏取值能力。字段：
 
 - `device`：机型表里的名字，自定义或旧版 payload 没有这项；
 - `platform`：`'ios' | 'android' | 'harmony'`，`orientation`：`'portrait' | 'landscape'`；
@@ -46,7 +46,7 @@ devtools 只用其中几个入口：
 
 `MiniAppFrame` 只需要知道顶部要让出 `statusBarHeight`（取 `safeAreaInsets.top`）、底部要让出 `bottomInset`（取 `safeAreaInsets.bottom`），刘海、灵动岛和 Home 指示条都由 frame 画。NavigationBar 的平台样式跟随 `device.platform`（iOS 用 iOS 样式，Android/HarmonyOS 用 Android 样式），只有设备到达前回落到 `miniApp.platform`。
 
-外壳几何由 `frameOuterSize(profile, orientation)` 决定（屏幕尺寸 + 2 × 边框），renderer 的面板宽度和自动缩放都从它推导，见 `project-runtime/lib/device-geometry.ts`。
+外壳几何由 `frameOuterSize(profile, orientation)` 决定（屏幕尺寸 + 2 × 边框）；当前 renderer 固定传入 `portrait`，面板宽度和自动缩放都从这份竖屏几何推导，见 `project-runtime/lib/device-geometry.ts`。
 
 ## CSS `env(safe-area-inset-*)` 注入：CDP `Emulation.setSafeAreaInsetsOverride`
 
@@ -54,7 +54,7 @@ devtools 只用其中几个入口：
 
 - `wc.debugger` 会话不归 safe-area 管，走共享的 `CdpSessionBroker`（`src/main/services/cdp-session/index.ts`）。`wc.debugger` 是单 owner API，没有 broker 时多个消费者会互相抢会话。safe-area 每个 guest 拿一个 `CdpSessionLease`，在上面 `send('Emulation.setSafeAreaInsetsOverride', { insets })`。`insets` 带全部 8 个字段（`top/topMax/right/rightMax/bottom/bottomMax/left/leftMax`，base 等于 max），漏掉 `*Max` 会让 `env(safe-area-max-inset-*)` 停在 0。
 - 每个 guest 的页面策略只有 `isCustomNav`，来自 URL 的 `navStyle=custom`（由 `dmb-resource-url.ts` 按页面的 `windowConfig` 写进 render-host URL）。它在 `will-attach-webview` 时读出并存下（`parseGuestPageInsetPolicy`；`did-attach` 时 `getURL()` 还是空），设备切换重发时复用；guest `destroyed` 时清掉。lease 在 broker `onDetach` 时丢弃，下次 override 重新申请。
-- **重发时机**：(1) guest attach（页面栈新页面），(2) 设备或横竖屏切换（对所有已 attach 的 guest 重发）。
+- **重发时机**：(1) guest attach（页面栈新页面），(2) 设备切换（对所有已 attach 的 guest 重发）。
 - **按页面导航样式处理顶部，底部始终使用设备值**（`guestInsets()`）：
   - `top`：自定义导航栏页（`navigationStyle: custom`，页面全出血到屏幕顶部）取设备当前方向的 `safeAreaInsets.top`；默认导航栏页为 0，因为 webview 本来就从外壳导航栏下方开始，三端 native 也是这样。
   - `bottom`：所有 render WebView 都取设备当前方向的 `safeAreaInsets.bottom`；tabBar 是否存在不改变页面的 `env(safe-area-inset-bottom)`。
@@ -93,7 +93,7 @@ height = windowHeight   （= screenHeight − insets.top − insets.bottom）
 |---|---|
 | [`@devicekit/devices`](https://www.npmjs.com/package/@devicekit/devices) | 机型表、`CLASSIC_DEVICES`、`resolveDevice` / `statusBarHeightFor` / `safeAreaInsetsFor` |
 | [`@devicekit/frame`](https://www.npmjs.com/package/@devicekit/frame) | `<device-frame>`：外壳、状态栏、刘海/灵动岛、Home 指示条、`frameOuterSize` |
-| `src/renderer/.../project-runtime/controllers/use-device.ts` | 设备/横竖屏选择 → `NativeDeviceInfo` → `setNativeDeviceInfo` |
+| `src/renderer/.../project-runtime/controllers/use-device.ts` | 设备选择 → 竖屏 `NativeDeviceInfo` → `setNativeDeviceInfo` |
 | `src/renderer/.../project-runtime/lib/device-geometry.ts` | 由 `frameOuterSize` 推导面板宽度 |
 | `src/main/ipc/simulator.ts` | `SetDeviceInfo` → bridge 缓存 → `DEVICE_CHANGE`；`deviceInfoToHostEnv` |
 | `packages/dimina-electron-runtime/src/shared/host-env.ts` | `deviceInfoToHostEnv` / `makeHostEnvUpdateMessage`（`NativeDeviceInfo` → `HostEnvSnapshot`） |

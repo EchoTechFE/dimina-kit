@@ -25,7 +25,6 @@ import {
 import { frameOuterSize } from "@devicekit/frame";
 import {
   type DeviceProfile,
-  type Orientation,
 } from "@devicekit/devices";
 import { Button } from "@/shared/components/ui/button";
 import {
@@ -37,7 +36,6 @@ import {
 
 interface SimulatorPanelProps {
   device: DeviceProfile;
-  orientation?: Orientation;
   zoom: ZoomSetting;
   /** Opens the device-picker overlay. The device list is NOT in this
    * renderer's DOM: the simulator WCV is mounted over this panel and would cut
@@ -45,7 +43,6 @@ interface SimulatorPanelProps {
    * the panel keeps only the trigger and the picked device arrives at the
    * device-state owner (use-device.ts) as an IPC push. */
   onOpenDevicePicker: () => void;
-  onOrientationChange?: (orientation: Orientation) => void;
   onZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
   compileStatus: { status: string; message: string };
   /** Visible page as `pagePath?k=v&…`, shown in the page-path bar with params
@@ -93,10 +90,8 @@ function computeAutoZoom(
 
 export function SimulatorPanel({
   device,
-  orientation = "portrait",
   zoom,
   onOpenDevicePicker,
-  onOrientationChange = () => {},
   onZoomChange,
   compileStatus,
   currentPage,
@@ -146,9 +141,8 @@ export function SimulatorPanel({
   // `publish` via ref so that callback's identity can stay pinned to
   // `[publisher]` instead of being recreated on every zoom change.
   const zoomModeRef = useRef<ZoomSetting>(zoom);
-  // Device + orientation, read live inside `publish` for the same reason.
+  // Device, read live inside `publish` for the same reason.
   const deviceRef = useRef(device);
-  const orientationRef = useRef(orientation);
   const anchorHandleRef = useRef<PlacementAnchorHandle | null>(null);
 
   // Whether the simulator has reached 'ready' at least once since mount. The
@@ -195,7 +189,7 @@ export function SimulatorPanel({
           mode === AUTO_ZOOM
             ? computeAutoZoom(
                 p.bounds,
-                frameOuterSize(deviceRef.current, orientationRef.current),
+                frameOuterSize(deviceRef.current, "portrait"),
                 zoomRef.current,
               )
             : mode;
@@ -250,11 +244,10 @@ export function SimulatorPanel({
   useLayoutEffect(() => {
     zoomModeRef.current = zoom;
     deviceRef.current = device;
-    orientationRef.current = orientation;
   });
   useLayoutEffect(() => {
     anchorHandleRef.current?.update({ visible: true, publish });
-  }, [zoom, device, orientation, publish]);
+  }, [zoom, device, publish]);
 
   // Follow a pure-translate layout reorder. A dock preset change (simulator
   // left↔right flip, devtools-position move) reorders this panel's slot
@@ -298,14 +291,6 @@ export function SimulatorPanel({
         >
           {device.name}
         </Button>
-        <Select
-          value={orientation}
-          onChange={(e) => onOrientationChange(e.target.value as Orientation)}
-          className="w-[76px] shrink-0"
-        >
-          <option value="portrait">竖屏</option>
-          <option value="landscape">横屏</option>
-        </Select>
         <Select
           value={zoom}
           onChange={onZoomChange}

@@ -190,10 +190,8 @@ export function ProjectRuntime({ project }: ProjectRuntimeProps) {
       return (
         <SimulatorPanel
           device={device.device}
-          orientation={device.orientation}
           zoom={device.zoom}
           onOpenDevicePicker={device.openDevicePicker}
-          onOrientationChange={device.handleOrientationChange}
           onZoomChange={device.handleZoomChange}
           compileStatus={session.compileStatus}
           currentPage={simulator.currentRoute}

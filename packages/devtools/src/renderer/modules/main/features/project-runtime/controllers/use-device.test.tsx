@@ -1,8 +1,8 @@
 /**
- * useDevice against the @devicekit/devices contract: device selection and
- * orientation both drive a single NativeDeviceInfo push (`setNativeDeviceInfo`),
+ * useDevice against the @devicekit/devices contract: device selection drives
+ * a portrait NativeDeviceInfo push (`setNativeDeviceInfo`),
  * and simPanelWidth tracks the framed (bezel-inclusive) size for the current
- * device/orientation pair rather than the bare screen width.
+ * device rather than the bare screen width.
  *
  * handleDeviceChange takes the device name directly (DevicePicker's
  * `onSelect` is `(name: string) => void`, not a <select> ChangeEvent).
@@ -60,7 +60,6 @@ describe('useDevice: initial state', () => {
   it('defaults to DEFAULT_DEVICE in portrait', () => {
     const { result } = renderHook(() => useDevice({ initialDevice: DEFAULT_DEVICE }))
     expect(result.current.device).toBe(DEFAULT_DEVICE)
-    expect(result.current.orientation).toBe('portrait')
   })
 })
 
@@ -89,33 +88,6 @@ describe('useDevice: selecting an Android device', () => {
   })
 })
 
-describe('useDevice: rotating to landscape', () => {
-  it('re-sends device info with swapped dimensions and the landscape insets/statusBarHeight', () => {
-    const { result } = renderHook(() => useDevice({ initialDevice: DEFAULT_DEVICE }))
-    const iphone15 = resolveDevice(findDevice(DEVICE_NAMES.iPhone_15)!)
-
-    act(() => {
-      result.current.handleDeviceChange(DEVICE_NAMES.iPhone_15)
-    })
-    vi.mocked(setNativeDeviceInfo).mockClear()
-
-    act(() => {
-      result.current.handleOrientationChange('landscape')
-    })
-
-    expect(result.current.orientation).toBe('landscape')
-    const payload = lastPayload()
-    expect(payload).toMatchObject({
-      device: DEVICE_NAMES.iPhone_15,
-      orientation: 'landscape',
-      screenWidth: iphone15.screen.height,
-      screenHeight: iphone15.screen.width,
-      statusBarHeight: statusBarHeightFor(iphone15, 'landscape'),
-      safeAreaInsets: safeAreaInsetsFor(iphone15, 'landscape'),
-    })
-  })
-})
-
 describe('useDevice: selecting an unknown device name', () => {
   it('falls back to DEFAULT_DEVICE', () => {
     const { result } = renderHook(() => useDevice({ initialDevice: DEFAULT_DEVICE }))
@@ -140,16 +112,6 @@ describe('useDevice: simPanelWidth follows the framed (bezel-inclusive) size', (
     expect(result.current.simPanelWidth).toBe(computeSimPanelWidth(frameOuterSize(pixel8Profile, 'portrait').width))
   })
 
-  it('recomputes simPanelWidth from frameOuterSize on orientation change', () => {
-    const { result } = renderHook(() => useDevice({ initialDevice: DEFAULT_DEVICE }))
-    const defaultProfile = DEFAULT_DEVICE
-
-    act(() => {
-      result.current.handleOrientationChange('landscape')
-    })
-
-    expect(result.current.simPanelWidth).toBe(computeSimPanelWidth(frameOuterSize(defaultProfile, 'landscape').width))
-  })
 })
 
 /**

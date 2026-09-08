@@ -103,7 +103,7 @@ describe('SimulatorPanel: auto-fit zoom', () => {
     // 375x812 region.
     expect(lastZoom()).toBe(85)
 
-    const zoomSelect = container.querySelectorAll('select')[1]
+    const zoomSelect = container.querySelector('option[value="auto"]')?.parentElement
     expect(zoomSelect?.className).toContain('w-[76px]')
     expect(zoomSelect?.className).not.toContain('h-8')
     expect(zoomSelect?.className).not.toContain('text-[14px]')
