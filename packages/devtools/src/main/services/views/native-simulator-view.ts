@@ -281,8 +281,8 @@ export function createNativeSimulatorView(
     // them with contextIsolation/sandbox off so the render runtime + its preload
     // share the page realm. (A top-level WebContentsView can host these guests; a
     // `<webview>` guest cannot — that's the whole point of Option A.)
-    // Inset policy (`isTab`, `navStyle`) of each attaching guest, captured from
-    // its render-host URL in will-attach (where `params.src` carries the full
+    // Inset policy (`navStyle`) of each attaching guest, captured from its
+    // render-host URL in will-attach (where `params.src` carries the full
     // URL) and consumed FIFO in the matching did-attach — `guestWc.getURL()` is
     // still empty there.
     // Per-attach scope: a fresh simWc + handlers are built on every (re)attach.
@@ -309,12 +309,11 @@ export function createNativeSimulatorView(
         guestWc.setZoomFactor(currentZoomFactor)
       } catch { /* guest not ready; setNativeSimulatorViewBounds re-applies */ }
       // Simulate this device's CSS env(safe-area-inset-*) on the fresh guest
-      // before it paints, so notch-aware page layout resolves correctly. Both
-      // the top and the bottom inset depend on the page (see services/safe-area):
-      // only a custom-nav page borders the unsafe top zone, and only a non-tab
-      // page borders the bottom one. The policy was captured from the
-      // render-host URL in will-attach (FIFO).
-      const guestPage = pendingGuestPages.shift() ?? { isTabPage: false, isCustomNav: false }
+      // before it paints, so notch-aware page layout resolves correctly. Only
+      // the top inset depends on the page (see services/safe-area): only a
+      // custom-nav page borders the unsafe top zone. The policy was captured
+      // from the render-host URL in will-attach (FIFO).
+      const guestPage = pendingGuestPages.shift() ?? { isCustomNav: false }
       safeArea.applyToGuest(guestWc, ctx.bridge?.getDevice() ?? null, guestPage)
       // Page-level resource loads (images/fonts/page fetch) run in THIS guest's
       // network stack, never the simulator's — without this, only wx.request

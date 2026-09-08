@@ -14,19 +14,15 @@ import { describe, it, expect, vi } from 'vitest'
 import type { WebContents } from 'electron'
 
 import { createConnectionRegistry } from '@dimina-kit/electron-deck/main'
-import { createSafeAreaController } from './index.js'
+import { createSafeAreaController, parseGuestPageInsetPolicy } from './index.js'
 import { createCdpSessionBroker } from '../cdp-session/index.js'
 
 type AnyFn = (...args: unknown[]) => unknown
 
 /** Minimal emitter-backed WebContents fake (id/once/emit/isDestroyed + the
  *  debugger surface safe-area touches). `sink` captures every `sendCommand`. */
-// The broker (see cdp-session/index.ts, which safe-area now goes through
-// instead of touching wc.debugger directly) reads isAttached()/on()/
-// removeListener() in addition to attach()/detach()/sendCommand() — this fake
-// grows the same surface. Existing assertions (connection-routed teardown,
-// per-page-type bottom inset) are unchanged; only the mock's surface area
-// needed to widen to match the broker's dependency.
+// The broker reads isAttached()/on()/removeListener() in addition to
+// attach()/detach()/sendCommand(), so this fake provides that debugger surface.
 function makeWc(
   id: number,
   sink?: Array<{ method: string; params: unknown }>,
@@ -77,7 +73,7 @@ describe('createSafeAreaController teardown routing', () => {
     const controller = createSafeAreaController({ connections })
     const wc = makeWc(7)
 
-    controller.applyToGuest(wc, null, { isTabPage: false, isCustomNav: false })
+    controller.applyToGuest(wc, null, { isCustomNav: false })
 
     // The connection was acquired for this guest.
     expect(connections.get(wc.id), 'guest connection must be live before destroy').toBeDefined()
@@ -100,42 +96,52 @@ describe('createSafeAreaController teardown routing', () => {
   })
 })
 
-describe('createSafeAreaController per-page-type bottom inset', () => {
+describe('createSafeAreaController bottom inset', () => {
   function lastInsets(sink: Array<{ method: string; params: unknown }>) {
     const call = [...sink].reverse().find((c) => c.method === 'Emulation.setSafeAreaInsetsOverride')
     return (call?.params as { insets: { top: number; bottom: number; bottomMax: number } }).insets
   }
 
-  it('a non-tab page gets the real bottom inset (page opts in via env)', () => {
+  it('forwards the real bottom inset to a render guest', () => {
     const sink: Array<{ method: string; params: unknown }> = []
     const controller = createSafeAreaController()
-    controller.applyToGuest(makeWc(1, sink), DEVICE, { isTabPage: false, isCustomNav: true })
+    controller.applyToGuest(makeWc(1, sink), DEVICE, { isCustomNav: true })
     const insets = lastInsets(sink)
     expect(insets.top).toBe(47)
     expect(insets.bottom).toBe(34)
     expect(insets.bottomMax).toBe(34)
   })
 
-  it('a tab page gets bottom 0 (the shell tabBar fills the safe area)', () => {
+  it('keeps the device bottom inset for a policy parsed from a tab-page URL', () => {
     const sink: Array<{ method: string; params: unknown }> = []
     const controller = createSafeAreaController()
-    controller.applyToGuest(makeWc(2, sink), DEVICE, { isTabPage: true, isCustomNav: true })
-    const insets = lastInsets(sink)
-    expect(insets.top).toBe(47)
-    expect(insets.bottom).toBe(0)
-    expect(insets.bottomMax).toBe(0)
+    const policy = parseGuestPageInsetPolicy('https://example.test/render-host?isTab=1&navStyle=default')
+
+    controller.applyToGuest(makeWc(18, sink), DEVICE, policy)
+
+    expect(lastInsets(sink).bottom).toBe(34)
   })
 
-  it('reapplyAll keeps each guest its attached page type', () => {
+  it('forwards the same real bottom inset to another render guest', () => {
+    const sink: Array<{ method: string; params: unknown }> = []
+    const controller = createSafeAreaController()
+    controller.applyToGuest(makeWc(2, sink), DEVICE, { isCustomNav: true })
+    const insets = lastInsets(sink)
+    expect(insets.top).toBe(47)
+    expect(insets.bottom).toBe(34)
+    expect(insets.bottomMax).toBe(34)
+  })
+
+  it('reapplyAll keeps the device bottom inset for every guest', () => {
     const sinkTab: Array<{ method: string; params: unknown }> = []
     const sinkPage: Array<{ method: string; params: unknown }> = []
     const controller = createSafeAreaController()
-    controller.applyToGuest(makeWc(3, sinkTab), DEVICE, { isTabPage: true, isCustomNav: true })
-    controller.applyToGuest(makeWc(4, sinkPage), DEVICE, { isTabPage: false, isCustomNav: true })
+    controller.applyToGuest(makeWc(3, sinkTab), DEVICE, { isCustomNav: true })
+    controller.applyToGuest(makeWc(4, sinkPage), DEVICE, { isCustomNav: true })
     sinkTab.length = 0
     sinkPage.length = 0
     controller.reapplyAll(DEVICE)
-    expect(lastInsets(sinkTab).bottom).toBe(0)
+    expect(lastInsets(sinkTab).bottom).toBe(34)
     expect(lastInsets(sinkPage).bottom).toBe(34)
   })
 
@@ -147,7 +153,7 @@ describe('createSafeAreaController per-page-type bottom inset', () => {
     const sink: Array<{ method: string; params: unknown }> = []
     const wc = makeWc(5, sink)
     const controller = createSafeAreaController()
-    controller.applyToGuest(wc, DEVICE, { isTabPage: false, isCustomNav: true })
+    controller.applyToGuest(wc, DEVICE, { isCustomNav: true })
     expect(lastInsets(sink).bottom).toBe(34)
 
     // Something outside safe-area detaches the shared debugger session
@@ -156,7 +162,7 @@ describe('createSafeAreaController per-page-type bottom inset', () => {
     sink.length = 0
 
     // reapplyAll must reacquire (not silently no-op on a stale lease) and
-    // keep applying the SAME page-type policy this guest attached with.
+    // keep applying the same navigation-style policy this guest attached with.
     controller.reapplyAll(DEVICE)
     expect(sink.length).toBeGreaterThan(0)
     expect(lastInsets(sink).bottom).toBe(34)
@@ -180,7 +186,7 @@ describe('createSafeAreaController per-edge left/right insets', () => {
   it('forwards the device safeAreaInsets right/left into the CDP override', () => {
     const sink: Array<{ method: string; params: unknown }> = []
     const controller = createSafeAreaController()
-    controller.applyToGuest(makeWc(8, sink), LANDSCAPE_DEVICE, { isTabPage: false, isCustomNav: false })
+    controller.applyToGuest(makeWc(8, sink), LANDSCAPE_DEVICE, { isCustomNav: false })
     const insets = lastFullInsets(sink)
     expect(insets.right).toBe(59)
     expect(insets.rightMax).toBe(59)
@@ -188,12 +194,12 @@ describe('createSafeAreaController per-edge left/right insets', () => {
     expect(insets.leftMax).toBe(59)
   })
 
-  it('a tab page still gets bottom 0 but keeps the real left/right insets', () => {
+  it('forwards the device bottom and left/right insets to a render guest', () => {
     const sink: Array<{ method: string; params: unknown }> = []
     const controller = createSafeAreaController()
-    controller.applyToGuest(makeWc(9, sink), LANDSCAPE_DEVICE, { isTabPage: true, isCustomNav: false })
+    controller.applyToGuest(makeWc(9, sink), LANDSCAPE_DEVICE, { isCustomNav: false })
     const insets = lastFullInsets(sink)
-    expect(insets.bottom).toBe(0)
+    expect(insets.bottom).toBe(21)
     expect(insets.left).toBe(59)
     expect(insets.right).toBe(59)
   })
@@ -203,7 +209,7 @@ describe('createSafeAreaController broker ownership', () => {
   it('disposes a private (non-injected) broker on dispose(), detaching self-attached sessions', () => {
     const wc = makeWc(6)
     const controller = createSafeAreaController() // no broker injected -> owns a private one
-    controller.applyToGuest(wc, null, { isTabPage: false, isCustomNav: false })
+    controller.applyToGuest(wc, null, { isCustomNav: false })
     expect(wc.debugger.attach).toHaveBeenCalled()
 
     controller.dispose()
@@ -215,7 +221,7 @@ describe('createSafeAreaController broker ownership', () => {
     const broker = createCdpSessionBroker()
     const wc = makeWc(7)
     const controller = createSafeAreaController({ broker })
-    controller.applyToGuest(wc, null, { isTabPage: false, isCustomNav: false })
+    controller.applyToGuest(wc, null, { isCustomNav: false })
     expect(wc.debugger.attach).toHaveBeenCalled()
 
     controller.dispose()
@@ -241,7 +247,7 @@ describe('createSafeAreaController per-page navigation-style top inset', () => {
   it('a default navigation-bar page gets top 0 (the shell nav bar already clears the notch)', () => {
     const sink: Array<{ method: string; params: unknown }> = []
     const controller = createSafeAreaController()
-    controller.applyToGuest(makeWc(10, sink), DEVICE, { isTabPage: false, isCustomNav: false })
+    controller.applyToGuest(makeWc(10, sink), DEVICE, { isCustomNav: false })
     const insets = lastInsets(sink)
     expect(insets.top).toBe(0)
     expect(insets.topMax).toBe(0)
@@ -250,26 +256,26 @@ describe('createSafeAreaController per-page navigation-style top inset', () => {
   it('a custom navigation-bar page gets the real device top inset', () => {
     const sink: Array<{ method: string; params: unknown }> = []
     const controller = createSafeAreaController()
-    controller.applyToGuest(makeWc(11, sink), DEVICE, { isTabPage: false, isCustomNav: true })
+    controller.applyToGuest(makeWc(11, sink), DEVICE, { isCustomNav: true })
     const insets = lastInsets(sink)
     expect(insets.top).toBe(47)
     expect(insets.topMax).toBe(47)
   })
 
-  it('the bottom inset stays page-type driven regardless of navigation style', () => {
+  it('the device bottom inset is the same for every navigation style', () => {
     const defaultNavTab: Array<{ method: string; params: unknown }> = []
     const defaultNavPage: Array<{ method: string; params: unknown }> = []
     const customNavTab: Array<{ method: string; params: unknown }> = []
     const customNavPage: Array<{ method: string; params: unknown }> = []
     const controller = createSafeAreaController()
-    controller.applyToGuest(makeWc(12, defaultNavTab), DEVICE, { isTabPage: true, isCustomNav: false })
-    controller.applyToGuest(makeWc(13, defaultNavPage), DEVICE, { isTabPage: false, isCustomNav: false })
-    controller.applyToGuest(makeWc(14, customNavTab), DEVICE, { isTabPage: true, isCustomNav: true })
-    controller.applyToGuest(makeWc(15, customNavPage), DEVICE, { isTabPage: false, isCustomNav: true })
+    controller.applyToGuest(makeWc(12, defaultNavTab), DEVICE, { isCustomNav: false })
+    controller.applyToGuest(makeWc(13, defaultNavPage), DEVICE, { isCustomNav: false })
+    controller.applyToGuest(makeWc(14, customNavTab), DEVICE, { isCustomNav: true })
+    controller.applyToGuest(makeWc(15, customNavPage), DEVICE, { isCustomNav: true })
 
-    expect(lastInsets(defaultNavTab).bottom).toBe(0)
+    expect(lastInsets(defaultNavTab).bottom).toBe(34)
     expect(lastInsets(defaultNavPage).bottom).toBe(34)
-    expect(lastInsets(customNavTab).bottom).toBe(0)
+    expect(lastInsets(customNavTab).bottom).toBe(34)
     expect(lastInsets(customNavPage).bottom).toBe(34)
   })
 
@@ -277,8 +283,8 @@ describe('createSafeAreaController per-page navigation-style top inset', () => {
     const defaultNav: Array<{ method: string; params: unknown }> = []
     const customNav: Array<{ method: string; params: unknown }> = []
     const controller = createSafeAreaController()
-    controller.applyToGuest(makeWc(16, defaultNav), DEVICE, { isTabPage: false, isCustomNav: false })
-    controller.applyToGuest(makeWc(17, customNav), DEVICE, { isTabPage: false, isCustomNav: true })
+    controller.applyToGuest(makeWc(16, defaultNav), DEVICE, { isCustomNav: false })
+    controller.applyToGuest(makeWc(17, customNav), DEVICE, { isCustomNav: true })
     defaultNav.length = 0
     customNav.length = 0
 

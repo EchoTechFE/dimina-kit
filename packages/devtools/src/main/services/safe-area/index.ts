@@ -20,15 +20,10 @@ import { createCdpSessionBroker, type CdpSessionBroker, type CdpSessionLease } f
  *     device inset here would push the page content down a second time.
  *   - custom navigation bar → the guest is full-bleed to the device top and
  *     borders the unsafe zone itself → the real TOP inset.
- * The BOTTOM inset is per page TYPE (WeChat parity):
- *   - tab page  → the shell draws the tabBar and extends its background through
- *     the home-indicator safe area; the guest (page content sits ABOVE the
- *     tabBar) does not border the bottom unsafe zone → BOTTOM 0.
- *   - non-tab page → the guest is full-bleed to the device bottom, so surface
- *     the real bottom inset and let the page opt in via its own
- *     `env(safe-area-inset-bottom)`; the shell reserves nothing there.
- * Both come off the attaching guest's render-host URL (`isTab`, `navStyle`),
- * read in view-manager's `did-attach-webview`.
+ * The BOTTOM inset always comes from the device. A render WebView exposes the
+ * same bottom `env(safe-area-inset-bottom)` for a device whether or not it is
+ * a tab page. The navigation style comes from the attaching guest's render-host
+ * URL (`navStyle`), read in view-manager's `will-attach-webview`.
  * (Design doc: docs/ios-safe-area-and-notch.md.)
  */
 
@@ -46,27 +41,22 @@ interface CdpSafeAreaInsets {
 }
 
 /** What the guest's own page contributes to the inset policy: whether the
- *  shell draws a tabBar under it, and whether it draws a navigation bar over
- *  the notch for it. */
+ *  shell draws a navigation bar over the notch for it. */
 export interface GuestPageInsetPolicy {
-  isTabPage: boolean
   isCustomNav: boolean
 }
 
 /**
- * Read a guest's inset policy off its render-host URL (`isTab`, `navStyle` —
- * both written by `buildRenderHostDocumentUrl`). An unparseable URL degrades to
- * the default-nav, non-tab policy rather than failing the attach.
+ * Read a guest's inset policy off its render-host URL (`navStyle`, written by
+ * `buildRenderHostDocumentUrl`). An unparseable URL degrades to the default-nav
+ * policy rather than failing the attach.
  */
 export function parseGuestPageInsetPolicy(src: string): GuestPageInsetPolicy {
   try {
     const params = new URL(src).searchParams
-    return {
-      isTabPage: params.get('isTab') === '1',
-      isCustomNav: params.get('navStyle') === 'custom',
-    }
+    return { isCustomNav: params.get('navStyle') === 'custom' }
   } catch {
-    return { isTabPage: false, isCustomNav: false }
+    return { isCustomNav: false }
   }
 }
 
@@ -75,13 +65,9 @@ function guestInsets(device: NativeDeviceInfo | null, page: GuestPageInsetPolicy
   // default-nav page already starts below the shell nav bar, which covers the
   // notch itself.
   const top = page.isCustomNav ? (device?.safeAreaInsets.top ?? 0) : 0
-  // A tab page's content sits above the shell-drawn tabBar (which fills the
-  // bottom safe area), so it never borders the bottom unsafe zone. A non-tab
-  // page is full-bleed to the device bottom, so surface the real inset for its
-  // own `env(safe-area-inset-bottom)` opt-in.
-  const bottom = page.isTabPage ? 0 : (device?.safeAreaInsets.bottom ?? 0)
+  const bottom = device?.safeAreaInsets.bottom ?? 0
   // Left/right come straight from the device (e.g. a landscape Dynamic Island
-  // rotates into a side notch) — unlike top/bottom they don't depend on page
+  // rotates into a side notch) — unlike top they don't depend on page
   // type, since neither shell chrome nor the tabBar reserves horizontal space.
   const right = device?.safeAreaInsets.right ?? 0
   const left = device?.safeAreaInsets.left ?? 0
@@ -91,9 +77,9 @@ function guestInsets(device: NativeDeviceInfo | null, page: GuestPageInsetPolicy
 export interface SafeAreaController {
   /** Attach the debugger to a freshly-attached render-host guest and push the
    *  current device's insets. `page` selects the top policy (real inset only for
-   *  a custom-nav page) and the bottom policy (0 for tab pages, the real inset
-   *  for full-bleed non-tab pages). No-op (warn) if the guest is already claimed
-   *  by an external CDP client — env then stays 0. */
+   *  a custom-nav page); the bottom inset always comes from the device. No-op
+   *  (warn) if the guest is already claimed by an external CDP client — env
+   *  then stays 0. */
   applyToGuest(guestWc: WebContents, device: NativeDeviceInfo | null, page: GuestPageInsetPolicy): void
   /** Re-push insets to every still-attached guest after a device change (each
    *  guest keeps the page policy it attached with). */
