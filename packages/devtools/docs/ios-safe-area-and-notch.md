@@ -53,11 +53,11 @@ devtools 只用其中几个入口：
 `env(safe-area-inset-*)` 由 UA 定义，作者样式改不了，所以走 CDP。`src/main/services/safe-area/index.ts` 在 simulator WCV 的 `did-attach-webview` 时对每个 render-host guest 发 `Emulation.setSafeAreaInsetsOverride`，这是 guest `WebContents` 可用的最早时刻，页面还没绘制。
 
 - `wc.debugger` 会话不归 safe-area 管，走共享的 `CdpSessionBroker`（`src/main/services/cdp-session/index.ts`）。`wc.debugger` 是单 owner API，没有 broker 时多个消费者会互相抢会话。safe-area 每个 guest 拿一个 `CdpSessionLease`，在上面 `send('Emulation.setSafeAreaInsetsOverride', { insets })`。`insets` 带全部 8 个字段（`top/topMax/right/rightMax/bottom/bottomMax/left/leftMax`，base 等于 max），漏掉 `*Max` 会让 `env(safe-area-max-inset-*)` 停在 0。
-- 每个 guest 的页面策略（`isTabPage` 来自 URL 的 `isTab=1`，`isCustomNav` 来自 `navStyle=custom`，两者都由 `dmb-resource-url.ts` 按页面的 `windowConfig` 写进 render-host URL）在 `will-attach-webview` 时读出并存下（`parseGuestPageInsetPolicy`）（`did-attach` 时 `getURL()` 还是空），设备切换重发时复用；guest `destroyed` 时清掉。lease 在 broker `onDetach` 时丢弃，下次 override 重新申请。
+- 每个 guest 的页面策略只有 `isCustomNav`，来自 URL 的 `navStyle=custom`（由 `dmb-resource-url.ts` 按页面的 `windowConfig` 写进 render-host URL）。它在 `will-attach-webview` 时读出并存下（`parseGuestPageInsetPolicy`；`did-attach` 时 `getURL()` 还是空），设备切换重发时复用；guest `destroyed` 时清掉。lease 在 broker `onDetach` 时丢弃，下次 override 重新申请。
 - **重发时机**：(1) guest attach（页面栈新页面），(2) 设备或横竖屏切换（对所有已 attach 的 guest 重发）。
-- **只注入 webview 真正贴着的边**，页面自己的 `env()` padding 不会和外壳已覆盖的区域重复计算（`guestInsets()`）：
+- **按页面导航样式处理顶部，底部始终使用设备值**（`guestInsets()`）：
   - `top`：自定义导航栏页（`navigationStyle: custom`，页面全出血到屏幕顶部）取设备当前方向的 `safeAreaInsets.top`；默认导航栏页为 0，因为 webview 本来就从外壳导航栏下方开始，三端 native 也是这样。
-  - `bottom`：tab 页为 0（外壳 tabBar 的背景延伸到底部内边距，页面内容不贴底）；非 tab 页取 `safeAreaInsets.bottom`（页面全出血到设备底部，自己用 `env(safe-area-inset-bottom)` 避让）。
+  - `bottom`：所有 render WebView 都取设备当前方向的 `safeAreaInsets.bottom`；tabBar 是否存在不改变页面的 `env(safe-area-inset-bottom)`。
   - `left` / `right`：直接取设备当前方向的 `safeAreaInsets.left/right`，横屏灵动岛机型不再是 0。
 - **`webContents.debugger` 独占**。外部工具（`--remote-debugging-port`）已经 attach 时 `attach()` 会抛错，只记警告、内边距保持 0，没有纯 CSS 回退。
 
@@ -68,7 +68,7 @@ Home 指示条由 frame 画，是绝对定位的透明覆盖层，不占布局�
 - tab 页：外壳 tabBar 的背景延伸过底部内边距（`padding-bottom = safeAreaInsets.bottom`，`tab-bar.tsx`），指示条压在 tabBar 颜色上。
 - 非 tab 页：页面 webview 全出血到设备底部，指示条压在页面内容上。
 
-因为 tab 页已经由外壳让出底部，其 `env(safe-area-inset-bottom)` 被覆盖成 0，避免页面重复避让。
+tab 页的外壳 tabBar 仍会延伸到底部内边距；同时，该页 WebView 的 `env(safe-area-inset-bottom)` 保持设备值，和其他 render WebView 一致。
 
 ## JS `safeArea`
 
