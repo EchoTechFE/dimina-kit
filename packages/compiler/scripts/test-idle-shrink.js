@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
 
 const APP = process.env.TEST_PROJECT
-  || fileURLToPath(new URL('../../../dimina/fe/example/base', import.meta.url))
+  || fileURLToPath(new URL('../../../dimina/examples/miniprogram/base', import.meta.url))
 const TMP = fileURLToPath(new URL('../.tmp-idle-shrink/', import.meta.url))
 fs.rmSync(TMP, { recursive: true, force: true })
 fs.mkdirSync(TMP, { recursive: true })

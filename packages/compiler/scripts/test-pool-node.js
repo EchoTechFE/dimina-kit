@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 
 const APP = process.env.APP_DIR
-  || fileURLToPath(new URL('../../../dimina/fe/example/base', import.meta.url))
+  || fileURLToPath(new URL('../../../dimina/examples/miniprogram/base', import.meta.url))
 
 const TMP = fileURLToPath(new URL('../.tmp-pool-node/', import.meta.url))
 rmSync(TMP, { recursive: true, force: true })
@@ -103,6 +103,23 @@ console.log('[ours] resident pool build ×2 (warm)')
 const pool = createNodeCompilerPool()
 const appInfo1 = await pool.build(dir('ours1'), APP, true, { sourcemap: true })
 const appInfo2 = await pool.build(dir('ours2'), APP, true, { sourcemap: true })
+
+// --- sourcemapTargetPath must not leak across a warm realm's sourcemap on/off/on ---
+// __setEnableSourcemap(v, targetPath) clears sourcemapTargetPath to null whenever v is
+// false (build-compiler.js's exportAppend). A worker that skipped that clear — e.g. if
+// a future edit made it conditional on v changing — would carry the LAST enabled build's
+// target path into a later disabled build (harmless, since writeCompileRes never reads it
+// when sourcemap is off) and, worse, into a later RE-enabled build pointed at a different
+// output dir, rebasing `sources` against the wrong directory instead of its own.
+console.log('[ours] sourcemap off then on again (warm realm, no dispose between)')
+const appInfoNoMap = await pool.build(dir('ours-nomap'), APP, true, { sourcemap: false })
+const treeNoMap = readTree(path.join(dir('ours-nomap'), appInfoNoMap.appId))
+if (treeNoMap['main/logic.js.map']) fail('[nomap] logic.js.map emitted despite sourcemap:false')
+const jsNoMap = (treeNoMap['main/logic.js'] || Buffer.alloc(0)).toString('utf8')
+if (/sourceMappingURL/.test(jsNoMap)) fail('[nomap] logic.js still references a sourceMappingURL despite sourcemap:false')
+else console.log('[nomap] ✅ sourcemap:false emits no .map and no sourceMappingURL reference')
+const appInfo3 = await pool.build(dir('ours3'), APP, true, { sourcemap: true })
+
 await pool.dispose()
 
 // The whole return value must match dmcc's, `path` included — dmcc's mainPages[1]
@@ -116,6 +133,10 @@ if (appInfo1.path !== appInfo2.path) fail('path not stable across warm rebuilds'
 
 checkAgainstDmcc(readTree(path.join(dir('ours1'), appInfo1.appId)), 'cold')
 checkAgainstDmcc(readTree(path.join(dir('ours2'), appInfo2.appId)), 'warm')
+// Re-enabled after an intervening off build, into yet another output dir: this is the
+// case a leaked/stale sourcemapTargetPath would break (sources rebased against ours1's
+// or ours2's directory, or against the disabled build's, instead of ours3's own).
+checkAgainstDmcc(readTree(path.join(dir('ours3'), appInfo3.appId)), 'warm-after-off')
 
 console.log(`[sourcemap] logic.js.map: ${refMap.sources.length} sources, sourcesContent present, matches dmcc ✅`)
 

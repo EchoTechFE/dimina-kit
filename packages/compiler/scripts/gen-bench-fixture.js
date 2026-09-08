@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const EXAMPLE = process.argv[3] || 'base'
-const APP = fileURLToPath(new URL(`../../../dimina/fe/example/${EXAMPLE}`, import.meta.url))
+const APP = fileURLToPath(new URL(`../../../dimina/examples/miniprogram/${EXAMPLE}`, import.meta.url))
 const TEXT = new Set(['.json', '.js', '.ts', '.wxml', '.ddml', '.wxss', '.ddss', '.less', '.scss', '.sass', '.wxs', '.dds', '.css'])
 const out = {}
 ;(function rd(d, b) {

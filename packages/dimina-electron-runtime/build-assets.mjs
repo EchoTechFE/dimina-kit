@@ -6,19 +6,26 @@ import { fileURLToPath } from 'node:url'
 const packageDir = dirname(fileURLToPath(import.meta.url))
 const devtoolsDir = join(packageDir, '../devtools')
 const workspaceDir = join(packageDir, '../..')
-// pnpm injects its cross-platform JS entry for package scripts. This asset
-// assembly runs outside Turbo's cached graph, so the path is not a cache input.
+// pnpm points this at its own entry for package scripts. This asset assembly
+// runs outside Turbo's cached graph, so the path is not a cache input.
 // eslint-disable-next-line turbo/no-undeclared-env-vars
 const pnpmCliPath = process.env.npm_execpath
 if (!pnpmCliPath) {
   throw new Error('build-assets.mjs must be run from a pnpm script')
 }
 
-const inspectBuild = spawnSync(
-  process.execPath,
-  [pnpmCliPath, '--filter', '@dimina-kit/inspect', 'build'],
-  { cwd: workspaceDir, stdio: 'inherit' },
-)
+// The entry is a JS file under npm and older pnpm, but a platform-native
+// executable under pnpm installed through corepack (…/pnpm/<v>/pnpm-native).
+// Handing that to `node` makes it parse a Mach-O/ELF header as ESM and die with
+// a SyntaxError, so dispatch on what the path actually is.
+const pnpmEntryIsJs = /\.[cm]?js$/i.test(pnpmCliPath)
+function runPnpm(args, cwd) {
+  return pnpmEntryIsJs
+    ? spawnSync(process.execPath, [pnpmCliPath, ...args], { cwd, stdio: 'inherit' })
+    : spawnSync(pnpmCliPath, args, { cwd, stdio: 'inherit' })
+}
+
+const inspectBuild = runPnpm(['--filter', '@dimina-kit/inspect', 'build'], workspaceDir)
 if (inspectBuild.status !== 0) process.exit(inspectBuild.status ?? 1)
 
 for (const script of [
@@ -27,10 +34,7 @@ for (const script of [
   'build:preload',
   'build:native-host',
 ]) {
-  const result = spawnSync(process.execPath, [pnpmCliPath, 'run', script], {
-    cwd: devtoolsDir,
-    stdio: 'inherit',
-  })
+  const result = runPnpm(['run', script], devtoolsDir)
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 

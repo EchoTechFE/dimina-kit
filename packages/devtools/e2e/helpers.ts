@@ -1,4 +1,5 @@
 import type { Page, ElectronApplication } from '@playwright/test'
+import type { ConsoleErrorEntry } from './console-noise'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -50,6 +51,32 @@ function resolveDemoAppDir(): string {
 
 /** Source demo mini-app for compilation tests. */
 export const DEMO_APP_DIR = resolveDemoAppDir()
+
+const MINI_GAME_CANDIDATES = [
+  path.resolve(__dirname, '..', '..', '..', 'dimina', 'examples', 'miniprogram', 'air-battle'),
+]
+
+let miniGameAppDir: string | undefined
+
+/**
+ * Real mini-game fixture from the dimina submodule — `compileType: "game"`,
+ * `game.json`/`game.js`, no `app.json`.
+ *
+ * Lives in the submodule, so a bump that moves the examples tree must fail
+ * naming the paths it looked at, not as an unexplained assertion failure in
+ * every mini-game spec. Resolved on call rather than at module load so that
+ * failure reaches only the specs that need the fixture, instead of every spec
+ * that imports this module.
+ */
+export function resolveMiniGameAppDir(): string {
+  if (miniGameAppDir) return miniGameAppDir
+  const found = MINI_GAME_CANDIDATES.find((dir) => fs.existsSync(path.join(dir, 'game.json')))
+  if (!found) {
+    throw new Error(`No mini-game fixture found. Checked: ${MINI_GAME_CANDIDATES.join(', ')}`)
+  }
+  miniGameAppDir = found
+  return found
+}
 
 // ── URL markers ────────────────────────────────────────────────────────
 
@@ -441,12 +468,8 @@ export async function evalInWebContentsByUrl<T = unknown>(
   }, { urlSubstring, expression }) as Promise<T>
 }
 
-export interface ConsoleErrorEntry {
-  level: 'error' | 'warning'
-  message: string
-  url: string
-  source: string
-}
+export type { ConsoleErrorEntry } from './console-noise'
+export { isNonAppConsoleNoise } from './console-noise'
 
 /**
  * Collect `error`/`warning` console messages from EVERY webContents (existing
@@ -502,8 +525,40 @@ export async function installConsoleCollector(electronApp: ElectronApplication):
 export async function readConsoleErrors(electronApp: ElectronApplication): Promise<ConsoleErrorEntry[]> {
   return electronApp.evaluate(() => {
     const g = globalThis as unknown as { __e2eConsoleErrors?: ConsoleErrorEntry[] }
-    return (g.__e2eConsoleErrors ?? []).slice()
+    // "Collected nothing" and "never collected" both used to come back as an
+    // empty array, so a spec that skipped installConsoleCollector — or
+    // installed it on a different Electron instance than it later read —
+    // compared an empty list against an empty list and passed without ever
+    // observing the app.
+    if (!g.__e2eConsoleErrors) {
+      throw new Error('readConsoleErrors: installConsoleCollector never ran on this Electron instance')
+    }
+    return g.__e2eConsoleErrors.slice()
   }) as Promise<ConsoleErrorEntry[]>
+}
+
+/**
+ * Put the dock into the `inEditor` preset: simulator beside a `col-main` column
+ * holding `[editor over debug]`.
+ *
+ * The DEFAULT tree is NOT this shape. `buildDefaultDockTree` deliberately ships
+ * without the editor — the project window is a debugger first, so a fresh
+ * profile opens as `[g-sim | g-debug]` with no `col-main` and no horizontal
+ * separator. Any spec that targets the editor/debug split therefore has to
+ * establish that layout instead of assuming it, or it passes only on a profile
+ * where some earlier run happened to leave the editor docked.
+ *
+ * Drives the real toolbar control (the 调试器位置：在编辑器面板中 preset button),
+ * which rebuilds the tree through `buildPresetDockTree` — the same path a user
+ * takes. Idempotent: the button applies the preset even when already active.
+ */
+export async function applyInEditorLayoutPreset(
+  workbench: Page,
+  timeout = 15000,
+): Promise<void> {
+  await workbench.click('[data-testid="layout-toolbar-devtools-inEditor"]')
+  await workbench.waitForSelector('[data-deck-split="col-main"]', { timeout })
+  await workbench.waitForSelector('[data-deck-panel-body="editor"]', { timeout })
 }
 
 /**

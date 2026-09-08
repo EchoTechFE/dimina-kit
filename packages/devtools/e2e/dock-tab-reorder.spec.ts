@@ -28,6 +28,7 @@ import {
   DEMO_APP_DIR,
   installConsoleCollector,
   readConsoleErrors,
+  isNonAppConsoleNoise,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -214,24 +215,11 @@ test('a debug tab cannot be torn OUT of its group into another region', async ()
   const editorGroupAfter = groupsAfter.find((g) => g.panels.includes('editor'))!
   expect(editorGroupAfter.panels).not.toContain('storage')
 
-  // No genuine renderer errors from the reorder gestures (filter pre-existing
-  // DevTools/network noise, mirroring dock-real-drag.spec.ts). The editor body
-  // is now a live dock body whose anchor lazily attaches the embedded A2
-  // workbench WebContentsView; that third-party VS Code bundle emits its own
-  // startup warnings/errors (extension-host sandbox notes, settings-schema and
-  // workspace-mirror chatter) which are unrelated to the drag gesture — filter
-  // them by their workbench origin/source markers.
+  // No genuine renderer errors from the reorder gestures. Keep only entries
+  // from our own renderer — the collector also sees the hosted A2 workbench and
+  // Chromium's DevTools front-end (see isNonAppConsoleNoise).
   const errors = await readConsoleErrors(electronApp)
-  const relevant = errors.filter((e) => {
-    if (/favicon|DevTools|Autofill|net::ERR|Failed to load resource/i.test(e.message)) return false
-    // A2 workbench WCV noise (served from a 127.0.0.1 COI origin; bundles named
-    // localExtensionHost / webWorkerExtensionHost / the workbench index chunk).
-    if (/ExtensionHost|a2-spike|local-network-access|allow-scripts and allow-same-origin/i.test(
-      `${e.message} ${e.source} ${e.url}`,
-    )) return false
-    if (/json\.schemas is not a registered configuration|Unable to resolve nonexistent file '\/workspace'/i.test(e.message)) return false
-    return true
-  })
+  const relevant = errors.filter((e) => !isNonAppConsoleNoise(e))
   expect(relevant, `unexpected renderer errors: ${JSON.stringify(relevant)}`).toEqual([])
 })
 

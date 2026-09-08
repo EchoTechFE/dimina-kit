@@ -10,7 +10,7 @@
  *     page-level `usingComponents` / `component`.
  *   - dimina/fe/packages/compiler/src/core/config-compiler.js processTabBarIcons:
  *     reads `tabBar.list[].{pagePath,iconPath,selectedIconPath}` (+ text per examples).
- *   - example app.json files (dimina/fe/example/**\/app.json) for window keys,
+ *   - example app.json files (dimina/examples/miniprogram/**\/app.json) for window keys,
  *     `permission`, `requiredPrivateInfos`, `networkTimeout`, `debug`.
  *   - project.config.json fields from the fixture + example projects
  *     (description / setting / compileType / libVersion / appid / condition /

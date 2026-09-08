@@ -71,7 +71,7 @@ async function handleMessage(msg) {
     parentPort.postMessage({ type: 'introspect', stage: declaredStage || null, loaded: loadedHeavyPackages() })
     return
   }
-  const { stage, pages, storeInfo, sourcemap } = msg || {}
+  const { stage, pages, storeInfo, sourcemap, sourcemapTargetPath } = msg || {}
   // Opt-in per message (wantHeartbeat), mirroring stage-worker.js: only a supervising
   // pool that treats heartbeats as out-of-band liveness asks for them. First beat goes
   // out immediately so even a timeout shorter than the cadence sees life first.
@@ -88,7 +88,7 @@ async function handleMessage(msg) {
     resetCompilerState()
     // Restore the env singletons (paths/config/targetPath) from the main thread's setup.
     resetStoreInfo(storeInfo)
-    await runStage(stage, pages, { sourcemap })
+    await runStage(stage, pages, { sourcemap, sourcemapTargetPath })
     parentPort.postMessage({ type: 'done', stage, appId: getAppId(), name: getAppName() })
   } catch (error) {
     parentPort.postMessage({

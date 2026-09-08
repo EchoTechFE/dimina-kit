@@ -19,6 +19,7 @@
     "test:coverage": "turbo run test:coverage",
     "lint": "turbo run lint",
     "dev": "turbo run dev",
+    "check:allow-builds": "node scripts/check-allow-builds.mjs",
     "check:electron-peer-sync": "node scripts/check-electron-peer-sync.mjs",
     "check:publish-contract": "node .github/scripts/check-publish-contract.js",
     "pawl:check": "pawl check",
@@ -35,12 +36,5 @@
     "typescript": "5.9.2",
     "typescript-eslint": "^8.58.2"
   },
-  "pnpm": {
-    "overrides": {
-      "html-encoding-sniffer": "4.0.0",
-      "jsdom": "26.1.0",
-      "minimist@<1.2.8": "^1.2.8"
-    }
-  },
-  "packageManager": "pnpm@9.15.9"
+  "packageManager": "pnpm@12.3.4"
 }

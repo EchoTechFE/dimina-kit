@@ -65,7 +65,7 @@
     "snapshot:upstream-versions": "node scripts/snapshot-upstream-versions.js",
     "build:node": "node scripts/build-compiler.js node",
     "build:browser": "node scripts/build-compiler.js browser",
-    "build:types": "tsc -p tsconfig.types.json",
+    "build:types": "node scripts/build-types.js",
     "build": "pnpm run build:node && pnpm run build:browser && pnpm run build:types",
     "check-types": "pnpm run build:types && node scripts/test-types.js",
     "test:node": "node scripts/build-compiler.js node && node --import ./scripts/register-kit.js scripts/test-node.js",
@@ -100,32 +100,32 @@
   },
   "dependencies": {
     "@babel/parser": "^7.29.7",
-    "@vue/compiler-sfc": "^3.5.41",
+    "@vue/compiler-sfc": "^3.5.42",
     "assert": "^2.1.0",
-    "autoprefixer": "^10.5.3",
+    "autoprefixer": "^10.5.4",
     "buffer": "^6.0.3",
     "cheerio": "^1.2.0",
-    "cssnano": "8.0.6",
-    "esbuild": "^0.28.1",
+    "cssnano": "9.0.3",
+    "esbuild": "^0.28.2",
     "estree-walker": "^3.0.3",
     "events": "^3.3.0",
     "htmlparser2": "^12.0.0",
-    "less": "^4.9.0",
+    "less": "^4.9.1",
     "magic-string": "1.2.3",
     "memfs": "^4.57.8",
-    "oxc-parser": "^0.145.0",
+    "oxc-parser": "^0.148.0",
     "oxc-walker": "^1.1.1",
     "path-browserify": "^1.0.1",
-    "postcss": "^8.5.26",
-    "postcss-selector-parser": "^7.1.5",
-    "sass": "1.102.0",
+    "postcss": "^8.5.28",
+    "postcss-selector-parser": "^7.1.6",
+    "sass": "1.104.0",
     "source-map-js": "^1.2.1",
     "stream-browserify": "^3.0.0",
     "util": "^0.12.5"
   },
   "peerDependencies": {
-    "@oxc-parser/binding-wasm32-wasi": "^0.145.0",
-    "esbuild-wasm": "^0.28.1"
+    "@oxc-parser/binding-wasm32-wasi": "^0.148.0",
+    "esbuild-wasm": "^0.28.2"
   },
   "peerDependenciesMeta": {
     "@oxc-parser/binding-wasm32-wasi": {
@@ -136,7 +136,7 @@
     }
   },
   "devDependencies": {
-    "esbuild-wasm": "^0.28.1",
+    "esbuild-wasm": "^0.28.2",
     "typescript": "5.9.2"
   }
 }

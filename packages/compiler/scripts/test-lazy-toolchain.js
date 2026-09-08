@@ -8,10 +8,18 @@
 //   - the logic worker loads esbuild + oxc-parser, never sass/cssnano/less/
 //     @vue/compiler-sfc.
 //   - the view worker loads @vue/compiler-sfc, never sass/cssnano/less.
-//   - the style worker loads sass, never esbuild. oxc-parser is NOT part of that
-//     boundary: env.js (imported by every stage) parses component scripts with
-//     `parseSync` to read their styleIsolation, so its native binding is present
-//     in every realm regardless of stage.
+//   - the style worker loads sass, never htmlparser2. htmlparser2 has two entry
+//     paths — view-compiler.js:10 imports it directly, and logic-compiler.js:8
+//     reaches it through common/compatibility.js:1 — but style-compiler.js's
+//     top-level imports are only utils.js/env.js/sourcemap.js, none of which
+//     reach either, so the style realm can never load it. "never esbuild" is
+//     NOT a real boundary here: style-compiler.js:7
+//     imports esbuild statically at its own top level — same as logic-compiler.js:7 and
+//     view-compiler.js:9 — so all three stages load it unconditionally regardless of
+//     which stage's toolchain a realm actually warms. oxc-parser is NOT part of the
+//     boundary either, for a related but distinct reason: env.js (imported by every
+//     stage) parses component scripts with `parseSync` to read their styleIsolation, so
+//     its native binding is present in every realm regardless of stage.
 //
 // The probe reads each realm's CJS require cache, so only packages with a CJS
 // footprint are observable: cheerio resolves pure-ESM and never appears there
@@ -31,7 +39,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 
 const APP = process.env.TEST_PROJECT
-  || fileURLToPath(new URL('../../../dimina/fe/example/base', import.meta.url))
+  || fileURLToPath(new URL('../../../dimina/examples/miniprogram/base', import.meta.url))
 const TMP = fileURLToPath(new URL('../.tmp-lazy-toolchain/', import.meta.url))
 fs.rmSync(TMP, { recursive: true, force: true })
 fs.mkdirSync(TMP, { recursive: true })
@@ -95,7 +103,7 @@ for (const name of ['sass', 'cssnano', 'less']) notLoaded('view', name)
 isLoaded('view', '@vue/compiler-sfc')
 
 isLoaded('style', 'sass')
-notLoaded('style', 'esbuild')
+notLoaded('style', 'htmlparser2')
 
 // --- condition 4: a freshly spawned pool preloads by stage identity, before any build ---
 const coldPool = makePool()

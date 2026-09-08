@@ -10,7 +10,11 @@ export default defineConfig({
   plugins: [react()],
   test: {
     environment: 'jsdom',
-    include: ['src/**/*.test.{ts,tsx}'],
+    // `e2e/` holds Playwright specs, which vitest must not pick up — hence the
+    // `*.test.ts` suffix here versus the `*.spec.ts` those use. It matches the
+    // pure helper modules e2e specs share, whose rules decide whether an
+    // assertion has anything left to assert.
+    include: ['src/**/*.test.{ts,tsx}', 'e2e/**/*.test.ts'],
     globals: true,
     setupFiles: ['./src/renderer/test-setup.ts'],
     coverage: {

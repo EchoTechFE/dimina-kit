@@ -26,6 +26,8 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { getFileSystemManager } from './index.js'
+import { upstreamCalls } from './upstream-impl.js'
 
 /** The full documented async FSM surface (see simulator-api-fsm.test.ts). */
 const EXPECTED_ASYNC_METHODS = [
@@ -106,5 +108,34 @@ describe('fileSystemManagerAPINames (drives wx.canIUse for FileSystemManager.*)'
 		const names = Array.isArray(mod.fileSystemManagerAPINames) ? (mod.fileSystemManagerAPINames as string[]) : namesFromSourceFallback()
 		const syncNames = names.filter(n => n.endsWith('Sync'))
 		expect(syncNames, `no *Sync name should be canIUse-advertised (found ${JSON.stringify(syncNames)})`).toEqual([])
+	})
+})
+
+describe('getFileSystemManager() unsupported-surface replacement', () => {
+	it('writeFileSync throws naming the method and why sync is unsupported', () => {
+		const fsm = getFileSystemManager()
+		expect(() => fsm.writeFileSync('difile://usr/a.txt', 'x')).toThrowError(
+			/FileSystemManager\.writeFileSync .*not supported/i,
+		)
+	})
+
+	it('unzip fails through the fail callback and never reaches the upstream stand-in', () => {
+		const fsm = getFileSystemManager()
+		upstreamCalls.length = 0
+		let failResult: { errMsg?: string } | undefined
+		fsm.unzip({
+			zipFilePath: 'difile://usr/a.zip',
+			targetPath: 'difile://usr/out',
+			fail: (err: { errMsg?: string }) => { failResult = err },
+		})
+		expect(failResult?.errMsg, 'fail callback should fire with an unzip:fail errMsg').toMatch(/^unzip:fail/)
+		expect(upstreamCalls.some(([name]) => name === 'unzip'), 'upstream stand-in unzip should never run').toBe(false)
+	})
+
+	it('writeFile still delegates to the upstream stand-in', () => {
+		const fsm = getFileSystemManager()
+		upstreamCalls.length = 0
+		fsm.writeFile({ filePath: 'difile://usr/a.txt', data: 'x' })
+		expect(upstreamCalls.some(([name]) => name === 'writeFile'), 'supported methods must still reach upstream').toBe(true)
 	})
 })

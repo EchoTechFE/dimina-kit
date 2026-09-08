@@ -9,7 +9,7 @@ import { Volume, createFsFromVolume } from 'memfs'
 
 // Default to the example shipped in dimina-kit's `dimina` submodule.
 const APP = process.env.APP_DIR
-  || fileURLToPath(new URL('../../../dimina/fe/example/base', import.meta.url))
+  || fileURLToPath(new URL('../../../dimina/examples/miniprogram/base', import.meta.url))
 
 const TEXT_EXT = new Set([
   '.json', '.js', '.ts', '.wxml', '.ddml', '.wxss', '.ddss', '.less',

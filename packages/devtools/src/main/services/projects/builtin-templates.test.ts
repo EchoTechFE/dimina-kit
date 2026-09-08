@@ -44,7 +44,7 @@ describe('BUILTIN_TEMPLATES', () => {
     expect(fs.existsSync(path.join(dir, 'pages', 'index', 'index.json'))).toBe(true)
   })
 
-  it("the 'taro-todo' template ships its compiled-bundle file set (copied from dimina/fe/example/taro-todo)", () => {
+  it("the 'taro-todo' template ships its compiled-bundle file set (copied from dimina/examples/miniprogram/taro-todo)", () => {
     const taro = BUILTIN_TEMPLATES.find((t) => t.id === 'taro-todo')!
     const dir = taro.source!.path
     expect(fs.existsSync(path.join(dir, 'app.json'))).toBe(true)

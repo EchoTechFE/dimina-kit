@@ -33,3 +33,6 @@ coverage-detail/
 
 # scripts/patrol.sh 的只读巡检输出
 patrol-reports/
+
+# .agents/test_generate_claude.py 运行时产生
+.agents/__pycache__/

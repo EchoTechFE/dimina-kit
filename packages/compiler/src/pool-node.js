@@ -176,13 +176,23 @@ export function createNodeCompilerPool({
     }
     const { storeInfo, pages } = ctx
 
+    // dmcc's own worker message carries `sourcemapTargetPath: targetPath` — the FINAL
+    // published dir, not the staging one — so writeCompileRes rebases `sources` against
+    // where the map actually ships. This driver knows that dir up front (it's exactly
+    // what publishToDist below resolves outputDir/useAppIdDir into), so compute it once
+    // here and thread it through, instead of letting each worker fall back to its own
+    // staging dir (a tmpdir several levels deeper than the real publish target).
+    const sourcemapTargetPath = useAppIdDir
+      ? `${nodePath.resolve(process.cwd(), outputDir)}${nodePath.sep}${ctx.appId}`
+      : nodePath.resolve(process.cwd(), outputDir)
+
     // 2) Fan out to the resident stage workers. They restore the same storeInfo (so their
     //    getTargetPath() is the same staging dir) and write disjoint files concurrently.
     //    Worker DEATH (timeout/crash/exit) arrives as a coded rejection; the worker's own
     //    { type:'error' } replies (real compile errors) are normalized below.
     const results = await settleAll(workers.map((x) =>
       x.slot.request(
-        { stage: x.stage, pages, storeInfo, sourcemap, wantHeartbeat: true },
+        { stage: x.stage, pages, storeInfo, sourcemap, sourcemapTargetPath, wantHeartbeat: true },
         { timeoutMs: sendTimeoutMs, description: `stage '${x.stage}' build` },
       ).catch((err) => {
         if (err && err.code && !err.stage) err.stage = x.stage

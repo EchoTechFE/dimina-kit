@@ -29,7 +29,11 @@ async function exists(p) {
 // in an unrelated hoisted node_modules — "resolved" would then misreport an
 // unrelated install as the answer. Reject any resolution that doesn't land
 // under requiredPrefix instead of treating it as valid.
-export async function resolveInstalledVersion(anchorPackageJsonPath, depName, requiredPrefix) {
+// Resolves `depName` as `anchorPackageJsonPath`'s own directory would resolve
+// it, and returns the directory of ITS package.json (not the version) — the
+// shared primitive both `resolveInstalledVersion` and
+// `resolveTransitiveVersion` walk from.
+async function resolvePackageDir(anchorPackageJsonPath, depName, requiredPrefix) {
   // Real ESM resolution (`import.meta.resolve`), not CJS `require.resolve`:
   // an ESM-only dep whose `exports` map lists only an `import` condition (no
   // `require`/`default` fallback) throws ERR_PACKAGE_PATH_NOT_EXPORTED under
@@ -63,11 +67,41 @@ export async function resolveInstalledVersion(anchorPackageJsonPath, depName, re
     const candidate = path.join(dir, 'package.json')
     if (await exists(candidate)) {
       const pkg = await readJson(candidate)
-      if (pkg.name === depName) return pkg.version
+      if (pkg.name === depName) return dir
     }
     const parent = path.dirname(dir)
     if (parent === dir) break
     dir = parent
   }
   return null
+}
+
+export async function resolveInstalledVersion(anchorPackageJsonPath, depName, requiredPrefix) {
+  const dir = await resolvePackageDir(anchorPackageJsonPath, depName, requiredPrefix)
+  if (!dir) return null
+  const pkg = await readJson(path.join(dir, 'package.json'))
+  return pkg.version
+}
+
+// Resolves a TRANSITIVE dependency the way the LAST name in `pathNames` would
+// actually be required — walking through each intermediate package's own
+// resolved directory, not `anchorPackageJsonPath`'s. pnpm's isolated
+// node_modules means a package only sees its own declared deps' symlinks —
+// resolving e.g. `caniuse-lite` straight from a workspace-root anchor can
+// silently land in a DIFFERENT physical install than the one the actual
+// requiring package resolves, since node_modules isn't hoisted-flat. A
+// single-hop path (e.g. `[autoprefixer, caniuse-lite]`) anchors the second
+// resolve at `autoprefixer`'s own resolved package.json; a two-hop path
+// (e.g. `[autoprefixer, browserslist, caniuse-lite]`) is needed too —
+// `browserslist` has its own independent semver range on `caniuse-lite`,
+// a THIRD distinct resolution edge pnpm can drift on its own even when
+// `autoprefixer`'s direct `caniuse-lite` edge is pinned.
+export async function resolveTransitiveVersion(anchorPackageJsonPath, pathNames, requiredPrefix) {
+  let anchor = anchorPackageJsonPath
+  for (let i = 0; i < pathNames.length - 1; i++) {
+    const dir = await resolvePackageDir(anchor, pathNames[i], requiredPrefix)
+    if (!dir) return null
+    anchor = path.join(dir, 'package.json')
+  }
+  return resolveInstalledVersion(anchor, pathNames[pathNames.length - 1], requiredPrefix)
 }
