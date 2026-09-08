@@ -228,11 +228,11 @@ service host. Two things keep it working:
 
 The DeviceShell's `.device-shell__home-indicator` strip is sized to
 `device.safeAreaInsets.bottom` (gesture-bar devices only; home-button SE-class
-has bottom inset 0). The page's `env(safe-area-inset-bottom)` is injected as 0 —
-the shell reserves the bottom, so there is a single bottom-inset mechanism. The
-top safe area reaches the page via the CDP `setSafeAreaInsetsOverride`; the notch
-is an in-screen occluder drawn by the DeviceShell's status bar. (See the
-safe-area doc for the CDP wiring.)
+has bottom inset 0). Every render WebView receives that same value as
+`env(safe-area-inset-bottom)` through the CDP `setSafeAreaInsetsOverride`; a tab
+bar does not change the injected value. The top safe area still depends on the
+page navigation style. The notch is an in-screen occluder drawn by the
+DeviceShell's status bar. (See the safe-area doc for the CDP wiring.)
 
 ## Key files
 

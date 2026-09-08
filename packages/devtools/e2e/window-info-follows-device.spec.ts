@@ -67,11 +67,9 @@ const IPHONE_15_WINDOW_INFO = {
   screenTop: 54,
 }
 /** env(safe-area-inset-*) the fixture's pages should see on iPhone 15
- *  portrait: default-nav pages start BELOW the navigation bar so their top
- *  inset is already consumed (I4); the bottom inset only applies where no tab
- *  bar covers it. */
-const DEFAULT_NAV_TAB_INSETS = { top: '0px', bottom: '0px' }
-const DEFAULT_NAV_NON_TAB_INSETS = { top: '0px', bottom: '34px' }
+ *  portrait: default-nav pages start below the navigation bar, so their top
+ *  inset is already consumed; every render WebView gets the device bottom inset. */
+const DEFAULT_NAV_INSETS = { top: '0px', bottom: '34px' }
 const CUSTOM_NAV_INSETS = { top: '59px', bottom: '34px' }
 
 /** The fields the three code paths (sync binding, async simulator handler,
@@ -344,21 +342,20 @@ test.describe('window info follows the selected device', () => {
     expect(windowFieldsOf(success!)).toEqual(IPHONE_15_SHARED_FIELDS)
   })
 
-  test('4. default-nav pages see no top inset; bottom inset only without a tab bar', async () => {
+  test('4. default-nav pages see no top inset and the device bottom inset', async () => {
     // The tab page the app booted into.
     const home = await guestShowing(electronApp, 'HOME PAGE')
     expect(
       { top: home.probeTop, bottom: home.probeBottom },
-      'tab page with the default navigation bar: guest already starts below the nav bar, '
-      + 'and the tab bar covers the home indicator',
-    ).toEqual(DEFAULT_NAV_TAB_INSETS)
+      'tab page with the default navigation bar: the guest starts below the nav bar',
+    ).toEqual(DEFAULT_NAV_INSETS)
 
     await navigateTo(electronApp, '/pages/detail/detail')
     const detail = await guestShowing(electronApp, 'DETAIL PAGE')
     expect(
       { top: detail.probeTop, bottom: detail.probeBottom },
-      'non-tab page with the default navigation bar: no top inset, but the home indicator is exposed',
-    ).toEqual(DEFAULT_NAV_NON_TAB_INSETS)
+      'non-tab page with the default navigation bar gets the same device bottom inset',
+    ).toEqual(DEFAULT_NAV_INSETS)
   })
 
   test('5. a navigationStyle:custom page sees the full top inset', async () => {
