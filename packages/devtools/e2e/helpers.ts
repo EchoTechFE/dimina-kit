@@ -1,4 +1,5 @@
 import type { Page, ElectronApplication } from '@playwright/test'
+import type { ConsoleErrorEntry } from './console-noise'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -467,12 +468,8 @@ export async function evalInWebContentsByUrl<T = unknown>(
   }, { urlSubstring, expression }) as Promise<T>
 }
 
-export interface ConsoleErrorEntry {
-  level: 'error' | 'warning'
-  message: string
-  url: string
-  source: string
-}
+export type { ConsoleErrorEntry } from './console-noise'
+export { isNonAppConsoleNoise } from './console-noise'
 
 /**
  * Collect `error`/`warning` console messages from EVERY webContents (existing
@@ -528,33 +525,16 @@ export async function installConsoleCollector(electronApp: ElectronApplication):
 export async function readConsoleErrors(electronApp: ElectronApplication): Promise<ConsoleErrorEntry[]> {
   return electronApp.evaluate(() => {
     const g = globalThis as unknown as { __e2eConsoleErrors?: ConsoleErrorEntry[] }
-    return (g.__e2eConsoleErrors ?? []).slice()
+    // "Collected nothing" and "never collected" both used to come back as an
+    // empty array, so a spec that skipped installConsoleCollector — or
+    // installed it on a different Electron instance than it later read —
+    // compared an empty list against an empty list and passed without ever
+    // observing the app.
+    if (!g.__e2eConsoleErrors) {
+      throw new Error('readConsoleErrors: installConsoleCollector never ran on this Electron instance')
+    }
+    return g.__e2eConsoleErrors.slice()
   }) as Promise<ConsoleErrorEntry[]>
-}
-
-/**
- * Whether a collected console entry came from something other than our own
- * renderer, and so cannot be evidence that a gesture under test broke the app.
- *
- * `installConsoleCollector` attaches to EVERY WebContents, including pages we
- * only host: the embedded A2 workbench (a third-party VS Code bundle served
- * from a 127.0.0.1 COI origin, which logs extension-host sandbox notes,
- * settings-schema and workspace-mirror chatter at startup) and Chromium's own
- * DevTools front-end (`devtools://`, which logs failed CDP requests such as
- * `Network.loadNetworkResource … Frame not found` whenever an inspected frame
- * goes away — routine during a drag that moves docked views).
- *
- * Single owner on purpose: every "no unexpected console errors" assertion has
- * to agree on what counts as ours. Match against source and url as well as the
- * message — a DevTools-front-end entry names `devtools://` only in the former
- * two.
- */
-export function isNonAppConsoleNoise(entry: ConsoleErrorEntry): boolean {
-  const whole = `${entry.message} ${entry.source} ${entry.url}`
-  if (/favicon|DevTools|devtools:\/\/|Autofill|net::ERR|Failed to load resource/i.test(whole)) return true
-  if (/ExtensionHost|a2-spike|local-network-access|allow-scripts and allow-same-origin/i.test(whole)) return true
-  if (/json\.schemas is not a registered configuration|Unable to resolve nonexistent file '\/workspace'/i.test(entry.message)) return true
-  return false
 }
 
 /**

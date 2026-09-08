@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
+import { describePnpmConfigKeyLocation } from '../../../scripts/pnpm-config-location.mjs'
 import { resolveInstalledVersion, resolveTransitiveVersion } from './resolve-installed-version.js'
 import { TRANSITIVE_DEP_PATHS } from './transitive-dep-pairs.js'
 
@@ -30,6 +31,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.resolve(__dirname, '..')
 const kitPkgPath = path.join(root, 'package.json')
 const diminaRoot = path.resolve(root, '../../dimina')
+const repoRoot = path.resolve(root, '../..')
 const snapshotPath = path.join(root, 'upstream-lockfile-snapshot.json')
 
 async function readJson(p) {
@@ -152,8 +154,8 @@ for (const depPath of TRANSITIVE_DEP_PATHS) {
     continue
   }
   if (kitVersion !== upstreamVersion) {
-    // pnpm@9.15.9 (the version this repo is pinned to) only reliably honors a
-    // 2-segment override key. A literal join of a 3+-segment path (e.g.
+    // pnpm only reliably honors a 2-segment override key (still true on the
+    // pinned 12.3.4). A literal join of a 3+-segment path (e.g.
     // "autoprefixer>browserslist>caniuse-lite") either throws
     // ERR_PNPM_INVALID_SELECTOR (unversioned) or silently no-ops (version-
     // qualified on every segment) — the only form that actually takes effect
@@ -166,7 +168,7 @@ for (const depPath of TRANSITIVE_DEP_PATHS) {
     const suggestedKey = `${parentSpec}>${depPath[depPath.length - 1]}`
     mismatches.push(
       `  ${key}: kit resolves ${kitVersion}, upstream snapshot resolves ${upstreamVersion} — ` +
-        'pin the kit-side version via pnpm.overrides in the root package.json ' +
+        `pin the kit-side version under \`overrides\` in ${describePnpmConfigKeyLocation(repoRoot, 'overrides')} ` +
         `("${suggestedKey}": "${upstreamVersion}"), then pnpm install.`,
     )
   }

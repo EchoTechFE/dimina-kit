@@ -115,6 +115,14 @@ jobs:
       - name: Check electron peerDependencies stay in sync with devDependencies
         run: pnpm run check:electron-peer-sync
 
+      # The install steps in this workflow all pass --ignore-scripts, so CI
+      # never hits ERR_PNPM_IGNORED_BUILDS itself — an undeclared build script
+      # would land on main and only fail on a developer's own `pnpm install`.
+      # The scan works here regardless: --ignore-scripts still extracts every
+      # package, it only skips running their scripts.
+      - name: Check allowBuilds covers every installed build script
+        run: pnpm run check:allow-builds
+
       - name: Lint and type-check
         run: pnpm turbo run lint check-types --cache-dir=.turbo
 

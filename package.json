@@ -19,6 +19,7 @@
     "test:coverage": "turbo run test:coverage",
     "lint": "turbo run lint",
     "dev": "turbo run dev",
+    "check:allow-builds": "node scripts/check-allow-builds.mjs",
     "check:electron-peer-sync": "node scripts/check-electron-peer-sync.mjs",
     "check:publish-contract": "node .github/scripts/check-publish-contract.js",
     "pawl:check": "pawl check",

@@ -29,14 +29,21 @@ GATE_START=$(date +%s)
 # check:wasm-alignment 排在 typecheck 之后单独一步:它验证 packages/compiler
 # 与 dimina/fe 共享依赖(含 autoprefixer 的 browserslist/caniuse-lite 等
 # 传递依赖)解析到同一版本,只在 CI 的 lint-and-types job 里跑过、gate.sh 此前
-# 没覆盖到。这条检查是 pnpm.overrides 静默失效(如未来升级 pnpm 大版本导致
-# package.json#pnpm 字段不再被读取)时唯一能把"覆盖悄悄消失"变成可见失败的
-# 信号,必须留在本地就能跑到的门禁路径里,不能只挂在 CI。
-STEP_NAMES=(lint typecheck "check:wasm-alignment" test "pawl:check")
+# 没覆盖到。这条检查是 overrides 静默失效时唯一能把"覆盖悄悄消失"变成可见
+# 失败的信号 —— 这不是假想:pnpm 12 已经不再读 package.json 的 pnpm 字段,
+# overrides 现在写在 pnpm-workspace.yaml,下一次大版本同样可能再挪一次。
+# 必须留在本地就能跑到的门禁路径里,不能只挂在 CI。
+#
+# check:allow-builds 同理,而且更极端:CI 的两处 pnpm install 都带
+# --ignore-scripts,永远碰不到 ERR_PNPM_IGNORED_BUILDS,漏声明的构建脚本只会
+# 在开发者自己 pnpm install 时炸——那时改动已经进主干了。它只读 node_modules
+# 现有的树,不装任何东西,秒级。
+STEP_NAMES=(lint typecheck "check:wasm-alignment" "check:allow-builds" test "pawl:check")
 STEP_CMDS=(
   "pnpm run lint"
   "pnpm exec turbo run check-types --force"
   "pnpm --filter @dimina-kit/compiler run check:wasm-alignment"
+  "pnpm run check:allow-builds"
   "pnpm run test"
   "pnpm run pawl:check"
 )
