@@ -18,7 +18,6 @@
   <body>
     <header class="site-header">
       <a class="brand" href="./" aria-label="Dimina Kit 首页">
-        <span class="brand-mark" aria-hidden="true">D</span>
         <span>Dimina Kit</span>
       </a>
       <nav aria-label="主导航">
@@ -42,7 +41,10 @@
         </div>
 
         <figure class="product-shot">
-          <img src="./devtools.png" width="2880" height="1736" alt="Dimina DevTools 工作台，左侧为小程序模拟器，右侧为开发者工具" />
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="./devtools-dark.png" />
+            <img src="./devtools.png" width="2880" height="1672" alt="Dimina DevTools 工作台，左侧为小程序模拟器，右侧为开发者工具" />
+          </picture>
         </figure>
       </section>
 
@@ -134,7 +136,7 @@ pnpm add @dimina-kit/devkit</code></pre>
     <footer>
       <div class="footer-inner">
         <div>
-          <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">D</span><span>Dimina Kit</span></a>
+          <a class="brand" href="./"><span>Dimina Kit</span></a>
           <p>由回响科技开源维护的 Dimina 小程序开发者工具集。</p>
         </div>
         <div class="footer-links">

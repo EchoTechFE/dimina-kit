@@ -49,7 +49,7 @@ for (const source of documents) {
   const content = readFileSync(resolve(repositoryRoot, source), 'utf8')
   const targets = source.endsWith('.md')
     ? [...content.matchAll(/!?\[[^\]]*\]\(([^)\s]+)(?:\s+[^)]*)?\)/g)].map(([, target]) => target)
-    : [...content.matchAll(/(?:href|src)="([^"]+)"/g)].map(([, target]) => target)
+    : [...content.matchAll(/(?:href|src|srcset)="([^"]+)"/g)].map(([, target]) => target)
   for (const target of targets) checkTarget(source, target)
 }
 

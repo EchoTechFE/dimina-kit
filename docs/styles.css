@@ -71,20 +71,9 @@ a {
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 12px;
   font-size: 16px;
   font-weight: 720;
   letter-spacing: -0.01em;
-}
-
-.brand-mark {
-  display: grid;
-  width: 34px;
-  height: 34px;
-  place-items: center;
-  border-radius: 8px;
-  color: var(--color-on-accent);
-  background: var(--color-accent-solid);
 }
 
 nav {
@@ -214,6 +203,10 @@ h1 {
   border: 1px solid var(--color-border);
   border-radius: 10px;
   box-shadow: var(--shadow-panel);
+}
+
+.product-shot picture {
+  display: block;
 }
 
 .section {
