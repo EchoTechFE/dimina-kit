@@ -1,5 +1,5 @@
 // 用 CSS env(safe-area-inset-*) 撑出四个探针元素，再量它们的实际尺寸，
-// 和 wx 侧 safeArea 数值放在一起对照。切换机型、横竖屏后会自动重量。
+// 和 wx 侧 safeArea 数值放在一起对照。切换机型或旋转设备后会自动重新测量。
 const SIDES = ['top', 'right', 'bottom', 'left']
 
 Page({

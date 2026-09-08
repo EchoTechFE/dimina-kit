@@ -1,11 +1,11 @@
 /**
  * E2E (native-host): the simulator machine body is `<device-frame>`
- * (the shared @devicekit/frame package), driven by the toolbar's
- * device/orientation selects through the SAME `setNativeDeviceInfo` IPC path
+ * (the shared @devicekit/frame package), driven by the toolbar's device picker
+ * through the SAME `setNativeDeviceInfo` IPC path
  * that feeds the mini-app's own `wx.getSystemInfoSync()`.
  *
  * This pins the real user path end to end:
- *   toolbar <select> -> DeviceShell's <device-frame> attributes/shadow
+ *   toolbar device picker -> DeviceShell's <device-frame> attributes/shadow
  *   DOM (bezel, status bar, nav bar) AND -> main process host-env snapshot ->
  *   service-host `wx.getSystemInfoSync()` AND -> CDP
  *   `Emulation.setSafeAreaInsetsOverride` on the render-host guest's
@@ -29,7 +29,6 @@ import {
   pollUntil,
   evalInSimulator,
   evalInWebContentsByUrl,
-  RENDER_GUEST_URL_MARKER,
   findMainWindow,
   installConsoleCollector,
   readConsoleErrors,
@@ -74,11 +73,6 @@ function expectedLayoutMode(deviceName: string, orientation: Orientation): strin
 // ── Toolbar driving ────────────────────────────────────────────────────
 async function selectDevice(win: PwPage, deviceName: string): Promise<void> {
   await selectDeviceInPicker(win, electronApp, deviceName)
-}
-
-async function selectOrientation(win: PwPage, orientation: Orientation): Promise<void> {
-  const sel = win.locator('select', { has: win.locator(`option[value="${orientation}"]`) }).first()
-  await sel.selectOption(orientation)
 }
 
 // ── Frame / shadow-DOM readback ────────────────────────────────────────
@@ -212,6 +206,8 @@ test.describe('device-frame integration e2e', () => {
     // persisted device setting to override the boot default.
     // The toolbar button's label IS the selected device's name.
     const toolbarDevice = (await devicePickerToolbarButton(workbench).innerText()).trim()
+    await expect(workbench.getByRole('option', { name: '竖屏' })).toHaveCount(0)
+    await expect(workbench.getByRole('option', { name: '横屏' })).toHaveCount(0)
 
     const snap = await pollUntil(
       () => readFrameSnapshot(electronApp),
@@ -340,103 +336,35 @@ test.describe('device-frame integration e2e', () => {
     expect(info.screenWidth).toBe(412)
   })
 
-  test('4. switching Pixel 8 to landscape swaps both frame and service-host dims', async () => {
-    await selectOrientation(workbench, 'landscape')
-
-    const snap = await pollUntil(
-      () => readFrameSnapshot(electronApp),
-      (s) => s !== null && s.orientation === 'landscape',
-      8000,
-      300,
-    )
-    expect(snap!.orientation).toBe('landscape')
-    const expectedScreen = orientedScreen(findDevice(DEVICE_NAMES.Pixel_8)!, 'landscape')
-    expect(Math.round(snap!.screenWidth)).toBe(expectedScreen.width)
-    expect(Math.round(snap!.screenHeight)).toBe(expectedScreen.height)
-
-    const info = await pollUntil(
-      () => readServiceSystemInfo(electronApp),
-      (i) => i.deviceOrientation === 'landscape' && i.screenWidth === expectedScreen.width,
-      8000,
-      300,
-    )
-    expect(info.deviceOrientation).toBe('landscape')
-    expect(info.screenWidth).toBe(expectedScreen.width)
-    expect(info.screenHeight).toBe(expectedScreen.height)
-  })
-
-  test('5. iPhone 15 landscape pushes a non-zero env(safe-area-inset-left) into the render-host guest', async () => {
+  test('4. selecting a different device after prior switches keeps portrait state correct', async () => {
     await selectDevice(workbench, DEVICE_NAMES.iPhone_15)
-    await selectOrientation(workbench, 'landscape')
-    await pollUntil(
-      () => readFrameSnapshot(electronApp),
-      (s) => s !== null && s.device === DEVICE_NAMES.iPhone_15 && s.orientation === 'landscape',
-      8000,
-      300,
-    )
-
-    const resolved = resolveDevice(findDevice(DEVICE_NAMES.iPhone_15)!)
-    const expectedLeft = safeAreaInsetsFor(resolved, 'landscape').left
-    expect(expectedLeft, 'sanity: iPhone 15 landscape must have a non-zero left inset in the table').toBeGreaterThan(0)
-
-    // Probe env(safe-area-inset-left) the same way a page's own CSS would:
-    // a temporary element with `padding-left: env(...)`, read back via
-    // getComputedStyle. This is the core hypothesis under test — whether the
-    // main process's CDP `Emulation.setSafeAreaInsetsOverride` (issued against
-    // the render-host guest, see safe-area/index.ts) actually reaches this
-    // guest's env() resolution.
-    const measure = () => evalInWebContentsByUrl<number | null>(
-      electronApp,
-      RENDER_GUEST_URL_MARKER,
-      `(() => {
-        const probe = document.createElement('div')
-        probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;padding-left:env(safe-area-inset-left);'
-        document.body.appendChild(probe)
-        const value = parseFloat(getComputedStyle(probe).paddingLeft)
-        probe.remove()
-        return Number.isFinite(value) ? value : null
-      })()`,
-    )
-
-    const paddingLeft = await pollUntil(measure, (v) => v !== null && v > 0, 8000, 400)
-    expect(
-      paddingLeft,
-      `env(safe-area-inset-left) should reflect the CDP safe-area override (expected ${expectedLeft}px); `
-      + 'a value stuck at 0 means the override never reached this render-host guest',
-    ).not.toBeNull()
-    expect(paddingLeft).toBe(expectedLeft)
-  })
-
-  test('6. switching back to portrait then to a different device (second interaction) keeps state correct', async () => {
-    await selectOrientation(workbench, 'portrait')
-    await selectDevice(workbench, DEVICE_NAMES.Pixel_8)
 
     const snap = await pollUntil(
       () => readFrameSnapshot(electronApp),
-      (s) => s !== null && s.device === DEVICE_NAMES.Pixel_8 && s.orientation === 'portrait',
+      (s) => s !== null && s.device === DEVICE_NAMES.iPhone_15 && s.orientation === 'portrait',
       8000,
       300,
     )
-    expect(snap!.device).toBe(DEVICE_NAMES.Pixel_8)
+    expect(snap!.device).toBe(DEVICE_NAMES.iPhone_15)
     expect(snap!.orientation).toBe('portrait')
-    expect(snap!.layout).toBe('android')
+    expect(snap!.layout).toBe('ios-cutout')
 
-    const expectedScreen = orientedScreen(findDevice(DEVICE_NAMES.Pixel_8)!, 'portrait')
+    const expectedScreen = orientedScreen(findDevice(DEVICE_NAMES.iPhone_15)!, 'portrait')
     expect(Math.round(snap!.screenWidth)).toBe(expectedScreen.width)
     expect(Math.round(snap!.screenHeight)).toBe(expectedScreen.height)
 
     const info = await pollUntil(
       () => readServiceSystemInfo(electronApp),
-      (i) => i.platform === 'android' && i.deviceOrientation === 'portrait' && i.screenWidth === expectedScreen.width,
+      (i) => i.platform === 'ios' && i.deviceOrientation === 'portrait' && i.screenWidth === expectedScreen.width,
       8000,
       300,
     )
-    expect(info.platform).toBe('android')
+    expect(info.platform).toBe('ios')
     expect(info.deviceOrientation).toBe('portrait')
     expect(info.screenWidth).toBe(expectedScreen.width)
   })
 
-  test('7. no device-frame / device-info / safe-area console errors were logged across the whole run', async () => {
+  test('5. no device-frame / device-info / safe-area console errors were logged across the whole run', async () => {
     const errors = await readConsoleErrors(electronApp)
     const pattern = /device-frame|DeviceFrame|setNativeDeviceInfo|setSafeAreaInsetsOverride/
     const relevant = errors.filter((e) => pattern.test(e.message) || pattern.test(e.source))

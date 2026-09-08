@@ -1,6 +1,6 @@
 <view class="container safe-area-page">
   <view class="page-title">安全区域 env()</view>
-  <view class="page-desc">四条彩色探针的尺寸直接绑定 env(safe-area-inset-*)，数值是量出来的，不是算出来的。切换机型或横竖屏会自动重量。</view>
+  <view class="page-desc">四条彩色探针的尺寸直接绑定 env(safe-area-inset-*)，数值是量出来的，不是算出来的。切换机型或旋转设备后会自动重新测量。</view>
 
   <view class="section">
     <view class="section-title">env(safe-area-inset-*) 实测</view>

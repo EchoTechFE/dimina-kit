@@ -13,7 +13,6 @@ import {
   safeAreaInsetsFor,
   statusBarHeightFor,
   type DeviceProfile,
-  type Orientation,
 } from '@devicekit/devices'
 import { frameOuterSize } from '@devicekit/frame'
 import { AUTO_ZOOM, type ZoomSetting } from '@/shared/constants'
@@ -28,14 +27,12 @@ export interface UseDeviceProps {
 
 export interface DeviceHookResult {
   device: DeviceType
-  orientation: Orientation
   zoom: ZoomSetting
   simPanelWidth: number
   setSimPanelWidth: (width: number) => void
   handleDeviceChange: (name: string) => void
   /** Ask main to show the device-picker overlay on the current device. */
   openDevicePicker: () => void
-  handleOrientationChange: (orientation: Orientation) => void
   handleZoomChange: (e: React.ChangeEvent<HTMLSelectElement>) => void
   /**
    * Manual splitter drag handler for the sim column. `side` describes
@@ -74,14 +71,12 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
   const { initialDevice } = props
 
   const [device, setDevice] = useState<DeviceType>(initialDevice)
-  const [orientation, setOrientation] = useState<Orientation>('portrait')
   const [zoom, setZoom] = useState<ZoomSetting>(85)
   const [simPanelWidth, setSimPanelWidth] = useState(() =>
     computeSimPanelWidth(frameOuterSize(initialDevice, 'portrait').width),
   )
   const simPanelWidthRef = useRef(simPanelWidth)
   const deviceRef = useRef(device)
-  const orientationRef = useRef(orientation)
 
   useEffect(() => {
     simPanelWidthRef.current = simPanelWidth
@@ -91,11 +86,7 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     deviceRef.current = device
   }, [device])
 
-  useEffect(() => {
-    orientationRef.current = orientation
-  }, [orientation])
-
-  const pushDeviceInfo = useCallback((d: DeviceType, o: Orientation) => {
+  const pushDeviceInfo = useCallback((d: DeviceType) => {
     // The simulator is a main-process WebContentsView, so there is no renderer
     // <webview> to receive `device:change`. The mini-app's authoritative
     // `wx.getSystemInfoSync()` runs in the hidden service-host window off its
@@ -104,21 +95,20 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     // scale applied to the simulator WCV + nested render guests via
     // setNativeSimulatorBounds, so logical device metrics stay zoom-invariant.
     const resolved = resolveDevice(d)
-    const screen = o === 'landscape'
-      ? { width: resolved.screen.height, height: resolved.screen.width }
-      : resolved.screen
+    const orientation = 'portrait'
+    const screen = resolved.screen
     void setNativeDeviceInfo({
       device: d.name,
       brand: brandFor(d),
       model: d.name,
       system: resolved.system,
       platform: d.os,
-      orientation: o,
+      orientation,
       pixelRatio: d.pixelRatio,
       screenWidth: screen.width,
       screenHeight: screen.height,
-      statusBarHeight: statusBarHeightFor(resolved, o),
-      safeAreaInsets: safeAreaInsetsFor(resolved, o),
+      statusBarHeight: statusBarHeightFor(resolved, orientation),
+      safeAreaInsets: safeAreaInsetsFor(resolved, orientation),
     })
   }, [])
 
@@ -126,13 +116,13 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     (name: string) => {
       const d = findDevice(name) ?? DEFAULT_DEVICE
       setDevice(d)
-      pushDeviceInfo(d, orientation)
+      pushDeviceInfo(d)
       // React layout state is the single width authority: the panel re-renders
       // at the new width, and the simulator/DevTools view anchors re-measure
       // and publish the precise rects to main (no width IPC side-channel).
-      setSimPanelWidth(computeSimPanelWidth(frameOuterSize(d, orientation).width))
+      setSimPanelWidth(computeSimPanelWidth(frameOuterSize(d, 'portrait').width))
     },
-    [orientation, pushDeviceInfo],
+    [pushDeviceInfo],
   )
 
   // The searchable device picker is an overlay WebContentsView of its own (a
@@ -148,21 +138,10 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
     return onDevicePickerSelected(({ deviceName }) => handleDeviceChange(deviceName))
   }, [handleDeviceChange])
 
-  const handleOrientationChange = useCallback(
-    (o: Orientation) => {
-      setOrientation(o)
-      pushDeviceInfo(device, o)
-      setSimPanelWidth(computeSimPanelWidth(frameOuterSize(device, o).width))
-    },
-    [device, pushDeviceInfo],
-  )
-
   // Public single-arg form used by callers outside this hook (e.g. the
-  // simulator attach effect, which only knows the device — orientation is
-  // this hook's own state, read from the ref so the callback identity stays
-  // stable across orientation changes).
+  // simulator attach effect, which only knows the device).
   const sendDeviceInfo = useCallback((d: DeviceType) => {
-    pushDeviceInfo(d, orientationRef.current)
+    pushDeviceInfo(d)
   }, [pushDeviceInfo])
 
   const handleZoomChange = useCallback(
@@ -201,13 +180,11 @@ export function useDevice(props: UseDeviceProps): DeviceHookResult {
 
   return {
     device,
-    orientation,
     zoom,
     simPanelWidth,
     setSimPanelWidth,
     handleDeviceChange,
     openDevicePicker,
-    handleOrientationChange,
     handleZoomChange,
     handleSplitterDrag,
     sendDeviceInfo,
