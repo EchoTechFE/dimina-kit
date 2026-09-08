@@ -31,11 +31,14 @@
  * fallback, by scanning the source text for that literal list.
  */
 
-import { getFileSystemManager as getUpstreamFileSystemManager } from './upstream-impl.js'
+import { getFileSystemManager as getUpstreamFileSystemManager, VIRTUAL_FILE_PREFIX } from './upstream-impl.js'
 
 // Mirrors the value `wx.env.USER_DATA_PATH` answers (upstream
 // `core/base/index.js` owns that env object; this overlay never touches it).
-const USER_DATA_PATH = 'difile://usr'
+// `VIRTUAL_FILE_PREFIX` is re-exported below because `core/base/index.js`
+// imports it directly from this module's path, and is derived from rather than
+// duplicated here so the two stay in step if the scheme ever changes.
+const USER_DATA_PATH = `${VIRTUAL_FILE_PREFIX}usr`
 
 /** Async methods with a working container backend in the devtools simulator. */
 export const fileSystemManagerAPINames = [
@@ -74,12 +77,24 @@ function makeAsyncFail(name) {
 	}
 }
 
+// Upstream's `getFileSystemManager()` copies every prototype method onto the
+// instance as a bound own property (so `Object.keys(fsm)` enumerates the API
+// surface for compatibility layers). Own properties shadow the prototype, so a
+// replacement written to the prototype would never run. Collect the surface
+// from both, and always install the replacement as an own property on the
+// singleton — that wins whichever way upstream exposes a method, and leaves the
+// shared prototype untouched.
 function withUnsupportedSurfaceReplaced(fsm) {
 	const proto = Object.getPrototypeOf(fsm)
 	const supported = new Set(fileSystemManagerAPINames)
-	for (const name of Object.getOwnPropertyNames(proto)) {
+	const names = new Set([...Object.getOwnPropertyNames(proto), ...Object.getOwnPropertyNames(fsm)])
+	for (const name of names) {
 		if (name === 'constructor' || supported.has(name)) continue
-		proto[name] = name.endsWith('Sync') ? makeSyncThrow(name) : makeAsyncFail(name)
+		// Read through descriptors rather than `fsm[name]` so an accessor on
+		// either object is classified without being invoked.
+		const descriptor = Object.getOwnPropertyDescriptor(fsm, name) ?? Object.getOwnPropertyDescriptor(proto, name)
+		if (typeof descriptor?.value !== 'function') continue
+		fsm[name] = name.endsWith('Sync') ? makeSyncThrow(name) : makeAsyncFail(name)
 	}
 	return fsm
 }
@@ -93,4 +108,4 @@ export function getFileSystemManager() {
 	return instance
 }
 
-export { USER_DATA_PATH }
+export { USER_DATA_PATH, VIRTUAL_FILE_PREFIX }

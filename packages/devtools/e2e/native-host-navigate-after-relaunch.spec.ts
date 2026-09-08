@@ -183,7 +183,8 @@ test.describe('native-host reLaunch then real-click navigateTo e2e', () => {
       100,
     ) as number
 
-    await openProjectInUI(mainWindow, FIXTURE_DIR, { waitMs: 20000 })
+    // A project opens into its OWN window; `mainWindow` stays the project list.
+    await openProjectInUI(electronApp, FIXTURE_DIR, { waitMs: 20000 })
     await waitForSimulatorWebview(electronApp)
 
     await pollUntil(
@@ -206,7 +207,7 @@ test.describe('native-host reLaunch then real-click navigateTo e2e', () => {
   })
 
   test.afterAll(async () => {
-    await closeProject(mainWindow).catch(() => {})
+    await closeProject(electronApp).catch(() => {})
     await electronApp?.close().catch(() => {})
   })
 

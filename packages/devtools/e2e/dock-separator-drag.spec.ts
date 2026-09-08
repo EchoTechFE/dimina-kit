@@ -19,7 +19,7 @@ import {
 import path from 'path'
 import { rmSync } from 'fs'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR, applyInEditorLayoutPreset } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -48,6 +48,9 @@ test.beforeAll(async () => {
   })
   workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
   await workbench.waitForSelector('[data-deck-resize-handle]', { timeout: 15000 })
+  // The editor/debug separator only exists in the `inEditor` preset — the
+  // default tree ships without the editor at all (see applyInEditorLayoutPreset).
+  await applyInEditorLayoutPreset(workbench)
 })
 
 test.afterAll(async () => {

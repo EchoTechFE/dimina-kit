@@ -20,7 +20,7 @@ import path from 'node:path'
 import { Volume, createFsFromVolume } from 'memfs'
 
 const APP = process.env.APP_DIR
-  || fileURLToPath(new URL('../../../dimina/fe/example/vant', import.meta.url))
+  || fileURLToPath(new URL('../../../dimina/examples/miniprogram/vant', import.meta.url))
 
 const TEXT_EXT = new Set([
   '.json', '.js', '.ts', '.wxml', '.ddml', '.wxss', '.ddss', '.less',

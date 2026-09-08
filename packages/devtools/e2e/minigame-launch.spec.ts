@@ -1,5 +1,3 @@
-import path from 'path'
-import { fileURLToPath } from 'url'
 import { test, expect } from './fixtures'
 import {
   ipcInvoke,
@@ -11,13 +9,11 @@ import {
   RENDER_GUEST_URL_MARKER,
   installConsoleCollector,
   readConsoleErrors,
+  resolveMiniGameAppDir,
 } from './helpers'
 import { ProjectsChannel, ProjectChannel } from '../src/shared/ipc-channels'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-
-/** Real submodule fixture — `compileType: "game"`, `game.json`/`game.js`, no `app.json`. */
-const MINI_GAME_DIR = path.resolve(__dirname, '..', '..', '..', 'dimina', 'fe', 'example', 'air-battle')
+const MINI_GAME_DIR = resolveMiniGameAppDir()
 
 interface OpenProjectResult {
   success: boolean

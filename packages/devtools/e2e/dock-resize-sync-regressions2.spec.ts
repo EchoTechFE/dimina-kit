@@ -42,7 +42,7 @@ import {
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
-import { openProjectInUI, closeProject, DEMO_APP_DIR } from './helpers'
+import { openProjectInUI, closeProject, DEMO_APP_DIR, applyInEditorLayoutPreset } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -73,6 +73,9 @@ test.beforeAll(async () => {
   })
   workbench = await openProjectInUI(electronApp, DEMO_APP_DIR)
   await workbench.waitForSelector('[data-deck-group]', { timeout: 15000 })
+  // `col-main` is the `inEditor` preset's column split; the default tree has no
+  // editor and therefore no such split (see applyInEditorLayoutPreset).
+  await applyInEditorLayoutPreset(workbench)
 })
 
 test.afterAll(async () => {

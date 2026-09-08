@@ -2,7 +2,8 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
-import { resolveInstalledVersion } from './resolve-installed-version.js'
+import { resolveInstalledVersion, resolveTransitiveVersion } from './resolve-installed-version.js'
+import { TRANSITIVE_DEP_PATHS } from './transitive-dep-pairs.js'
 
 function printUsage() {
   console.log(
@@ -75,6 +76,22 @@ for (const name of Object.keys(kitDeps)) {
   versions[name] = version
 }
 
+// Transitive paths are resolved the same way regardless of whether the first
+// name is one of the deps kit declares — a package can pull in a transitive
+// dep worth tracking even when kit never lists it by name (not the case
+// today, but the loop above is deliberately gated on `kitDeps` and this one
+// intentionally is not).
+const transitiveVersions = {}
+for (const depPath of TRANSITIVE_DEP_PATHS) {
+  const key = depPath.join('>')
+  const version = await resolveTransitiveVersion(upstreamPkgPath, depPath, diminaFeRoot)
+  if (!version) {
+    unresolved.push(key)
+    continue
+  }
+  transitiveVersions[key] = version
+}
+
 if (unresolved.length > 0) {
   console.error(
     'snapshot-upstream-versions: could not resolve upstream-installed versions for:\n' +
@@ -84,6 +101,6 @@ if (unresolved.length > 0) {
   process.exit(2)
 }
 
-const snapshot = { diminaCommit, versions }
+const snapshot = { diminaCommit, versions, transitiveVersions }
 await writeFile(snapshotPath, `${JSON.stringify(snapshot, null, 2)}\n`)
 console.log(`snapshot-upstream-versions: wrote ${Object.keys(versions).length} versions to ${path.relative(root, snapshotPath)} (dimina@${diminaCommit})`)

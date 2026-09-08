@@ -215,7 +215,30 @@ function waitForActivePage(bridge, { since, timeoutMs }) {
 async function runNativeHostNav(bridge, serviceWc, method, args) {
   const arg = method === 'navigateBack' ? (args[0] ?? { delta: 1 }) : (args[0] ?? {})
   const since = bridge.getActiveBridgeId()
-  await serviceWc.executeJavaScript(`wx.${method}(${JSON.stringify(arg)})`)
+  // Wrapped the same way runNativeHostGeneric wraps its call. A bare
+  // executeJavaScript still awaits whatever `wx.<method>()` returns, so a
+  // rejected nav promise fails this call — but Electron reports it as the
+  // generic "Script failed to execute", naming neither the method nor the
+  // reason. Keep awaiting the same outcome; only make the message readable.
+  await serviceWc.executeJavaScript(`
+    new Promise((resolve, reject) => {
+      const describe = (e) => {
+        if (e && e.errMsg) return String(e.errMsg)
+        if (e && e.message) return String(e.message)
+        try { return JSON.stringify(e) } catch { return String(e) }
+      }
+      try {
+        if (typeof wx === 'undefined' || typeof wx[${JSON.stringify(method)}] !== 'function') {
+          reject(new Error('wx.' + ${JSON.stringify(method)} + ' is not a function in service host'))
+          return
+        }
+        Promise.resolve(wx.${method}(${JSON.stringify(arg)})).then(
+          () => resolve(undefined),
+          (e) => reject(new Error('wx.' + ${JSON.stringify(method)} + ' rejected: ' + describe(e))),
+        )
+      } catch (e) { reject(new Error('wx.' + ${JSON.stringify(method)} + ' threw: ' + describe(e))) }
+    })
+  `)
   const timeoutMs = method === 'navigateBack' ? 1500 : 2000
   await waitForActivePage(bridge, { since, timeoutMs })
   return { result: undefined }
@@ -235,6 +258,28 @@ async function runNativeHostGeneric(serviceWc, method, args) {
     })
   `)
   return { result }
+}
+
+/**
+ * How many pages the SERVICE realm's router currently holds, or -1 when the
+ * service host isn't reachable yet.
+ *
+ * Render-side readiness (`getCurrentPage`, which reads the visible render
+ * webContents' URL) does NOT imply this: the service router's stack is
+ * populated over the bridge and can still be empty when a page is already
+ * painted. `wx.switchTab` and friends dereference `router.getPageInfo().route`
+ * synchronously, and the router's empty-stack fallback (`{ id }`, see
+ * dimina/fe/packages/service/src/core/router.js) carries no `route` — so
+ * driving navigation before this count is positive throws inside the service
+ * realm rather than failing the navigation cleanly.
+ */
+async function getServicePageCount(appId) {
+  const bridge = getBridge()
+  const serviceWc = bridge.getServiceWc(appId)
+  if (!serviceWc) return -1
+  return serviceWc
+    .executeJavaScript(`(() => typeof getCurrentPages === 'function' ? getCurrentPages().length : -1)()`)
+    .catch(() => -1)
 }
 
 async function callWxMethod(method, args = [], appId) {
@@ -282,6 +327,7 @@ globalThis.__diminaE2eHooks = {
   getCurrentPage,
   getPageStack,
   getPageData,
+  getServicePageCount,
   callWxMethod,
   setDevice: setDeviceHook,
 }

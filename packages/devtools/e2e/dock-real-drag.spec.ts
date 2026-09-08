@@ -47,6 +47,7 @@ import {
   DEMO_APP_DIR,
   installConsoleCollector,
   readConsoleErrors,
+  isNonAppConsoleNoise,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -395,20 +396,10 @@ test('native anchor: the simulator (draggable:false) cannot be torn out — a dr
 
 test('cumulative: no uncaught console errors across the whole drag sequence', async () => {
   const errors = await readConsoleErrors(electronApp)
-  // Filter out unrelated, pre-existing noise (DevTools/CDP, favicon, etc.) and
-  // surface only genuine page errors that a drag could plausibly cause. The
-  // 'editor' dock body lazily attaches the embedded A2 workbench WebContentsView;
-  // that third-party VS Code bundle emits its own startup warnings (extension-host
-  // iframe sandbox notes, permissions-policy) from its 127.0.0.1 COI origin —
-  // unrelated to the drag gesture, so filter by their workbench origin/source.
-  const relevant = errors.filter((e) => {
-    if (/favicon|DevTools|Autofill|net::ERR|Failed to load resource/i.test(e.message)) return false
-    if (/ExtensionHost|a2-spike|local-network-access|allow-scripts and allow-same-origin/i.test(
-      `${e.message} ${e.source} ${e.url}`,
-    )) return false
-    if (/json\.schemas is not a registered configuration|Unable to resolve nonexistent file '\/workspace'/i.test(e.message)) return false
-    return true
-  })
+  // Keep only entries from our own renderer — the collector also sees the
+  // hosted A2 workbench and Chromium's DevTools front-end (see
+  // isNonAppConsoleNoise), neither of which a drag gesture can be blamed for.
+  const relevant = errors.filter((e) => !isNonAppConsoleNoise(e))
   expect(
     relevant,
     `no uncaught errors during drag (saw: ${JSON.stringify(relevant.slice(0, 5))})`,

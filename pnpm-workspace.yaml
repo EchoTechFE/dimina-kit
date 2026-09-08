@@ -1,2 +1,38 @@
 packages:
   - packages/*
+
+# pnpm 11+ only reads auth/registry settings from .npmrc; every other setting
+# (hoist-pattern, node-linker, shamefullyHoist, ...) moved here as a camelCase
+# key. `shamefully-hoist=true` used to live in .npmrc — silently ignored under
+# pnpm 12, which drops publicHoistPattern back to `[]` and breaks anything
+# that resolves a hoisted package by walking up from a directory outside any
+# workspace package (packages/compiler/scripts/build-compiler.js resolves
+# `sass` from dimina/fe/package.json this way).
+shamefullyHoist: true
+
+# Each value below is decided by reading that package's own install/postinstall
+# script, not copied from a template — see the comment next to each entry.
+allowBuilds:
+  # install script only runs node-gyp when npm_config_build_from_source=true
+  # (unset here); the actual native binary loads via the
+  # @parcel/watcher-darwin-arm64 optionalDependency, so the script is a no-op.
+  '@parcel/watcher': false
+  # postinstall only prints a donation banner (writes a dedupe marker to
+  # os.tmpdir()); no effect on the module itself.
+  core-js: false
+  # install script copies vendor/7z-<arch>.{exe,dll} to vendor/7z.{exe,dll}
+  # for the electron-builder Squirrel.Windows target; vendor ships the
+  # arm64 pair so the copy succeeds and Windows installer builds keep working.
+  electron-winstaller: true
+  # postinstall links/downloads the platform esbuild binary; esbuild is a
+  # direct dependency of compiler/devtools/fs-core/view-anchor and does not
+  # work at all without it.
+  esbuild: true
+
+overrides:
+  html-encoding-sniffer: 4.0.0
+  jsdom: 26.1.0
+  minimist@<1.2.8: ^1.2.8
+  autoprefixer>browserslist: 4.28.7
+  autoprefixer>caniuse-lite: 1.0.30001806
+  browserslist@4.28.7>caniuse-lite: 1.0.30001806

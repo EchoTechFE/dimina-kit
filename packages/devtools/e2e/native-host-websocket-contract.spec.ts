@@ -30,7 +30,7 @@ import {
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const UPSTREAM_PAGE = path.resolve(
   HERE,
-  '../../../dimina/fe/example/base/pages/socket-test',
+  '../../../dimina/examples/miniprogram/base/pages/socket-test',
 )
 
 interface ContractResult {

@@ -1,13 +1,8 @@
-import path from 'path'
-import { fileURLToPath } from 'url'
 import { test, expect } from './fixtures'
-import { DEMO_APP_DIR, ipcInvoke, addProject, refreshProjectList, selectProjectCategoryInUI } from './helpers'
+import { DEMO_APP_DIR, ipcInvoke, addProject, refreshProjectList, selectProjectCategoryInUI, resolveMiniGameAppDir } from './helpers'
 import { ProjectsChannel } from '../src/shared/ipc-channels'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-
-/** Real submodule fixture — `compileType: "game"`, `game.json`/`game.js`, no `app.json`. */
-const MINI_GAME_DIR = path.resolve(__dirname, '..', '..', '..', 'dimina', 'fe', 'example', 'air-battle')
+const MINI_GAME_DIR = resolveMiniGameAppDir()
 
 test.describe('project list: category rail filters by project type', () => {
   test.afterEach(async ({ mainWindow }) => {

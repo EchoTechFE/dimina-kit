@@ -38,9 +38,29 @@ const exportAppend = {
   name: 'export-append',
   setup(build) {
     const appends = {
-      'logic-compiler.js': '\nexport { writeCompileRes }\nexport function __resetLogicState() { processedModules.clear() }\nexport function __setEnableSourcemap(v) { enableSourcemap = !!v }\n',
-      'style-compiler.js': '\nexport function __resetStyleState() { compileRes.clear() }\n',
-      'view-compiler.js': '\nexport function __resetViewState() { compileResCache.clear(); wxsModuleRegistry.clear(); wxsFilePathMap.clear() }\nexport function __setEnableSourcemap(v) { enableSourcemap = !!v }\n',
+      // `sourcemapTargetPath` is dmcc's own worker-message state (set from
+      // `sourcemapTargetPath: targetPath` in the message that spawns a build) —
+      // this driver never sends that message, so writeCompileRes's sourcemap
+      // branch would dereference it as null. The driver (pool-node.js's runAttempt)
+      // now threads the caller-known FINAL output dir through runStage's own opts;
+      // `targetPath` here is that value. Falling back to getTargetPath() (the
+      // staging dir) when no explicit value is given mirrors dmcc's own
+      // `targetPath || getTargetPath()`, and runs on every enable/disable — sourcemap
+      // off always clears it to null — so it can never carry over stale state from a
+      // prior build sharing this pooled realm.
+      'logic-compiler.js': '\nexport { writeCompileRes }\nexport function __resetLogicState() { processedModules.clear() }\nexport function __setEnableSourcemap(v, targetPath) { enableSourcemap = !!v; sourcemapTargetPath = enableSourcemap ? (targetPath || getTargetPath()) : null }\n',
+      // loadSass is otherwise only reachable through the `.scss`/`.sass` branch inside
+      // compileSS — a style compile with no such file never calls it. Exposing it lets
+      // compile-core.js's preloadStage warm dart-sass at worker spawn time, by stage
+      // identity alone, instead of waiting for a matching file to show up.
+      'style-compiler.js': '\nexport function __resetStyleState() { compileRes.clear() }\nexport function __preloadStyleToolchain() { return loadSass() }\n',
+      // templateRenderCache/optionalChainingCache are dmcc's own view-compile
+      // perf caches (named-template render output, optional-chaining rewrites);
+      // dmcc's own worker-message handler clears them alongside the older
+      // caches at end-of-task, but this driver calls compileML directly and
+      // never goes through that handler, so they must be cleared here too or
+      // a pooled worker realm leaks them across unrelated builds indefinitely.
+      'view-compiler.js': '\nexport function __resetViewState() { compileResCache.clear(); wxsModuleRegistry.clear(); wxsFilePathMap.clear(); templateRenderCache.clear(); optionalChainingCache.clear() }\nexport function __setEnableSourcemap(v) { enableSourcemap = !!v }\n',
       'utils.js': '\nexport function __resetAssets() { for (const k of Object.keys(assetsMap)) delete assetsMap[k] }\n',
     }
     build.onLoad({ filter: /(core[\\/](logic|style|view)-compiler|common[\\/]utils)\.js$/ }, async (args) => {
@@ -126,6 +146,11 @@ if (MODE === 'node') {
     'crypto': shim('crypto.js'),
     'node:async_hooks': shim('async_hooks.js'),
     'async_hooks': shim('async_hooks.js'),
+    // cssnano 9.x uses createRequire(import.meta.url) to dynamically load a
+    // user-supplied preset/plugin/configFile by string; kit's fixed cssnano()
+    // call never exercises that path (see src/shims/module.js).
+    'node:module': shim('module.js'),
+    'module': shim('module.js'),
     'node:path': 'path-browserify',
     'path': 'path-browserify',
     'node:events': 'events',

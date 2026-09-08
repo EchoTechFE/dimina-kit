@@ -25,10 +25,18 @@ SUMMARY=()
 GATE_START=$(date +%s)
 
 # 每步的名字与对应命令,顺序即执行顺序,故意用数组而非关联数组以锁定顺序。
-STEP_NAMES=(lint typecheck test "pawl:check")
+#
+# check:wasm-alignment 排在 typecheck 之后单独一步:它验证 packages/compiler
+# 与 dimina/fe 共享依赖(含 autoprefixer 的 browserslist/caniuse-lite 等
+# 传递依赖)解析到同一版本,只在 CI 的 lint-and-types job 里跑过、gate.sh 此前
+# 没覆盖到。这条检查是 pnpm.overrides 静默失效(如未来升级 pnpm 大版本导致
+# package.json#pnpm 字段不再被读取)时唯一能把"覆盖悄悄消失"变成可见失败的
+# 信号,必须留在本地就能跑到的门禁路径里,不能只挂在 CI。
+STEP_NAMES=(lint typecheck "check:wasm-alignment" test "pawl:check")
 STEP_CMDS=(
   "pnpm run lint"
   "pnpm exec turbo run check-types --force"
+  "pnpm --filter @dimina-kit/compiler run check:wasm-alignment"
   "pnpm run test"
   "pnpm run pawl:check"
 )

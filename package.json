@@ -35,12 +35,5 @@
     "typescript": "5.9.2",
     "typescript-eslint": "^8.58.2"
   },
-  "pnpm": {
-    "overrides": {
-      "html-encoding-sniffer": "4.0.0",
-      "jsdom": "26.1.0",
-      "minimist@<1.2.8": "^1.2.8"
-    }
-  },
-  "packageManager": "pnpm@9.15.9"
+  "packageManager": "pnpm@12.3.4"
 }

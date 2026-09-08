@@ -27,6 +27,7 @@
 import { test, expect, _electron, type ElectronApplication, type Page as PwPage } from '@playwright/test'
 import path from 'path'
 import fs from 'fs'
+import os from 'os'
 import { fileURLToPath } from 'url'
 import { WebSocket } from 'ws'
 import {
@@ -47,7 +48,17 @@ import { DEFAULT_SCENE } from '../src/shared/constants'
 // flipping every other spec into native-host mode.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'home-button-app')
+
+// openFixtureAt() drives real IPC (SaveCompileConfig -> ... -> fs.writeFileSync)
+// against project.config.json, so pointing it at the committed fixture path
+// directly would dirty the repo on every run. Per-run temp copy, mirroring
+// resolveDemoAppDir() in helpers.ts — keyed by process.pid like this spec's
+// own userDataDir below, since this file runs a single serial Electron
+// instance rather than helpers.ts's multi-worker demo app.
+const FIXTURE_SOURCE_DIR = path.resolve(__dirname, 'fixtures', 'home-button-app')
+const FIXTURE_DIR = path.join(os.tmpdir(), 'dimina-kit-e2e', `home-button-no-tabbar-${process.pid}`)
+fs.rmSync(FIXTURE_DIR, { recursive: true, force: true })
+fs.cpSync(FIXTURE_SOURCE_DIR, FIXTURE_DIR, { recursive: true })
 
 const HOME_PAGE = 'pages/home/home'
 const INNER_PAGE = 'pages/inner/inner'

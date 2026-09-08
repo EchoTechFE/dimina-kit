@@ -39,7 +39,7 @@ const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'tabbar-app')
 const ENTRY_ROUTE = 'pages/home/home'
 const TARGET_ROUTE = 'pages/detail/detail'
 
-interface AppHandle { app: ElectronApplication; win: PwPage; autoPort: number }
+interface AppHandle { app: ElectronApplication; win: PwPage; workbench: PwPage; autoPort: number }
 interface WxmlNode { tagName?: string; children?: WxmlNode[] }
 
 async function bootApp(): Promise<AppHandle> {
@@ -81,7 +81,8 @@ async function bootApp(): Promise<AppHandle> {
     100,
   ) as number
 
-  await openProjectInUI(win, FIXTURE_DIR, { waitMs: 20000 })
+  // A project opens into its OWN window; `win` stays the project-list window.
+  const workbench = await openProjectInUI(app, FIXTURE_DIR, { waitMs: 20000 })
   await waitForSimulatorWebview(app)
 
   await pollUntil(
@@ -96,18 +97,18 @@ async function bootApp(): Promise<AppHandle> {
   )
 
   await pollUntil(
-    () => ipcInvoke<WxmlNode | null>(win, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
+    () => ipcInvoke<WxmlNode | null>(workbench, SimulatorWxmlChannel.GetSnapshot).catch(() => null),
     (t) => !!t && typeof (t as WxmlNode).tagName === 'string',
     30000,
     400,
   )
 
-  return { app, win, autoPort }
+  return { app, win, workbench, autoPort }
 }
 
 async function shutdownApp(handle: AppHandle | undefined): Promise<void> {
   if (!handle) return
-  await closeProject(handle.win).catch(() => {})
+  await closeProject(handle.app).catch(() => {})
   await handle.app.close().catch(() => {})
 }
 

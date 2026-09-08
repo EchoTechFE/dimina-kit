@@ -2,7 +2,8 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
-import { resolveInstalledVersion } from './resolve-installed-version.js'
+import { resolveInstalledVersion, resolveTransitiveVersion } from './resolve-installed-version.js'
+import { TRANSITIVE_DEP_PATHS } from './transitive-dep-pairs.js'
 
 function printUsage() {
   console.log(
@@ -123,6 +124,51 @@ for (const [nativeName, wasmName] of wasmPairs) {
   }
   if (nativeVersion !== wasmVersion) {
     mismatches.push(`  ${wasmName} resolves ${wasmVersion}, does not match ${nativeName} resolving ${nativeVersion}`)
+  }
+}
+
+// Neither side declares these — kit and dmcc each install their own
+// `autoprefixer`, which independently pulls in `browserslist`/`caniuse-lite`
+// (and `caniuse-lite` again, on a SEPARATE edge, via `browserslist`'s own
+// dependency on it). A patch-level caniuse-lite drift alone can flip which
+// vendor prefix `overrideBrowserslist: ['cover 99.5%']` resolves to, so this
+// has to be checked even though it's invisible to the kitDeps loop above
+// (kit's own package.json never lists these names directly). Resolved by
+// walking each full path from `autoprefixer`'s own install dir
+// (resolveTransitiveVersion), not kit's package root — pnpm's isolated
+// node_modules means resolving straight from the root can land in an
+// unrelated hoisted copy and misreport it as aligned.
+for (const depPath of TRANSITIVE_DEP_PATHS) {
+  const key = depPath.join('>')
+  const upstreamVersion = snapshot.transitiveVersions?.[key]
+  if (!upstreamVersion) {
+    unresolved.push(`  ${key}: snapshot has no recorded version — run scripts/snapshot-upstream-versions.js`)
+    continue
+  }
+
+  const kitVersion = await resolveTransitiveVersion(kitPkgPath, depPath)
+  if (!kitVersion) {
+    unresolved.push(`  ${key}: kit=unresolved upstream(snapshot)=${upstreamVersion}`)
+    continue
+  }
+  if (kitVersion !== upstreamVersion) {
+    // pnpm@9.15.9 (the version this repo is pinned to) only reliably honors a
+    // 2-segment override key. A literal join of a 3+-segment path (e.g.
+    // "autoprefixer>browserslist>caniuse-lite") either throws
+    // ERR_PNPM_INVALID_SELECTOR (unversioned) or silently no-ops (version-
+    // qualified on every segment) — the only form that actually takes effect
+    // is a 2-segment key with a VERSION-QUALIFIED PARENT, anchored on the
+    // second-to-last package in the chain (e.g. "browserslist@4.28.7>caniuse-lite").
+    // The suggested key below is built that way so copy-pasting it works.
+    const parentPathKey = depPath.slice(0, -1).join('>')
+    const parentVersion = snapshot.transitiveVersions?.[parentPathKey]
+    const parentSpec = depPath.length <= 2 ? depPath[depPath.length - 2] : `${depPath[depPath.length - 2]}@${parentVersion ?? '<parent-version>'}`
+    const suggestedKey = `${parentSpec}>${depPath[depPath.length - 1]}`
+    mismatches.push(
+      `  ${key}: kit resolves ${kitVersion}, upstream snapshot resolves ${upstreamVersion} — ` +
+        'pin the kit-side version via pnpm.overrides in the root package.json ' +
+        `("${suggestedKey}": "${upstreamVersion}"), then pnpm install.`,
+    )
   }
 }
 

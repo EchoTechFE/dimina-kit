@@ -51,6 +51,32 @@ function resolveDemoAppDir(): string {
 /** Source demo mini-app for compilation tests. */
 export const DEMO_APP_DIR = resolveDemoAppDir()
 
+const MINI_GAME_CANDIDATES = [
+  path.resolve(__dirname, '..', '..', '..', 'dimina', 'examples', 'miniprogram', 'air-battle'),
+]
+
+let miniGameAppDir: string | undefined
+
+/**
+ * Real mini-game fixture from the dimina submodule — `compileType: "game"`,
+ * `game.json`/`game.js`, no `app.json`.
+ *
+ * Lives in the submodule, so a bump that moves the examples tree must fail
+ * naming the paths it looked at, not as an unexplained assertion failure in
+ * every mini-game spec. Resolved on call rather than at module load so that
+ * failure reaches only the specs that need the fixture, instead of every spec
+ * that imports this module.
+ */
+export function resolveMiniGameAppDir(): string {
+  if (miniGameAppDir) return miniGameAppDir
+  const found = MINI_GAME_CANDIDATES.find((dir) => fs.existsSync(path.join(dir, 'game.json')))
+  if (!found) {
+    throw new Error(`No mini-game fixture found. Checked: ${MINI_GAME_CANDIDATES.join(', ')}`)
+  }
+  miniGameAppDir = found
+  return found
+}
+
 // ── URL markers ────────────────────────────────────────────────────────
 
 /**
@@ -504,6 +530,55 @@ export async function readConsoleErrors(electronApp: ElectronApplication): Promi
     const g = globalThis as unknown as { __e2eConsoleErrors?: ConsoleErrorEntry[] }
     return (g.__e2eConsoleErrors ?? []).slice()
   }) as Promise<ConsoleErrorEntry[]>
+}
+
+/**
+ * Whether a collected console entry came from something other than our own
+ * renderer, and so cannot be evidence that a gesture under test broke the app.
+ *
+ * `installConsoleCollector` attaches to EVERY WebContents, including pages we
+ * only host: the embedded A2 workbench (a third-party VS Code bundle served
+ * from a 127.0.0.1 COI origin, which logs extension-host sandbox notes,
+ * settings-schema and workspace-mirror chatter at startup) and Chromium's own
+ * DevTools front-end (`devtools://`, which logs failed CDP requests such as
+ * `Network.loadNetworkResource … Frame not found` whenever an inspected frame
+ * goes away — routine during a drag that moves docked views).
+ *
+ * Single owner on purpose: every "no unexpected console errors" assertion has
+ * to agree on what counts as ours. Match against source and url as well as the
+ * message — a DevTools-front-end entry names `devtools://` only in the former
+ * two.
+ */
+export function isNonAppConsoleNoise(entry: ConsoleErrorEntry): boolean {
+  const whole = `${entry.message} ${entry.source} ${entry.url}`
+  if (/favicon|DevTools|devtools:\/\/|Autofill|net::ERR|Failed to load resource/i.test(whole)) return true
+  if (/ExtensionHost|a2-spike|local-network-access|allow-scripts and allow-same-origin/i.test(whole)) return true
+  if (/json\.schemas is not a registered configuration|Unable to resolve nonexistent file '\/workspace'/i.test(entry.message)) return true
+  return false
+}
+
+/**
+ * Put the dock into the `inEditor` preset: simulator beside a `col-main` column
+ * holding `[editor over debug]`.
+ *
+ * The DEFAULT tree is NOT this shape. `buildDefaultDockTree` deliberately ships
+ * without the editor — the project window is a debugger first, so a fresh
+ * profile opens as `[g-sim | g-debug]` with no `col-main` and no horizontal
+ * separator. Any spec that targets the editor/debug split therefore has to
+ * establish that layout instead of assuming it, or it passes only on a profile
+ * where some earlier run happened to leave the editor docked.
+ *
+ * Drives the real toolbar control (the 调试器位置：在编辑器面板中 preset button),
+ * which rebuilds the tree through `buildPresetDockTree` — the same path a user
+ * takes. Idempotent: the button applies the preset even when already active.
+ */
+export async function applyInEditorLayoutPreset(
+  workbench: Page,
+  timeout = 15000,
+): Promise<void> {
+  await workbench.click('[data-testid="layout-toolbar-devtools-inEditor"]')
+  await workbench.waitForSelector('[data-deck-split="col-main"]', { timeout })
+  await workbench.waitForSelector('[data-deck-panel-body="editor"]', { timeout })
 }
 
 /**

@@ -214,6 +214,41 @@ export async function getPageData(
   }, { appId, path })
 }
 
+/**
+ * Block until the SERVICE realm's router holds at least one page.
+ *
+ * A spec that boots an app and then drives navigation needs BOTH sides ready.
+ * `getCurrentPage` only proves the render side — it reads the visible render
+ * webContents' URL — and the service router's stack is filled separately over
+ * the bridge. `wx.switchTab`/`reLaunch`/`redirectTo` read
+ * `router.getPageInfo().route` synchronously, and the router's empty-stack
+ * fallback carries no `route`, so calling them in that window throws a bare
+ * TypeError inside the service realm instead of failing the navigation.
+ *
+ * This is a readiness gate on a real signal, not a settling delay: it returns
+ * as soon as the service side reports a page.
+ */
+export async function waitForServiceRouterReady(
+  electronApp: ElectronApplication,
+  appId?: string,
+  timeoutMs = 15000,
+): Promise<void> {
+  await pollUntil(
+    () =>
+      electronApp
+        .evaluate((_electron, payload) => {
+          const hooks = (globalThis as Record<string, unknown>).__diminaE2eHooks as {
+            getServicePageCount: (appId?: string) => Promise<number>
+          }
+          return hooks.getServicePageCount(payload.appId)
+        }, { appId })
+        .catch(() => -1),
+    (n) => n > 0,
+    timeoutMs,
+    200,
+  )
+}
+
 // ── Simulator helpers (ported verbatim from packages/devtools/e2e/helpers.ts —
 // these only ever touched webContents.getAllWebContents()/executeJavaScript,
 // never devtools' own UI) ────────────────────────────────────────────────

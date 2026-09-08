@@ -76,7 +76,19 @@ export function preloadStage(stage) {
   if (!STAGE_IMPORTERS[stage]) {
     return Promise.reject(new Error(`[compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`))
   }
-  return loadStageModule(stage).then(() => {})
+  return loadStageModule(stage).then((mod) => {
+    // style-compiler.js's own toolchain (sass) is intentionally lazy — see loadSass
+    // there — so importing the module above only warms its STATIC deps (esbuild,
+    // @vue/compiler-sfc, postcss, autoprefixer), not sass. A stage worker calling
+    // preloadStage already knows its stage identity at spawn time, before any project
+    // ever picked a `.scss`/`.sass` file, so warm sass here too — "preload by stage
+    // identity alone", matching the module import's own eagerness for the other
+    // realms. Fire-and-forget: a failed sass load surfaces again, unchanged, the next
+    // time style-compiler.js's own loadSass() runs (same memoized loader) — this
+    // opportunistic warm-up can never mask or swallow a real toolchain failure, and a
+    // rejection here must never take the worker down.
+    if (stage === 'style') mod.__preloadStyleToolchain().catch(() => {})
+  })
 }
 
 function makeProgress() {
@@ -380,15 +392,22 @@ export const STAGE_NAMES = Object.keys(STAGES)
  * worker message, which this path never sends), style takes it per call. Kept
  * separate from `compileStage` so the Node stage worker can drive it directly with
  * native fs, no shim.
+ * `sourcemapTargetPath` mirrors dmcc's own `sourcemapTargetPath: targetPath` worker
+ * message field: the FINAL published output dir (what `publishToDist` resolves,
+ * appId suffix included), used by logic's `writeCompileRes` to rebase `sources`
+ * against where the map actually ships, not the staging dir it compiles into. A
+ * caller that doesn't know the final dir yet (or doesn't care, sourcemap off) omits
+ * it and `__setEnableSourcemap` falls back to the staging dir, exactly like dmcc's
+ * own `targetPath || getTargetPath()`.
  * @param {'logic'|'view'|'style'} stage
  * @param {object} pages
- * @param {{ sourcemap?: boolean }} [opts]
+ * @param {{ sourcemap?: boolean, sourcemapTargetPath?: string|null }} [opts]
  */
-export async function runStage(stage, pages, { sourcemap = false } = {}) {
+export async function runStage(stage, pages, { sourcemap = false, sourcemapTargetPath = null } = {}) {
   const run = STAGES[stage]
   if (!run) throw new Error(`[compiler] unknown compile stage "${stage}" (expected ${STAGE_NAMES.join('/')})`)
   if (stage === 'logic' || stage === 'view') {
-    (await loadStageModule(stage)).__setEnableSourcemap(!!sourcemap)
+    (await loadStageModule(stage)).__setEnableSourcemap(!!sourcemap, sourcemapTargetPath)
   }
   await run(pages, makeProgress(), { sourcemap })
 }
@@ -457,14 +476,14 @@ export async function setupCompile({ fs, workPath = '/work', options = {}, npmSc
  * from `setupCompile`. Self-contained: it points the fs shim at `fs` and restores
  * the compiler env from the bundle, so it can run in a fresh worker realm.
  * Products are written into `fs`.
- * @param {{ stage: 'logic'|'view'|'style', pages: object, storeInfo: object, fs: object, sourcemap?: boolean }} opts
+ * @param {{ stage: 'logic'|'view'|'style', pages: object, storeInfo: object, fs: object, sourcemap?: boolean, sourcemapTargetPath?: string|null }} opts
  */
-export async function compileStage({ stage, pages, storeInfo: bundle, fs, sourcemap = false } = {}) {
+export async function compileStage({ stage, pages, storeInfo: bundle, fs, sourcemap = false, sourcemapTargetPath = null } = {}) {
   assertFs(fs)
   setFs(fs)
   try {
     resetStoreInfo(bundle)
-    await runStage(stage, pages, { sourcemap })
+    await runStage(stage, pages, { sourcemap, sourcemapTargetPath })
   } finally {
     resetFs()
   }

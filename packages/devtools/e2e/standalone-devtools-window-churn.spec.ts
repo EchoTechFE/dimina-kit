@@ -141,14 +141,19 @@ async function windowCount(): Promise<number> {
 /** How many floating debug windows exist right now — the orphan check: a
  * project window that goes away must take its floating window with it, and a
  * reopened project must not stack a second one next to a survivor. */
+// `getAllWindows()` can still list a window whose native peer is already gone
+// during a close/reopen cycle, and every getter on it (getTitle included)
+// throws "Object has been destroyed". Skip those the same way the webContents
+// lookups above do — a destroyed window is not a surviving orphan, which is
+// what these two actually measure.
 async function floatingWindowCount(): Promise<number> {
   return electronApp.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows().filter((x) => x.getTitle().includes('调试')).length)
+    BrowserWindow.getAllWindows().filter((x) => !x.isDestroyed() && x.getTitle().includes('调试')).length)
 }
 
 async function floatingVisible(): Promise<boolean | null> {
   return electronApp.evaluate(({ BrowserWindow }) => {
-    const w = BrowserWindow.getAllWindows().find((x) => x.getTitle().includes('调试'))
+    const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.getTitle().includes('调试'))
     return w ? w.isVisible() : null
   })
 }
@@ -158,7 +163,7 @@ async function floatingVisible(): Promise<boolean | null> {
  * internal-devtools-window.spec.ts's own close mechanics. */
 async function closeFloatingNatively(): Promise<void> {
   await electronApp.evaluate(({ BrowserWindow }) => {
-    const w = BrowserWindow.getAllWindows().find((x) => x.getTitle().includes('调试'))
+    const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.getTitle().includes('调试'))
     if (!w) throw new Error('floating devtools window not found')
     w.close()
   })

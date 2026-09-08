@@ -17,6 +17,7 @@ import { fileURLToPath } from 'url'
 import {
   openProject, waitForSimulatorWebview, closeProject, pollUntil,
   evalInSimulator, evalInWebContentsByUrl, getCurrentPage, callWxMethod,
+  waitForServiceRouterReady,
 } from './helpers'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -77,6 +78,9 @@ test.describe('native-host switchTab keeps rendered content on return', () => {
     await pollUntil(() => evalInSimulator<number>(electronApp,
       `(() => document.querySelectorAll('.device-shell__webview').length)()`).catch(() => 0), (n) => n >= 1, 30000, 400)
     await waitActive('pages/home/home')
+    // waitActive only proves the RENDER side is on home; switchTab below reads
+    // the SERVICE router synchronously and throws if its stack is still empty.
+    await waitForServiceRouterReady(electronApp)
   })
   test.afterAll(async () => { await closeProject(electronApp).catch(() => {}); await electronApp?.close().catch(() => {}) })
 

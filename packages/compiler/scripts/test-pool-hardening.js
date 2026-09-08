@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
 const APP = process.env.APP_DIR
-  || fileURLToPath(new URL('../../../dimina/fe/example/base', import.meta.url))
+  || fileURLToPath(new URL('../../../dimina/examples/miniprogram/base', import.meta.url))
 const TMP = fileURLToPath(new URL('../.tmp-pool-hardening/', import.meta.url))
 fs.rmSync(TMP, { recursive: true, force: true })
 fs.mkdirSync(TMP, { recursive: true })

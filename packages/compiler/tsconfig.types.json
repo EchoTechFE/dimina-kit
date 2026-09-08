@@ -11,8 +11,15 @@
     "target": "es2022",
     "lib": ["es2022", "dom"],
     "types": [],
-    "rootDir": "src",
-    "outDir": "dist/types"
+    // compile-core.js imports the dimina/fe submodule's source by relative
+    // path, so tsc's program includes it too — rootDir must cover both trees
+    // (repo root is their common ancestor) or those files' declarations
+    // escape outDir via the resulting "../.." relative path and land back
+    // inside the submodule's own source tree. scripts/build-types.js keeps
+    // only the packages/compiler/src branch from this scratch output and
+    // discards the rest; don't point outDir straight at dist/types here.
+    "rootDir": "../..",
+    "outDir": "dist/types/.raw"
   },
   "include": [
     "src/compile-core.js",
