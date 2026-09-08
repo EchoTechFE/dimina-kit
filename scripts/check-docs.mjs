@@ -3,7 +3,7 @@ import { basename, dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const documents = ['README.md', 'packages/devtools/README.md', 'docs/index.html']
+const documents = ['README.md', 'CONTRIBUTING.md', 'packages/devtools/README.md', 'docs/index.html']
 const failures = []
 
 function headingAnchor(heading) {
