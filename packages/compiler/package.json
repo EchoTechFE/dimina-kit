@@ -1,6 +1,6 @@
 {
   "name": "@dimina-kit/compiler",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "description": "dmcc compiler bundles (browser + node) that drive @dimina/compiler against a caller-injected node:fs replacement (no bundled fs)",
   "license": "MIT",
   "type": "module",

@@ -1,6 +1,6 @@
 {
   "name": "@dimina-kit/view-anchor",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Engine-agnostic primitive that keeps a main-process native view (Electron WebContentsView) aligned to a DOM element's geometry.",
   "keywords": [
     "dimina",
