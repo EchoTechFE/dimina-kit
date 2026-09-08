@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { basename, dirname, extname, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runInNewContext } from 'node:vm'
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const documents = ['README.md', 'CONTRIBUTING.md', 'packages/devtools/README.md', 'docs/index.html']
@@ -52,6 +53,46 @@ for (const source of documents) {
     : [...content.matchAll(/(?:href|src|srcset)="([^"]+)"/g)].map(([, target]) => target)
   for (const target of targets) checkTarget(source, target)
 }
+
+function checkShowcaseThemeControls() {
+  const darkSource = { media: '' }
+  const buttons = ['system', 'light', 'dark'].map(theme => {
+    let click
+    return {
+      dataset: { shotTheme: theme },
+      pressed: '',
+      addEventListener: (_event, listener) => { click = listener },
+      setAttribute: (_name, value) => { buttons.find(button => button.dataset.shotTheme === theme).pressed = value },
+      click: () => click(),
+    }
+  })
+  const storage = new Map()
+  const context = {
+    document: {
+      querySelector: () => ({ querySelector: () => darkSource }),
+      querySelectorAll: () => buttons,
+    },
+    localStorage: {
+      getItem: key => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+    },
+  }
+
+  try {
+    runInNewContext(readFileSync(resolve(repositoryRoot, 'docs/showcase-theme.js'), 'utf8'), context)
+    const expectedMedia = { system: '(prefers-color-scheme: dark)', light: 'not all', dark: 'all' }
+    for (const button of buttons) {
+      button.click()
+      if (darkSource.media !== expectedMedia[button.dataset.shotTheme] || button.pressed !== 'true') {
+        failures.push(`docs/showcase-theme.js: ${button.dataset.shotTheme} 切换没有选中对应效果图`)
+      }
+    }
+  } catch (error) {
+    failures.push(`docs/showcase-theme.js: 无法运行主题切换（${error.message}）`)
+  }
+}
+
+checkShowcaseThemeControls()
 
 if (failures.length) {
   console.error(`文档链接检查失败（${failures.length} 项）：`)

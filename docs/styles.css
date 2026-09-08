@@ -187,6 +187,40 @@ h1 {
   margin: 0;
 }
 
+.product-shot-controls {
+  display: flex;
+  width: fit-content;
+  margin: 0 0 12px auto;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-panel);
+}
+
+.product-shot-controls button {
+  min-width: 62px;
+  padding: 7px 12px;
+  border: 0;
+  border-radius: 5px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.product-shot-controls button[aria-pressed="true"] {
+  color: var(--color-text);
+  background: var(--color-surface-strong);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 18%);
+}
+
+.product-shot-controls button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
 .product-shot::before {
   position: absolute;
   z-index: -1;
